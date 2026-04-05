@@ -1,0 +1,1363 @@
+{
+  "deviceId": 100000001,
+  "deviceSn": "DEVICE_SN_EXAMPLE",
+  "siteId": 200000001,
+  "productId": "0_5412_1",
+  "timeZone": "EET",
+  "name": null,
+  "type": "INVERTER",
+  "connectStatus": 1,
+  "alertStatus": -1,
+  "collectionTime": 1775145150.000000000,
+  "activationState": 1,
+  "deviceState": 1,
+  "parDeviceId": 300000001,
+  "parDeviceSn": "LOGGER_SN_EXAMPLE",
+  "paramCategoryList": [
+    {
+      "name": "Basic Information",
+      "serialNumber": 1,
+      "fieldList": [
+        {
+          "key": "SN",
+          "value": "DEVICE_SN_EXAMPLE",
+          "storageName": "SN1",
+          "unit": null,
+          "serialNumber": 1,
+          "orgValue": "DEVICE_SN_EXAMPLE"
+        },
+        {
+          "key": "Inverter Type",
+          "value": "Three phase HV Hybrid",
+          "storageName": "INV_MOD1",
+          "unit": null,
+          "serialNumber": 4,
+          "orgValue": "1015"
+        },
+        {
+          "key": "Rated Power",
+          "value": "12000.00",
+          "storageName": "Pr1",
+          "unit": "W",
+          "serialNumber": 36,
+          "orgValue": "12000.00"
+        },
+        {
+          "key": "System Time",
+          "value": "26-04-02 18:52:21",
+          "storageName": "SYSTIM1",
+          "unit": null,
+          "serialNumber": 117,
+          "orgValue": "26-04-02 18:52:21"
+        },
+        {
+          "key": "HV Voltage",
+          "value": "743",
+          "storageName": "HV_V",
+          "unit": "V",
+          "serialNumber": 3100,
+          "orgValue": "743"
+        },
+        {
+          "key": "Bus-N Voltage",
+          "value": "371",
+          "storageName": "BN_V",
+          "unit": "V",
+          "serialNumber": 3200,
+          "orgValue": "371"
+        }
+      ],
+      "tag": "basic",
+      "categoryId": "1000001"
+    },
+    {
+      "name": "Version Information",
+      "serialNumber": 2,
+      "fieldList": [
+        {
+          "key": "Protocol Version",
+          "value": "0104",
+          "storageName": "PTCv1",
+          "unit": null,
+          "serialNumber": 4100,
+          "orgValue": "0104"
+        },
+        {
+          "key": "MAIN",
+          "value": "3001-1087-1C08",
+          "storageName": "MAIN",
+          "unit": null,
+          "serialNumber": 5900,
+          "orgValue": "3001-1087-1C08"
+        },
+        {
+          "key": "HMI",
+          "value": "2002-2017",
+          "storageName": "HMI",
+          "unit": null,
+          "serialNumber": 6000,
+          "orgValue": "2002-2017"
+        },
+        {
+          "key": "Lithium Battery Version Number",
+          "value": "0",
+          "storageName": "LBVN",
+          "unit": null,
+          "serialNumber": 6100,
+          "orgValue": "0"
+        },
+        {
+          "key": "Lithium battery2 version number",
+          "value": "0000",
+          "storageName": "L_B_V_N2",
+          "unit": null,
+          "serialNumber": 6200,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Arc Board Firmware Version",
+          "value": "0000",
+          "storageName": "A_B_F_V",
+          "unit": null,
+          "serialNumber": 19000,
+          "orgValue": "0000"
+        },
+        {
+          "key": "English Version",
+          "value": "0000",
+          "storageName": "ENG_VER",
+          "unit": null,
+          "serialNumber": 20300,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Spanish Version",
+          "value": "0000",
+          "storageName": "ESP_VER",
+          "unit": null,
+          "serialNumber": 20400,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Hungarian Version",
+          "value": "0000",
+          "storageName": "HUN_VER",
+          "unit": null,
+          "serialNumber": 20500,
+          "orgValue": "0000"
+        },
+        {
+          "key": "German Version",
+          "value": "0000",
+          "storageName": "DEU_VER",
+          "unit": null,
+          "serialNumber": 20600,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Polish Version",
+          "value": "0000",
+          "storageName": "PO_VER",
+          "unit": null,
+          "serialNumber": 20700,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Ukrainian Version",
+          "value": "0000",
+          "storageName": "UK_VER",
+          "unit": null,
+          "serialNumber": 20800,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Czech Version",
+          "value": "0000",
+          "storageName": "CZ_VER",
+          "unit": null,
+          "serialNumber": 20900,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Italian Version",
+          "value": "0000",
+          "storageName": "ITA_VER",
+          "unit": null,
+          "serialNumber": 21000,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Lithium battery version number",
+          "value": "0000",
+          "storageName": "L_B_V_N",
+          "unit": null,
+          "serialNumber": 21100,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Lithium battery hardware version number",
+          "value": "FFFF",
+          "storageName": "L_B_H_V_N",
+          "unit": null,
+          "serialNumber": 21200,
+          "orgValue": "FFFF"
+        },
+        {
+          "key": "Lithium battery2 hardware version number",
+          "value": "FFFF",
+          "storageName": "L_B_H_V_N2",
+          "unit": null,
+          "serialNumber": 21300,
+          "orgValue": "FFFF"
+        }
+      ],
+      "tag": "version",
+      "categoryId": "1000002"
+    },
+    {
+      "name": "Electricity Generation",
+      "serialNumber": 3,
+      "fieldList": [
+        {
+          "key": "DC Voltage PV1",
+          "value": "392.40",
+          "storageName": "DV1",
+          "unit": "V",
+          "serialNumber": 100,
+          "orgValue": "392.40"
+        },
+        {
+          "key": "DC Voltage PV2",
+          "value": "378.10",
+          "storageName": "DV2",
+          "unit": "V",
+          "serialNumber": 200,
+          "orgValue": "378.10"
+        },
+        {
+          "key": "DC Voltage PV3",
+          "value": "0.00",
+          "storageName": "DV3",
+          "unit": "V",
+          "serialNumber": 300,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "DC Voltage PV4",
+          "value": "0.00",
+          "storageName": "DV4",
+          "unit": "V",
+          "serialNumber": 400,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "PV daily power generation (active)",
+          "value": "13.10",
+          "storageName": "PV_D_P_G",
+          "unit": "kWh",
+          "serialNumber": 850,
+          "orgValue": "13.10"
+        },
+        {
+          "key": "Power factor",
+          "value": "0.02",
+          "storageName": "P_F1",
+          "unit": null,
+          "serialNumber": 1167,
+          "orgValue": "0.02"
+        },
+        {
+          "key": "AC Voltage Max",
+          "value": "265.00",
+          "storageName": "A_V_MA",
+          "unit": "V",
+          "serialNumber": 1168,
+          "orgValue": "265.00"
+        },
+        {
+          "key": "AC Voltage Min",
+          "value": "185.00",
+          "storageName": "A_V_MI",
+          "unit": "V",
+          "serialNumber": 1169,
+          "orgValue": "185.00"
+        },
+        {
+          "key": "Output power",
+          "value": "0.23",
+          "storageName": "O_P",
+          "unit": "kVA",
+          "serialNumber": 1170,
+          "orgValue": "0.23"
+        },
+        {
+          "key": "DC Current PV1",
+          "value": "0.70",
+          "storageName": "DC1",
+          "unit": "A",
+          "serialNumber": 3700,
+          "orgValue": "0.70"
+        },
+        {
+          "key": "DC Current PV2",
+          "value": "0.70",
+          "storageName": "DC2",
+          "unit": "A",
+          "serialNumber": 3800,
+          "orgValue": "0.70"
+        },
+        {
+          "key": "DC Current PV3",
+          "value": "0.00",
+          "storageName": "DC3",
+          "unit": "A",
+          "serialNumber": 3900,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "DC Current PV4",
+          "value": "0.00",
+          "storageName": "DC4",
+          "unit": "A",
+          "serialNumber": 4000,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "DC Power PV1",
+          "value": "290.00",
+          "storageName": "DP1",
+          "unit": "W",
+          "serialNumber": 10700,
+          "orgValue": "290.00"
+        },
+        {
+          "key": "DC Power PV2",
+          "value": "250.00",
+          "storageName": "DP2",
+          "unit": "W",
+          "serialNumber": 10800,
+          "orgValue": "250.00"
+        },
+        {
+          "key": "DC Power PV3",
+          "value": "0.00",
+          "storageName": "DP3",
+          "unit": "W",
+          "serialNumber": 10900,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "DC Power PV4",
+          "value": "0.00",
+          "storageName": "DP4",
+          "unit": "W",
+          "serialNumber": 11000,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "AC Voltage R/U/A",
+          "value": "237.30",
+          "storageName": "AV1",
+          "unit": "V",
+          "serialNumber": 17700,
+          "orgValue": "237.30"
+        },
+        {
+          "key": "AC Voltage S/V/B",
+          "value": "237.70",
+          "storageName": "AV2",
+          "unit": "V",
+          "serialNumber": 17800,
+          "orgValue": "237.70"
+        },
+        {
+          "key": "AC Voltage T/W/C",
+          "value": "238.10",
+          "storageName": "AV3",
+          "unit": "V",
+          "serialNumber": 17900,
+          "orgValue": "238.10"
+        },
+        {
+          "key": "AC Current R/U/A",
+          "value": "0.20",
+          "storageName": "AC1",
+          "unit": "A",
+          "serialNumber": 18000,
+          "orgValue": "0.20"
+        },
+        {
+          "key": "AC Current S/V/B",
+          "value": "0.10",
+          "storageName": "AC2",
+          "unit": "A",
+          "serialNumber": 18100,
+          "orgValue": "0.10"
+        },
+        {
+          "key": "AC Current T/W/C",
+          "value": "1.00",
+          "storageName": "AC3",
+          "unit": "A",
+          "serialNumber": 18200,
+          "orgValue": "1.00"
+        },
+        {
+          "key": "AC Output Frequency R",
+          "value": "50.00",
+          "storageName": "A_Fo1",
+          "unit": "Hz",
+          "serialNumber": 18300,
+          "orgValue": "50.00"
+        },
+        {
+          "key": "Cumulative Production (Active)",
+          "value": "13330.80",
+          "storageName": "Et_ge0",
+          "unit": "kWh",
+          "serialNumber": 38500,
+          "orgValue": "13330.80"
+        },
+        {
+          "key": "Daily Production (Active)",
+          "value": "13.10",
+          "storageName": "Etdy_ge1",
+          "unit": "kWh",
+          "serialNumber": 38800,
+          "orgValue": "13.10"
+        },
+        {
+          "key": "Inverter Output Power L1",
+          "value": "11",
+          "storageName": "INV_O_P_L1",
+          "unit": "W",
+          "serialNumber": 52900,
+          "orgValue": "11"
+        },
+        {
+          "key": "Inverter Output Power L2",
+          "value": "8",
+          "storageName": "INV_O_P_L2",
+          "unit": "W",
+          "serialNumber": 53200,
+          "orgValue": "8"
+        },
+        {
+          "key": "Inverter Output Power L3",
+          "value": "197",
+          "storageName": "INV_O_P_L3",
+          "unit": "W",
+          "serialNumber": 53500,
+          "orgValue": "197"
+        },
+        {
+          "key": "Total Inverter Output Power",
+          "value": "216",
+          "storageName": "INV_O_P_T",
+          "unit": "W",
+          "serialNumber": 53600,
+          "orgValue": "216"
+        },
+        {
+          "key": "AC_Solar phaseA",
+          "value": "0.00",
+          "storageName": "AC_S_A",
+          "unit": "W",
+          "serialNumber": 53701,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "AC_Solar phaseB",
+          "value": "0.00",
+          "storageName": "AC_S_B",
+          "unit": "W",
+          "serialNumber": 53702,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "AC_Solar phaseC",
+          "value": "0.00",
+          "storageName": "AC_S_C",
+          "unit": "W",
+          "serialNumber": 53703,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "Total Solar Power",
+          "value": "540.00",
+          "storageName": "S_P_T",
+          "unit": "W",
+          "serialNumber": 53800,
+          "orgValue": "540.00"
+        }
+      ],
+      "tag": "electric",
+      "categoryId": "1000003"
+    },
+    {
+      "name": "Grid",
+      "serialNumber": 40,
+      "fieldList": [
+        {
+          "key": "Grid Voltage L1",
+          "value": "237.70",
+          "storageName": "G_V_L1",
+          "unit": "V",
+          "serialNumber": 200,
+          "orgValue": "237.70"
+        },
+        {
+          "key": "Grid Current L1",
+          "value": "0.43",
+          "storageName": "G_C_L1",
+          "unit": "A",
+          "serialNumber": 300,
+          "orgValue": "0.43"
+        },
+        {
+          "key": "Grid Power L1",
+          "value": "2",
+          "storageName": "G_P_L1",
+          "unit": "W",
+          "serialNumber": 400,
+          "orgValue": "2"
+        },
+        {
+          "key": "Grid Voltage L2",
+          "value": "237.30",
+          "storageName": "G_V_L2",
+          "unit": "V",
+          "serialNumber": 500,
+          "orgValue": "237.30"
+        },
+        {
+          "key": "Grid Current L2",
+          "value": "0.52",
+          "storageName": "G_C_L2",
+          "unit": "A",
+          "serialNumber": 600,
+          "orgValue": "0.52"
+        },
+        {
+          "key": "Grid Power L2",
+          "value": "4",
+          "storageName": "G_P_L2",
+          "unit": "W",
+          "serialNumber": 700,
+          "orgValue": "4"
+        },
+        {
+          "key": "Grid Voltage L3",
+          "value": "238.60",
+          "storageName": "G_V_L3",
+          "unit": "V",
+          "serialNumber": 800,
+          "orgValue": "238.60"
+        },
+        {
+          "key": "Grid Current L3",
+          "value": "1.22",
+          "storageName": "G_C_L3",
+          "unit": "A",
+          "serialNumber": 900,
+          "orgValue": "1.22"
+        },
+        {
+          "key": "Grid Power L3",
+          "value": "7",
+          "storageName": "G_P_L3",
+          "unit": "W",
+          "serialNumber": 1000,
+          "orgValue": "7"
+        },
+        {
+          "key": "Grid Status",
+          "value": "Static",
+          "storageName": "ST_PG1",
+          "unit": null,
+          "serialNumber": 1100,
+          "orgValue": "1000"
+        },
+        {
+          "key": "External CT1 Power",
+          "value": "2",
+          "storageName": "CT1_P_E",
+          "unit": "W",
+          "serialNumber": 6500,
+          "orgValue": "2"
+        },
+        {
+          "key": "External CT2 Power",
+          "value": "4",
+          "storageName": "CT2_P_E",
+          "unit": "W",
+          "serialNumber": 6600,
+          "orgValue": "4"
+        },
+        {
+          "key": "External CT3 Power",
+          "value": "7",
+          "storageName": "CT3_P_E",
+          "unit": "W",
+          "serialNumber": 6700,
+          "orgValue": "7"
+        },
+        {
+          "key": "Total External CT Power",
+          "value": "13",
+          "storageName": "CT_T_E",
+          "unit": "W",
+          "serialNumber": 6800,
+          "orgValue": "13"
+        },
+        {
+          "key": "Grid Frequency",
+          "value": "50.00",
+          "storageName": "PG_F1",
+          "unit": "Hz",
+          "serialNumber": 7200,
+          "orgValue": "50.00"
+        },
+        {
+          "key": "Total Grid Power",
+          "value": "13",
+          "storageName": "PG_Pt1",
+          "unit": "W",
+          "serialNumber": 8100,
+          "orgValue": "13"
+        },
+        {
+          "key": "Total Grid reactive Power",
+          "value": "319.00",
+          "storageName": "G16",
+          "unit": "Var",
+          "serialNumber": 11500,
+          "orgValue": "319.00"
+        },
+        {
+          "key": "A-Phase Reactive Power Of Power Grid",
+          "value": "65",
+          "storageName": "A_RP_PG",
+          "unit": "Var",
+          "serialNumber": 11700,
+          "orgValue": "65"
+        },
+        {
+          "key": "B-Phase Reactive Power Of Power Grid",
+          "value": "255",
+          "storageName": "B_RP_PG",
+          "unit": "Var",
+          "serialNumber": 11800,
+          "orgValue": "255"
+        },
+        {
+          "key": "C-Phase Reactive Power Of Power Grid",
+          "value": "-1",
+          "storageName": "C_RP_PG",
+          "unit": "Var",
+          "serialNumber": 11900,
+          "orgValue": "-1"
+        },
+        {
+          "key": "Daily Energy Buy",
+          "value": "3.60",
+          "storageName": "E_B_D",
+          "unit": "kWh",
+          "serialNumber": 13800,
+          "orgValue": "3.60"
+        },
+        {
+          "key": "Daily energy sell",
+          "value": "6.70",
+          "storageName": "E_S_D",
+          "unit": "kWh",
+          "serialNumber": 13900,
+          "orgValue": "6.70"
+        },
+        {
+          "key": "Total Energy Buy",
+          "value": "1908.70",
+          "storageName": "E_B_TO",
+          "unit": "kWh",
+          "serialNumber": 14000,
+          "orgValue": "1908.70"
+        },
+        {
+          "key": "Total Energy Sell",
+          "value": "11165.50",
+          "storageName": "E_S_TO",
+          "unit": "kWh",
+          "serialNumber": 14100,
+          "orgValue": "11165.50"
+        },
+        {
+          "key": "Internal L1 Power",
+          "value": "3",
+          "storageName": "GS_A",
+          "unit": "W",
+          "serialNumber": 28400,
+          "orgValue": "3"
+        },
+        {
+          "key": "Internal L2 Power",
+          "value": "1",
+          "storageName": "GS_B",
+          "unit": "W",
+          "serialNumber": 28500,
+          "orgValue": "1"
+        },
+        {
+          "key": "Internal L3 Power",
+          "value": "6",
+          "storageName": "GS_C",
+          "unit": "W",
+          "serialNumber": 28600,
+          "orgValue": "6"
+        },
+        {
+          "key": "Internal Power",
+          "value": "10",
+          "storageName": "GS_T",
+          "unit": "W",
+          "serialNumber": 28700,
+          "orgValue": "10"
+        },
+        {
+          "key": "Inverter A-Phase Reactive Power",
+          "value": "6660",
+          "storageName": "A_RP_INV",
+          "unit": "Var",
+          "serialNumber": 52201,
+          "orgValue": "6660"
+        },
+        {
+          "key": "Inverter B-Phase Reactive Power",
+          "value": "530",
+          "storageName": "B_RP_INV",
+          "unit": "Var",
+          "serialNumber": 52202,
+          "orgValue": "530"
+        },
+        {
+          "key": "Inverter C-Phase Reactive Power",
+          "value": "13333",
+          "storageName": "C_RP_INV",
+          "unit": "Var",
+          "serialNumber": 52203,
+          "orgValue": "13333"
+        }
+      ],
+      "tag": "grid",
+      "categoryId": "1000004"
+    },
+    {
+      "name": "Load",
+      "serialNumber": 140,
+      "fieldList": [
+        {
+          "key": "Load Voltage  L1",
+          "value": "241.30",
+          "storageName": "C_V_L1",
+          "unit": "V",
+          "serialNumber": 800,
+          "orgValue": "241.30"
+        },
+        {
+          "key": "Load Voltage  L2",
+          "value": "240.70",
+          "storageName": "C_V_L2",
+          "unit": "V",
+          "serialNumber": 900,
+          "orgValue": "240.70"
+        },
+        {
+          "key": "Load Voltage  L3",
+          "value": "240.10",
+          "storageName": "C_V_L3",
+          "unit": "V",
+          "serialNumber": 1000,
+          "orgValue": "240.10"
+        },
+        {
+          "key": "Load  Power L1",
+          "value": "0",
+          "storageName": "C_P_L1",
+          "unit": "W",
+          "serialNumber": 1100,
+          "orgValue": "0"
+        },
+        {
+          "key": "Load  Power L2",
+          "value": "0",
+          "storageName": "C_P_L2",
+          "unit": "W",
+          "serialNumber": 1200,
+          "orgValue": "0"
+        },
+        {
+          "key": "Load  Power L3",
+          "value": "203",
+          "storageName": "C_P_L3",
+          "unit": "W",
+          "serialNumber": 1300,
+          "orgValue": "203"
+        },
+        {
+          "key": "Total Consumption Power",
+          "value": "229",
+          "storageName": "E_Puse_t1",
+          "unit": "W",
+          "serialNumber": 4100,
+          "orgValue": "229"
+        },
+        {
+          "key": "Total Consumption Apparent Power",
+          "value": "229",
+          "storageName": "E_Suse_t1",
+          "unit": "VA",
+          "serialNumber": 6300,
+          "orgValue": "229"
+        },
+        {
+          "key": "Daily Consumption",
+          "value": "5.00",
+          "storageName": "Etdy_use1",
+          "unit": "kWh",
+          "serialNumber": 10100,
+          "orgValue": "5.00"
+        },
+        {
+          "key": "Total Consumption",
+          "value": "1807.20",
+          "storageName": "E_C_T",
+          "unit": "kWh",
+          "serialNumber": 11900,
+          "orgValue": "1807.20"
+        },
+        {
+          "key": "Load Fequency",
+          "value": "50.00",
+          "storageName": "L_F",
+          "unit": "Hz",
+          "serialNumber": 12200,
+          "orgValue": "50.00"
+        },
+        {
+          "key": "Load phase power A",
+          "value": "13",
+          "storageName": "LPP_A",
+          "unit": "W",
+          "serialNumber": 12800,
+          "orgValue": "13"
+        },
+        {
+          "key": "Load phase power B",
+          "value": "12",
+          "storageName": "LPP_B",
+          "unit": "W",
+          "serialNumber": 12900,
+          "orgValue": "12"
+        },
+        {
+          "key": "Load phase power C",
+          "value": "204",
+          "storageName": "LPP_C",
+          "unit": "W",
+          "serialNumber": 13000,
+          "orgValue": "204"
+        }
+      ],
+      "tag": "consumption",
+      "categoryId": "1000005"
+    },
+    {
+      "name": "Battery",
+      "serialNumber": 160,
+      "fieldList": [
+        {
+          "key": "Battery Status",
+          "value": "Static",
+          "storageName": "B_ST1",
+          "unit": null,
+          "serialNumber": 300,
+          "orgValue": "1000"
+        },
+        {
+          "key": "Battery Voltage",
+          "value": "614.00",
+          "storageName": "B_V1",
+          "unit": "V",
+          "serialNumber": 2500,
+          "orgValue": "614.00"
+        },
+        {
+          "key": "Battery Current",
+          "value": "-0.01",
+          "storageName": "B_C1",
+          "unit": "A",
+          "serialNumber": 3300,
+          "orgValue": "-0.01"
+        },
+        {
+          "key": "Battery Power",
+          "value": "0.00",
+          "storageName": "B_P1",
+          "unit": "W",
+          "serialNumber": 6400,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "SoC",
+          "value": "100",
+          "storageName": "B_left_cap1",
+          "unit": "%",
+          "serialNumber": 8500,
+          "orgValue": "100"
+        },
+        {
+          "key": "Total Charging Energy",
+          "value": "842.10",
+          "storageName": "t_cg_n1",
+          "unit": "kWh",
+          "serialNumber": 9900,
+          "orgValue": "842.10"
+        },
+        {
+          "key": "Total Discharging Energy",
+          "value": "829.30",
+          "storageName": "t_dcg_n1",
+          "unit": "kWh",
+          "serialNumber": 10000,
+          "orgValue": "829.30"
+        },
+        {
+          "key": "Daily Charging Energy",
+          "value": "1.30",
+          "storageName": "Etdy_cg1",
+          "unit": "kWh",
+          "serialNumber": 10300,
+          "orgValue": "1.30"
+        },
+        {
+          "key": "Daily Discharging Energy",
+          "value": "0.70",
+          "storageName": "Etdy_dcg1",
+          "unit": "kWh",
+          "serialNumber": 10400,
+          "orgValue": "0.70"
+        },
+        {
+          "key": "Battery Type",
+          "value": "lithium",
+          "storageName": "B_TYP1",
+          "unit": null,
+          "serialNumber": 13200,
+          "orgValue": "1025"
+        },
+        {
+          "key": "Battery Number",
+          "value": "1-way battery input",
+          "storageName": "Ba_NR",
+          "unit": null,
+          "serialNumber": 34700,
+          "orgValue": "1000"
+        },
+        {
+          "key": "Battery Factory",
+          "value": "JINKOBSS_HV",
+          "storageName": "BAT_FAC",
+          "unit": null,
+          "serialNumber": 34800,
+          "orgValue": "JINKOBSS_HV"
+        }
+      ],
+      "tag": "battery",
+      "categoryId": "1000006"
+    },
+    {
+      "name": "BMS",
+      "serialNumber": 340,
+      "fieldList": [
+        {
+          "key": "BMS Voltage",
+          "value": "612.90",
+          "storageName": "BMS_B_V1",
+          "unit": "V",
+          "serialNumber": 1,
+          "orgValue": "612.90"
+        },
+        {
+          "key": "BMS Current",
+          "value": "0.10",
+          "storageName": "BMS_B_C1",
+          "unit": "A",
+          "serialNumber": 2,
+          "orgValue": "0.10"
+        },
+        {
+          "key": "BMS Temperature",
+          "value": "13.00",
+          "storageName": "BMST",
+          "unit": "℃",
+          "serialNumber": 2,
+          "orgValue": "13.00"
+        },
+        {
+          "key": "BMS Charge Voltage",
+          "value": "648.00",
+          "storageName": "BMS_C_V",
+          "unit": "V",
+          "serialNumber": 15,
+          "orgValue": "648.00"
+        },
+        {
+          "key": "BMS Discharge Voltage",
+          "value": "0.00",
+          "storageName": "BMS_D_V",
+          "unit": "V",
+          "serialNumber": 16,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "Charge Current Limit",
+          "value": "0",
+          "storageName": "BMS_C_C_L",
+          "unit": "A",
+          "serialNumber": 17,
+          "orgValue": "0"
+        },
+        {
+          "key": "Discharge Current Limit",
+          "value": "22",
+          "storageName": "BMS_D_C_L",
+          "unit": "A",
+          "serialNumber": 18,
+          "orgValue": "22"
+        },
+        {
+          "key": "BMS_SOC",
+          "value": "100",
+          "storageName": "BMS_SOC",
+          "unit": "%",
+          "serialNumber": 19,
+          "orgValue": "100"
+        },
+        {
+          "key": "BMS Charging Max Current",
+          "value": "0",
+          "storageName": "BMS_CC1",
+          "unit": "A",
+          "serialNumber": 35,
+          "orgValue": "0"
+        },
+        {
+          "key": "BMS DischargeMax Current",
+          "value": "0",
+          "storageName": "BMS_DC1",
+          "unit": "A",
+          "serialNumber": 36,
+          "orgValue": "0"
+        },
+        {
+          "key": "Li-bat  flag",
+          "value": "",
+          "storageName": "Li_bf",
+          "unit": null,
+          "serialNumber": 48,
+          "orgValue": ""
+        },
+        {
+          "key": "Li-bat type",
+          "value": "0000",
+          "storageName": "Li_B_TP",
+          "unit": null,
+          "serialNumber": 49,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Lithium battery SOH",
+          "value": "0",
+          "storageName": "Li_B_SOH",
+          "unit": "%",
+          "serialNumber": 50,
+          "orgValue": "0"
+        },
+        {
+          "key": "Battery Rating Capacity",
+          "value": "37",
+          "storageName": "B_R_CAP",
+          "unit": "AH",
+          "serialNumber": 51,
+          "orgValue": "37"
+        }
+      ],
+      "tag": "bms",
+      "categoryId": "1000007"
+    },
+    {
+      "name": "BMS2",
+      "serialNumber": 350,
+      "fieldList": [
+        {
+          "key": "Li-bat2  flag",
+          "value": "",
+          "storageName": "Li_bf2",
+          "unit": null,
+          "serialNumber": 1001,
+          "orgValue": ""
+        },
+        {
+          "key": "Li-bat2 type",
+          "value": "0000",
+          "storageName": "Li_B_TP2",
+          "unit": null,
+          "serialNumber": 1002,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Lithium battery2 SOH",
+          "value": "0",
+          "storageName": "Li_B_SOH2",
+          "unit": "%",
+          "serialNumber": 1003,
+          "orgValue": "0"
+        },
+        {
+          "key": "Battery2 Rating Capacity",
+          "value": "0",
+          "storageName": "B_R_CAP2",
+          "unit": "AH",
+          "serialNumber": 1004,
+          "orgValue": "0"
+        }
+      ],
+      "tag": "bms2",
+      "categoryId": "1000557"
+    },
+    {
+      "name": "Temperature",
+      "serialNumber": 360,
+      "fieldList": [
+        {
+          "key": "Temperature- Battery",
+          "value": "13.00",
+          "storageName": "B_T1",
+          "unit": "℃",
+          "serialNumber": 3000,
+          "orgValue": "13.00"
+        },
+        {
+          "key": "DC Temperature",
+          "value": "25.00",
+          "storageName": "T_DC",
+          "unit": "℃",
+          "serialNumber": 5300,
+          "orgValue": "25.00"
+        },
+        {
+          "key": "AC Temperature",
+          "value": "21.00",
+          "storageName": "AC_T",
+          "unit": "℃",
+          "serialNumber": 10000,
+          "orgValue": "21.00"
+        }
+      ],
+      "tag": "temperature",
+      "categoryId": "1000008"
+    },
+    {
+      "name": "State",
+      "serialNumber": 380,
+      "fieldList": [
+        {
+          "key": "AC side relay status",
+          "value": "7",
+          "storageName": "AC",
+          "unit": null,
+          "serialNumber": 6,
+          "orgValue": "7"
+        }
+      ],
+      "tag": "status",
+      "categoryId": "1000010"
+    },
+    {
+      "name": "Alert",
+      "serialNumber": 390,
+      "fieldList": [
+        {
+          "key": "Lithium battery alarm flag",
+          "value": "0000",
+          "storageName": "L_B_A_F",
+          "unit": null,
+          "serialNumber": 211,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Lithium battery fault flag",
+          "value": "0000",
+          "storageName": "L_B_F_F",
+          "unit": null,
+          "serialNumber": 212,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Lithium battery2 alarm flag",
+          "value": "0000",
+          "storageName": "L_B_A_F2",
+          "unit": null,
+          "serialNumber": 213,
+          "orgValue": "0000"
+        },
+        {
+          "key": "Lithium battery2 fault flag",
+          "value": "0000",
+          "storageName": "L_B_F_F2",
+          "unit": null,
+          "serialNumber": 214,
+          "orgValue": "0000"
+        }
+      ],
+      "tag": "alert",
+      "categoryId": "1000011"
+    },
+    {
+      "name": "Generator",
+      "serialNumber": 410,
+      "fieldList": [
+        {
+          "key": "Gen Power L1",
+          "value": "0",
+          "storageName": "GEN_P_L1",
+          "unit": "W",
+          "serialNumber": 1,
+          "orgValue": "0"
+        },
+        {
+          "key": "Gen Power L2",
+          "value": "0",
+          "storageName": "GEN_P_L2",
+          "unit": "W",
+          "serialNumber": 2,
+          "orgValue": "0"
+        },
+        {
+          "key": "Gen Power L3",
+          "value": "0",
+          "storageName": "GEN_P_L3",
+          "unit": "W",
+          "serialNumber": 3,
+          "orgValue": "0"
+        },
+        {
+          "key": "Gen Voltage L1",
+          "value": "0.00",
+          "storageName": "GEN_V_L1",
+          "unit": "V",
+          "serialNumber": 4,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "Gen Voltage L2",
+          "value": "0.00",
+          "storageName": "GEN_V_L2",
+          "unit": "V",
+          "serialNumber": 5,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "Gen Voltage L3",
+          "value": "0.00",
+          "storageName": "GEN_V_L3",
+          "unit": "V",
+          "serialNumber": 6,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "Gen Daily Run Time",
+          "value": "0.00",
+          "storageName": "R_T_D",
+          "unit": "h",
+          "serialNumber": 8,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "Generator Active Power",
+          "value": "0",
+          "storageName": "EG_P_CT1",
+          "unit": "W",
+          "serialNumber": 10,
+          "orgValue": "0"
+        },
+        {
+          "key": "Total Gen Power",
+          "value": "0",
+          "storageName": "GEN_P_T",
+          "unit": "W",
+          "serialNumber": 39,
+          "orgValue": "0"
+        },
+        {
+          "key": "Daily Production Generator",
+          "value": "0.00",
+          "storageName": "GEN_P_D",
+          "unit": "kWh",
+          "serialNumber": 40,
+          "orgValue": "0.00"
+        },
+        {
+          "key": "Total Production Generator",
+          "value": "0.00",
+          "storageName": "GEN_P_TO",
+          "unit": "kWh",
+          "serialNumber": 41,
+          "orgValue": "0.00"
+        }
+      ],
+      "tag": "generator",
+      "categoryId": "1000047"
+    },
+    {
+      "name": "UPS Load",
+      "serialNumber": 450,
+      "fieldList": [
+        {
+          "key": "UPS Load Power",
+          "value": "226",
+          "storageName": "UPS_P",
+          "unit": "W",
+          "serialNumber": 7,
+          "orgValue": "226"
+        }
+      ],
+      "tag": "ups",
+      "categoryId": "1000052"
+    }
+  ],
+  "alertStatusWithin": -1,
+  "alertStatusOutside": -1,
+  "alertStatusUser": -1,
+  "chargerDto": null,
+  "installationTime": null,
+  "countryName": null,
+  "model": null,
+  "configModule": "{\"admc\":\"1000\"}",
+  "isMesh": false,
+  "desireStatus": {
+    "functionCode": null,
+    "businessId": null,
+    "data": null
+  },
+  "realStatus": {
+    "executeStatus": null,
+    "functionCode": null,
+    "data": null,
+    "collectionTime": null,
+    "extend": null,
+    "origin": null
+  },
+  "desireQueue": [],
+  "deviceTypeName": null,
+  "linkDeviceData": null
+}

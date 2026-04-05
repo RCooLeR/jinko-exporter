@@ -1,0 +1,587 @@
+[
+  {
+    "storageName": "Pr1",
+    "name": "Rated Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "HV_V",
+    "name": "HV Voltage",
+    "unit": "V"
+  },
+  {
+    "storageName": "BN_V",
+    "name": "Bus-N Voltage",
+    "unit": "V"
+  },
+  {
+    "storageName": "DV1",
+    "name": "DC Voltage PV1",
+    "unit": "V"
+  },
+  {
+    "storageName": "DV2",
+    "name": "DC Voltage PV2",
+    "unit": "V"
+  },
+  {
+    "storageName": "DV3",
+    "name": "DC Voltage PV3",
+    "unit": "V"
+  },
+  {
+    "storageName": "DV4",
+    "name": "DC Voltage PV4",
+    "unit": "V"
+  },
+  {
+    "storageName": "PV_D_P_G",
+    "name": "PV daily power generation (active)",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "A_V_MA",
+    "name": "AC Voltage Max",
+    "unit": "V"
+  },
+  {
+    "storageName": "A_V_MI",
+    "name": "AC Voltage Min",
+    "unit": "V"
+  },
+  {
+    "storageName": "O_P",
+    "name": "Output power",
+    "unit": "kVA"
+  },
+  {
+    "storageName": "DC1",
+    "name": "DC Current PV1",
+    "unit": "A"
+  },
+  {
+    "storageName": "DC2",
+    "name": "DC Current PV2",
+    "unit": "A"
+  },
+  {
+    "storageName": "DC3",
+    "name": "DC Current PV3",
+    "unit": "A"
+  },
+  {
+    "storageName": "DC4",
+    "name": "DC Current PV4",
+    "unit": "A"
+  },
+  {
+    "storageName": "DP1",
+    "name": "DC Power PV1",
+    "unit": "W"
+  },
+  {
+    "storageName": "DP2",
+    "name": "DC Power PV2",
+    "unit": "W"
+  },
+  {
+    "storageName": "DP3",
+    "name": "DC Power PV3",
+    "unit": "W"
+  },
+  {
+    "storageName": "DP4",
+    "name": "DC Power PV4",
+    "unit": "W"
+  },
+  {
+    "storageName": "AV1",
+    "name": "AC Voltage R/U/A",
+    "unit": "V"
+  },
+  {
+    "storageName": "AV2",
+    "name": "AC Voltage S/V/B",
+    "unit": "V"
+  },
+  {
+    "storageName": "AV3",
+    "name": "AC Voltage T/W/C",
+    "unit": "V"
+  },
+  {
+    "storageName": "AC1",
+    "name": "AC Current R/U/A",
+    "unit": "A"
+  },
+  {
+    "storageName": "AC2",
+    "name": "AC Current S/V/B",
+    "unit": "A"
+  },
+  {
+    "storageName": "AC3",
+    "name": "AC Current T/W/C",
+    "unit": "A"
+  },
+  {
+    "storageName": "A_Fo1",
+    "name": "AC Output Frequency R",
+    "unit": "Hz"
+  },
+  {
+    "storageName": "Et_ge0",
+    "name": "Cumulative Production (Active)",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "Etdy_ge1",
+    "name": "Daily Production (Active)",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "INV_O_P_L1",
+    "name": "Inverter Output Power L1",
+    "unit": "W"
+  },
+  {
+    "storageName": "INV_O_P_L2",
+    "name": "Inverter Output Power L2",
+    "unit": "W"
+  },
+  {
+    "storageName": "INV_O_P_L3",
+    "name": "Inverter Output Power L3",
+    "unit": "W"
+  },
+  {
+    "storageName": "INV_O_P_T",
+    "name": "Total Inverter Output Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "AC_S_A",
+    "name": "AC_Solar phaseA",
+    "unit": "W"
+  },
+  {
+    "storageName": "AC_S_B",
+    "name": "AC_Solar phaseB",
+    "unit": "W"
+  },
+  {
+    "storageName": "AC_S_C",
+    "name": "AC_Solar phaseC",
+    "unit": "W"
+  },
+  {
+    "storageName": "S_P_T",
+    "name": "Total Solar Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "G_V_L1",
+    "name": "Grid Voltage L1",
+    "unit": "V"
+  },
+  {
+    "storageName": "G_C_L1",
+    "name": "Grid Current L1",
+    "unit": "A"
+  },
+  {
+    "storageName": "G_P_L1",
+    "name": "Grid Power L1",
+    "unit": "W"
+  },
+  {
+    "storageName": "G_V_L2",
+    "name": "Grid Voltage L2",
+    "unit": "V"
+  },
+  {
+    "storageName": "G_C_L2",
+    "name": "Grid Current L2",
+    "unit": "A"
+  },
+  {
+    "storageName": "G_P_L2",
+    "name": "Grid Power L2",
+    "unit": "W"
+  },
+  {
+    "storageName": "G_V_L3",
+    "name": "Grid Voltage L3",
+    "unit": "V"
+  },
+  {
+    "storageName": "G_C_L3",
+    "name": "Grid Current L3",
+    "unit": "A"
+  },
+  {
+    "storageName": "G_P_L3",
+    "name": "Grid Power L3",
+    "unit": "W"
+  },
+  {
+    "storageName": "CT1_P_E",
+    "name": "External CT1 Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "CT2_P_E",
+    "name": "External CT2 Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "CT3_P_E",
+    "name": "External CT3 Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "CT_T_E",
+    "name": "Total External CT Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "PG_F1",
+    "name": "Grid Frequency",
+    "unit": "Hz"
+  },
+  {
+    "storageName": "PG_Pt1",
+    "name": "Total Grid Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "G16",
+    "name": "Total Grid reactive Power",
+    "unit": "Var"
+  },
+  {
+    "storageName": "A_RP_PG",
+    "name": "A-Phase Reactive Power Of Power Grid",
+    "unit": "Var"
+  },
+  {
+    "storageName": "B_RP_PG",
+    "name": "B-Phase Reactive Power Of Power Grid",
+    "unit": "Var"
+  },
+  {
+    "storageName": "C_RP_PG",
+    "name": "C-Phase Reactive Power Of Power Grid",
+    "unit": "Var"
+  },
+  {
+    "storageName": "E_B_D",
+    "name": "Daily Energy Buy",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "E_S_D",
+    "name": "Daily energy sell",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "E_B_TO",
+    "name": "Total Energy Buy",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "E_S_TO",
+    "name": "Total Energy Sell",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "GS_A",
+    "name": "Internal L1 Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "GS_B",
+    "name": "Internal L2 Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "GS_C",
+    "name": "Internal L3 Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "GS_T",
+    "name": "Internal Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "A_RP_INV",
+    "name": "Inverter A-Phase Reactive Power",
+    "unit": "Var"
+  },
+  {
+    "storageName": "B_RP_INV",
+    "name": "Inverter B-Phase Reactive Power",
+    "unit": "Var"
+  },
+  {
+    "storageName": "C_RP_INV",
+    "name": "Inverter C-Phase Reactive Power",
+    "unit": "Var"
+  },
+  {
+    "storageName": "C_V_L1",
+    "name": "Load Voltage  L1",
+    "unit": "V"
+  },
+  {
+    "storageName": "C_V_L2",
+    "name": "Load Voltage  L2",
+    "unit": "V"
+  },
+  {
+    "storageName": "C_V_L3",
+    "name": "Load Voltage  L3",
+    "unit": "V"
+  },
+  {
+    "storageName": "C_P_L1",
+    "name": "Load  Power L1",
+    "unit": "W"
+  },
+  {
+    "storageName": "C_P_L2",
+    "name": "Load  Power L2",
+    "unit": "W"
+  },
+  {
+    "storageName": "C_P_L3",
+    "name": "Load  Power L3",
+    "unit": "W"
+  },
+  {
+    "storageName": "E_Puse_t1",
+    "name": "Total Consumption Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "E_Suse_t1",
+    "name": "Total Consumption Apparent Power",
+    "unit": "VA"
+  },
+  {
+    "storageName": "Etdy_use1",
+    "name": "Daily Consumption",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "E_C_T",
+    "name": "Total Consumption",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "L_F",
+    "name": "Load Fequency",
+    "unit": "Hz"
+  },
+  {
+    "storageName": "LPP_A",
+    "name": "Load phase power A",
+    "unit": "W"
+  },
+  {
+    "storageName": "LPP_B",
+    "name": "Load phase power B",
+    "unit": "W"
+  },
+  {
+    "storageName": "LPP_C",
+    "name": "Load phase power C",
+    "unit": "W"
+  },
+  {
+    "storageName": "B_V1",
+    "name": "Battery Voltage",
+    "unit": "V"
+  },
+  {
+    "storageName": "B_C1",
+    "name": "Battery Current",
+    "unit": "A"
+  },
+  {
+    "storageName": "B_P1",
+    "name": "Battery Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "B_left_cap1",
+    "name": "SoC",
+    "unit": "%"
+  },
+  {
+    "storageName": "t_cg_n1",
+    "name": "Total Charging Energy",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "t_dcg_n1",
+    "name": "Total Discharging Energy",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "Etdy_cg1",
+    "name": "Daily Charging Energy",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "Etdy_dcg1",
+    "name": "Daily Discharging Energy",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "BMS_B_V1",
+    "name": "BMS Voltage",
+    "unit": "V"
+  },
+  {
+    "storageName": "BMS_B_C1",
+    "name": "BMS Current",
+    "unit": "A"
+  },
+  {
+    "storageName": "BMST",
+    "name": "BMS Temperature",
+    "unit": "℃"
+  },
+  {
+    "storageName": "BMS_C_V",
+    "name": "BMS Charge Voltage",
+    "unit": "V"
+  },
+  {
+    "storageName": "BMS_D_V",
+    "name": "BMS Discharge Voltage",
+    "unit": "V"
+  },
+  {
+    "storageName": "BMS_C_C_L",
+    "name": "Charge Current Limit",
+    "unit": "A"
+  },
+  {
+    "storageName": "BMS_D_C_L",
+    "name": "Discharge Current Limit",
+    "unit": "A"
+  },
+  {
+    "storageName": "BMS_SOC",
+    "name": "BMS_SOC",
+    "unit": "%"
+  },
+  {
+    "storageName": "BMS_CC1",
+    "name": "BMS Charging Max Current",
+    "unit": "A"
+  },
+  {
+    "storageName": "BMS_DC1",
+    "name": "BMS DischargeMax Current",
+    "unit": "A"
+  },
+  {
+    "storageName": "Li_B_SOH",
+    "name": "Lithium battery SOH",
+    "unit": "%"
+  },
+  {
+    "storageName": "B_R_CAP",
+    "name": "Battery Rating Capacity",
+    "unit": "AH"
+  },
+  {
+    "storageName": "Li_B_SOH2",
+    "name": "Lithium battery2 SOH",
+    "unit": "%"
+  },
+  {
+    "storageName": "B_R_CAP2",
+    "name": "Battery2 Rating Capacity",
+    "unit": "AH"
+  },
+  {
+    "storageName": "B_T1",
+    "name": "Temperature- Battery",
+    "unit": "℃"
+  },
+  {
+    "storageName": "T_DC",
+    "name": "DC Temperature",
+    "unit": "℃"
+  },
+  {
+    "storageName": "AC_T",
+    "name": "AC Temperature",
+    "unit": "℃"
+  },
+  {
+    "storageName": "GEN_P_L1",
+    "name": "Gen Power L1",
+    "unit": "W"
+  },
+  {
+    "storageName": "GEN_P_L2",
+    "name": "Gen Power L2",
+    "unit": "W"
+  },
+  {
+    "storageName": "GEN_P_L3",
+    "name": "Gen Power L3",
+    "unit": "W"
+  },
+  {
+    "storageName": "GEN_V_L1",
+    "name": "Gen Voltage L1",
+    "unit": "V"
+  },
+  {
+    "storageName": "GEN_V_L2",
+    "name": "Gen Voltage L2",
+    "unit": "V"
+  },
+  {
+    "storageName": "GEN_V_L3",
+    "name": "Gen Voltage L3",
+    "unit": "V"
+  },
+  {
+    "storageName": "R_T_D",
+    "name": "Gen Daily Run Time",
+    "unit": "h"
+  },
+  {
+    "storageName": "EG_P_CT1",
+    "name": "Generator Active Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "GEN_P_T",
+    "name": "Total Gen Power",
+    "unit": "W"
+  },
+  {
+    "storageName": "GEN_P_D",
+    "name": "Daily Production Generator",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "GEN_P_TO",
+    "name": "Total Production Generator",
+    "unit": "kWh"
+  },
+  {
+    "storageName": "UPS_P",
+    "name": "UPS Load Power",
+    "unit": "W"
+  }
+]

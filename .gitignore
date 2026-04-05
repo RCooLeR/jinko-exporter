@@ -1,0 +1,39 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+jinko-exporter
+
+# Go coverage / profiling
+coverage.out
+cover.out
+*.coverprofile
+*.prof
+
+# Module workspace
+go.work
+go.work.sum
+
+# Environment / local secrets
+.env
+.env.*
+*.local
+
+# IDE files
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary directories
+tmp/
+dist/
+build/
+
+# Docker overrides
+docker-compose.override.yml
