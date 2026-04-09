@@ -1,5 +1,5 @@
 # --- Stage 1: Build the Go binary ---
-FROM golang:1.26.1-alpine AS builder
+FROM golang:1.26.2-alpine AS builder
 
 # Install git and CA certs (if needed for Go modules)
 RUN apk add --no-cache git ca-certificates
@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o
 FROM alpine:3.23
 
 # Add CA certs for HTTPS support
-RUN apk add --no-cache ca-certificates
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
 
 COPY --from=builder /out/jinko-exporter /jinko-exporter
 
