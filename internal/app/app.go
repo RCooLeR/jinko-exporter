@@ -110,7 +110,7 @@ func runServe(parent context.Context, cfg config.Config) error {
 	defer cancel()
 
 	registry := prometheus.NewRegistry()
-	collector := prom.NewCollector(cfg.MetricPrefix, state)
+	collector := prom.NewCollector(cfg.MetricPrefix, state, cfg.DropSourceLabel)
 	if err := registry.Register(collector); err != nil {
 		return fmt.Errorf("register collector: %w", err)
 	}

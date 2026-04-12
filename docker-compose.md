@@ -39,10 +39,13 @@ services:
       EXPORTER_POLL_INTERVAL: "60s"
       EXPORTER_LOG_LEVEL: "info"
       EXPORTER_METRIC_PREFIX: "solar"
+      EXPORTER_METRICS_DROP_SOURCE_LABEL: "false"
 
       JINKO_URL: "https://smart-global.jinkosolar.com/device-s/device/v3/detail"
       JINKO_TIMEOUT: "20s"
       JINKO_INSECURE_SKIP_VERIFY: "false"
+      JINKO_RETRY_ATTEMPTS: "3"
+      JINKO_RETRY_BACKOFF: "2s"
       JINKO_DEVICE_ID: "100000001"
       JINKO_SITE_ID: "200000001"
       JINKO_LANGUAGE: "en"
@@ -90,6 +93,7 @@ services:
       EXPORTER_POLL_INTERVAL: "60s"
       EXPORTER_LOG_LEVEL: "info"
       EXPORTER_METRIC_PREFIX: "solar"
+      EXPORTER_METRICS_DROP_SOURCE_LABEL: "false"
 
       SOLARMAN_BASE_URL: "https://globalapi.solarmanpv.com"
       SOLARMAN_API_VERSION: "v1.0"
@@ -148,10 +152,13 @@ services:
       EXPORTER_POLL_INTERVAL: "60s"
       EXPORTER_LOG_LEVEL: "info"
       EXPORTER_METRIC_PREFIX: "solar"
+      EXPORTER_METRICS_DROP_SOURCE_LABEL: "false"
 
       JINKO_URL: "https://smart-global.jinkosolar.com/device-s/device/v3/detail"
       JINKO_TIMEOUT: "20s"
       JINKO_INSECURE_SKIP_VERIFY: "true"
+      JINKO_RETRY_ATTEMPTS: "3"
+      JINKO_RETRY_BACKOFF: "2s"
       JINKO_DEVICE_ID: "100000001"
       JINKO_SITE_ID: "200000001"
       JINKO_LANGUAGE: "en"
@@ -194,6 +201,7 @@ services:
       EXPORTER_POLL_INTERVAL: "60s"
       EXPORTER_LOG_LEVEL: "info"
       EXPORTER_METRIC_PREFIX: "solar"
+      EXPORTER_METRICS_DROP_SOURCE_LABEL: "false"
 
       MODBUS_HOST: "192.168.120.10"
       MODBUS_PORT: "8899"

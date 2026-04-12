@@ -6,9 +6,11 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -81,6 +83,123 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, err
 	}
 
+	raw, status, err := c.doDetailRequestWithRetry(ctx, reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		c.alertAuthFailure(ctx, status, raw)
+	}
+
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("jinko detail request failed: status=%d body=%s", status, strings.TrimSpace(string(raw)))
+	}
+
+	snapshot, err := ParseDetailResponse(raw)
+	if err != nil {
+		log.Error().Err(err).Str("source", c.Name()).Str("url", c.cfg.URL).Msg("failed to parse Jinko detail response")
+		return nil, err
+	}
+	snapshot.Source = c.Name()
+	snapshot.DeviceID = fmt.Sprintf("%d", c.cfg.DeviceID)
+	snapshot.SiteID = fmt.Sprintf("%d", c.cfg.SiteID)
+	return snapshot, nil
+}
+
+func (c *Client) doDetailRequestWithRetry(ctx context.Context, reqBody []byte) ([]byte, int, error) {
+	attempts := c.requestAttempts()
+	for attempt := 1; attempt <= attempts; attempt++ {
+		raw, status, err := c.doDetailRequest(ctx, reqBody, attempt, attempts)
+		if err == nil {
+			return raw, status, nil
+		}
+
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, 0, ctxErr
+		}
+		if attempt == attempts || !isRetryableRequestError(err) {
+			log.Error().
+				Err(err).
+				Str("source", c.Name()).
+				Str("url", c.cfg.URL).
+				Int("attempt", attempt).
+				Int("max_attempts", attempts).
+				Msg("API request failed")
+			return nil, 0, err
+		}
+
+		delay := c.retryDelay(attempt)
+		log.Warn().
+			Err(err).
+			Str("source", c.Name()).
+			Str("url", c.cfg.URL).
+			Int("attempt", attempt).
+			Int("max_attempts", attempts).
+			Dur("retry_in", delay).
+			Msg("API request failed, retrying")
+
+		if delay <= 0 {
+			continue
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, 0, ctx.Err()
+		case <-timer.C:
+		}
+	}
+
+	return nil, 0, fmt.Errorf("jinko detail request failed after %d attempts", attempts)
+}
+
+func (c *Client) doDetailRequest(ctx context.Context, reqBody []byte, attempt, attempts int) ([]byte, int, error) {
+	req, err := c.newDetailRequest(ctx, reqBody)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	fields := log.Info().
+		Str("source", c.Name()).
+		Str("method", req.Method).
+		Str("url", req.URL.String()).
+		Int("attempt", attempt).
+		Int("max_attempts", attempts).
+		Int64("device_id", c.cfg.DeviceID).
+		Int64("site_id", c.cfg.SiteID)
+	if exp, ok := bearerExpiry(c.cfg.BearerToken); ok {
+		fields = fields.Time("token_expires_at", exp)
+	}
+	fields.Bytes("request_body", reqBody).Msg("sending API request")
+
+	start := time.Now()
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	log.Info().
+		Str("source", c.Name()).
+		Str("method", http.MethodPost).
+		Str("url", c.cfg.URL).
+		Int("attempt", attempt).
+		Int("max_attempts", attempts).
+		Int("status", resp.StatusCode).
+		Dur("duration", time.Since(start)).
+		Int("response_bytes", len(raw)).
+		Msg("received API response")
+
+	return raw, resp.StatusCode, nil
+}
+
+func (c *Client) newDetailRequest(ctx context.Context, reqBody []byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
@@ -94,58 +213,58 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	if c.cfg.UserAgent != "" {
 		req.Header.Set("User-Agent", c.cfg.UserAgent)
 	}
+	return req, nil
+}
 
-	fields := log.Info().
-		Str("source", c.Name()).
-		Str("method", req.Method).
-		Str("url", req.URL.String()).
-		Int64("device_id", c.cfg.DeviceID).
-		Int64("site_id", c.cfg.SiteID)
-	if exp, ok := bearerExpiry(c.cfg.BearerToken); ok {
-		fields = fields.Time("token_expires_at", exp)
+func (c *Client) requestAttempts() int {
+	if c.cfg.RetryAttempts < 1 {
+		return 1
 	}
-	fields.Bytes("request_body", reqBody).Msg("sending API request")
+	return c.cfg.RetryAttempts
+}
 
-	start := time.Now()
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		log.Error().Err(err).Str("source", c.Name()).Str("url", req.URL.String()).Msg("API request failed")
-		return nil, err
+func (c *Client) retryDelay(failedAttempt int) time.Duration {
+	if c.cfg.RetryBackoff <= 0 {
+		return 0
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error().Err(err).Str("source", c.Name()).Str("url", req.URL.String()).Msg("failed to read API response body")
-		return nil, err
+	if failedAttempt <= 1 {
+		return c.cfg.RetryBackoff
 	}
 
-	log.Info().
-		Str("source", c.Name()).
-		Str("method", req.Method).
-		Str("url", req.URL.String()).
-		Int("status", resp.StatusCode).
-		Dur("duration", time.Since(start)).
-		Int("response_bytes", len(raw)).
-		Msg("received API response")
+	delay := c.cfg.RetryBackoff
+	const maxRetryDelay = time.Duration(1<<63 - 1)
+	for i := 1; i < failedAttempt; i++ {
+		if delay > maxRetryDelay/2 {
+			return maxRetryDelay
+		}
+		delay *= 2
+	}
+	return delay
+}
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		c.alertAuthFailure(ctx, resp.StatusCode, raw)
+func isRetryableRequestError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("jinko detail request failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "tls handshake timeout") ||
+		strings.Contains(text, "connection reset") ||
+		strings.Contains(text, "connection refused") ||
+		strings.Contains(text, "connection aborted") ||
+		strings.Contains(text, "server closed idle connection") ||
+		strings.Contains(text, "temporary failure") {
+		return true
 	}
 
-	snapshot, err := ParseDetailResponse(raw)
-	if err != nil {
-		log.Error().Err(err).Str("source", c.Name()).Str("url", req.URL.String()).Msg("failed to parse Jinko detail response")
-		return nil, err
-	}
-	snapshot.Source = c.Name()
-	snapshot.DeviceID = fmt.Sprintf("%d", c.cfg.DeviceID)
-	snapshot.SiteID = fmt.Sprintf("%d", c.cfg.SiteID)
-	return snapshot, nil
+	var netErr net.Error
+	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
 }
 
 func bearerExpiry(token string) (time.Time, bool) {

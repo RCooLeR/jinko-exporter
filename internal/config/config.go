@@ -9,17 +9,18 @@ import (
 )
 
 type Config struct {
-	Source         string
-	SourcePriority []string
-	ListenAddress  string
-	MetricsPath    string
-	PollInterval   time.Duration
-	LogLevel       string
-	MetricPrefix   string
-	Alerts         AlertConfig
-	Jinko          JinkoConfig
-	Solarman       SolarmanConfig
-	Modbus         ModbusConfig
+	Source          string
+	SourcePriority  []string
+	ListenAddress   string
+	MetricsPath     string
+	PollInterval    time.Duration
+	LogLevel        string
+	MetricPrefix    string
+	DropSourceLabel bool
+	Alerts          AlertConfig
+	Jinko           JinkoConfig
+	Solarman        SolarmanConfig
+	Modbus          ModbusConfig
 }
 
 type AlertConfig struct {
@@ -45,6 +46,8 @@ type JinkoConfig struct {
 	URL                string
 	Timeout            time.Duration
 	InsecureSkipVerify bool
+	RetryAttempts      int
+	RetryBackoff       time.Duration
 	DeviceID           int64
 	SiteID             int64
 	Language           string
@@ -90,6 +93,7 @@ func Flags() []cli.Flag {
 		&cli.DurationFlag{Name: "poll-interval", Value: 60 * time.Second, Usage: "Polling interval", EnvVars: []string{"EXPORTER_POLL_INTERVAL"}},
 		&cli.StringFlag{Name: "log-level", Value: "info", Usage: "zerolog level", EnvVars: []string{"EXPORTER_LOG_LEVEL"}},
 		&cli.StringFlag{Name: "metric-prefix", Value: "solar", Usage: "Metric name prefix", EnvVars: []string{"EXPORTER_METRIC_PREFIX"}},
+		&cli.BoolFlag{Name: "metrics-drop-source-label", Value: false, Usage: "Drop the source label from generic exporter metrics; last source sync keeps the source label", EnvVars: []string{"EXPORTER_METRICS_DROP_SOURCE_LABEL"}},
 		&cli.BoolFlag{Name: "alerts-enabled", Value: false, Usage: "Enable outbound alert delivery", EnvVars: []string{"ALERTS_ENABLED"}},
 		&cli.DurationFlag{Name: "alerts-cooldown", Value: 6 * time.Hour, Usage: "Minimum interval between repeated alerts with the same key", EnvVars: []string{"ALERTS_COOLDOWN"}},
 		&cli.DurationFlag{Name: "smtp-timeout", Value: 15 * time.Second, Usage: "SMTP dial/send timeout", EnvVars: []string{"SMTP_TIMEOUT"}},
@@ -110,6 +114,8 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "jinko-url", Value: "https://smart-global.jinkosolar.com/device-s/device/v3/detail", Usage: "Jinko detail endpoint", EnvVars: []string{"JINKO_URL"}},
 		&cli.DurationFlag{Name: "jinko-timeout", Value: 20 * time.Second, Usage: "Jinko HTTP timeout", EnvVars: []string{"JINKO_TIMEOUT"}},
 		&cli.BoolFlag{Name: "jinko-insecure-skip-verify", Value: false, Usage: "Skip TLS certificate verification for Jinko HTTPS requests; insecure", EnvVars: []string{"JINKO_INSECURE_SKIP_VERIFY"}},
+		&cli.IntFlag{Name: "jinko-retry-attempts", Value: 3, Usage: "Maximum Jinko HTTP attempts for transient transport errors", EnvVars: []string{"JINKO_RETRY_ATTEMPTS"}},
+		&cli.DurationFlag{Name: "jinko-retry-backoff", Value: 2 * time.Second, Usage: "Initial delay between Jinko HTTP retry attempts", EnvVars: []string{"JINKO_RETRY_BACKOFF"}},
 		&cli.Int64Flag{Name: "jinko-device-id", Usage: "Jinko deviceId request field", EnvVars: []string{"JINKO_DEVICE_ID"}},
 		&cli.Int64Flag{Name: "jinko-site-id", Usage: "Jinko siteId request field", EnvVars: []string{"JINKO_SITE_ID"}},
 		&cli.StringFlag{Name: "jinko-language", Value: "en", Usage: "Jinko request language", EnvVars: []string{"JINKO_LANGUAGE"}},
@@ -145,13 +151,14 @@ func Flags() []cli.Flag {
 
 func FromCLI(c *cli.Context) (Config, error) {
 	cfg := Config{
-		Source:         strings.ToLower(strings.TrimSpace(c.String("source"))),
-		SourcePriority: normalizeSourceList(c.String("source-priority")),
-		ListenAddress:  c.String("listen"),
-		MetricsPath:    c.String("metrics-path"),
-		PollInterval:   c.Duration("poll-interval"),
-		LogLevel:       c.String("log-level"),
-		MetricPrefix:   strings.TrimSpace(c.String("metric-prefix")),
+		Source:          strings.ToLower(strings.TrimSpace(c.String("source"))),
+		SourcePriority:  normalizeSourceList(c.String("source-priority")),
+		ListenAddress:   c.String("listen"),
+		MetricsPath:     c.String("metrics-path"),
+		PollInterval:    c.Duration("poll-interval"),
+		LogLevel:        c.String("log-level"),
+		MetricPrefix:    strings.TrimSpace(c.String("metric-prefix")),
+		DropSourceLabel: c.Bool("metrics-drop-source-label"),
 		Alerts: AlertConfig{
 			Enabled:                  c.Bool("alerts-enabled"),
 			Cooldown:                 c.Duration("alerts-cooldown"),
@@ -174,6 +181,8 @@ func FromCLI(c *cli.Context) (Config, error) {
 			URL:                c.String("jinko-url"),
 			Timeout:            c.Duration("jinko-timeout"),
 			InsecureSkipVerify: c.Bool("jinko-insecure-skip-verify"),
+			RetryAttempts:      c.Int("jinko-retry-attempts"),
+			RetryBackoff:       c.Duration("jinko-retry-backoff"),
 			DeviceID:           c.Int64("jinko-device-id"),
 			SiteID:             c.Int64("jinko-site-id"),
 			Language:           c.String("jinko-language"),
@@ -284,6 +293,15 @@ func validate(cfg Config) error {
 func validateSourceConfig(cfg Config, sourceName string) error {
 	switch sourceName {
 	case "jinko":
+		if cfg.Jinko.Timeout <= 0 {
+			return fmt.Errorf("jinko-timeout must be > 0")
+		}
+		if cfg.Jinko.RetryAttempts <= 0 {
+			return fmt.Errorf("jinko-retry-attempts must be > 0")
+		}
+		if cfg.Jinko.RetryBackoff < 0 {
+			return fmt.Errorf("jinko-retry-backoff must be >= 0")
+		}
 		if cfg.Jinko.DeviceID == 0 {
 			return fmt.Errorf("jinko-device-id is required")
 		}

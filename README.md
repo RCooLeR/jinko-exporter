@@ -19,11 +19,14 @@ The exporter exposes:
 
 - `solar_up{source,device_sn}`
 - `solar_last_update_timestamp_seconds{source,device_sn}`
+- `solar_last_source_sync_timestamp_seconds{source}`
 - `solar_poll_duration_seconds{source}`
 - `solar_request_errors_total{source}`
 - `solar_metric{source,device_sn,group,key,name,unit}`
 
 `solar_metric` is the generic numeric metric stream. For the Jinko detail source it uses values from `paramCategoryList.fieldList`, typically keyed by `storageName`.
+
+Set `EXPORTER_METRICS_DROP_SOURCE_LABEL=true` to remove the `source` label from generic metrics. `solar_last_source_sync_timestamp_seconds{source}` still keeps the source label so failover source changes remain visible.
 
 ## Source priority
 
@@ -95,6 +98,8 @@ Optional config:
 
 - `--jinko-cookie` / `JINKO_COOKIE`
 - `--jinko-insecure-skip-verify` / `JINKO_INSECURE_SKIP_VERIFY`
+- `--jinko-retry-attempts` / `JINKO_RETRY_ATTEMPTS`
+- `--jinko-retry-backoff` / `JINKO_RETRY_BACKOFF`
 - `--jinko-request-jitter-max` / `JINKO_REQUEST_JITTER_MAX`
 - `--jinko-token-alert-window` / `JINKO_TOKEN_ALERT_WINDOW`
 - `--jinko-language` / `JINKO_LANGUAGE`
@@ -107,6 +112,7 @@ Token note:
 - with SMTP alerts enabled, the exporter can notify you before expiry and on `401` / `403`
 - if bearer-only is not enough for your account, set `JINKO_COOKIE` too
 - if Jinko serves an expired TLS certificate, set `JINKO_INSECURE_SKIP_VERIFY=true`; this disables HTTPS certificate verification for Jinko requests only
+- transient transport errors such as TLS handshake timeouts are retried up to `JINKO_RETRY_ATTEMPTS`, using `JINKO_RETRY_BACKOFF` as the initial backoff
 
 ## Solarman OpenAPI source
 
