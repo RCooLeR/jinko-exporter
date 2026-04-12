@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -25,6 +26,8 @@ import (
 
 var _ source.Source = (*Client)(nil)
 
+const yearlyRequestWindow = 365 * 24 * time.Hour
+
 type Client struct {
 	cfg    config.SolarmanConfig
 	hc     *http.Client
@@ -33,6 +36,8 @@ type Client struct {
 	mu              sync.Mutex
 	token           tokenResponse
 	discoveredDevSN string
+	discoveredAt    time.Time
+	lastRequestAt   time.Time
 }
 
 type tokenResponse struct {
@@ -55,9 +60,17 @@ type device struct {
 }
 
 func New(cfg config.SolarmanConfig, alerts *alert.Manager) *Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if cfg.InsecureSkipVerify {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
 	return &Client{
-		cfg:    cfg,
-		hc:     &http.Client{Timeout: cfg.Timeout},
+		cfg: cfg,
+		hc: &http.Client{
+			Timeout:   cfg.Timeout,
+			Transport: transport,
+		},
 		alerts: alerts,
 	}
 }
@@ -146,10 +159,19 @@ func (c *Client) resolveDeviceSN(ctx context.Context) (string, error) {
 		return "", err
 	}
 
+	now := time.Now()
 	c.mu.Lock()
 	if c.discoveredDevSN != "" {
-		defer c.mu.Unlock()
-		return c.discoveredDevSN, nil
+		if c.cfg.DiscoveryRefreshInterval == 0 || now.Sub(c.discoveredAt) < c.cfg.DiscoveryRefreshInterval {
+			defer c.mu.Unlock()
+			return c.discoveredDevSN, nil
+		}
+		log.Info().
+			Str("source", c.Name()).
+			Str("device_sn", c.discoveredDevSN).
+			Time("discovered_at", c.discoveredAt).
+			Dur("refresh_interval", c.cfg.DiscoveryRefreshInterval).
+			Msg("refreshing cached Solarman device discovery")
 	}
 	c.mu.Unlock()
 
@@ -178,6 +200,7 @@ func (c *Client) resolveDeviceSN(ctx context.Context) (string, error) {
 
 	c.mu.Lock()
 	c.discoveredDevSN = devices[0].DeviceSN
+	c.discoveredAt = time.Now()
 	c.mu.Unlock()
 
 	log.Info().Str("source", c.Name()).Str("device_sn", devices[0].DeviceSN).Msg("discovered Solarman device serial number")
@@ -315,6 +338,10 @@ func (c *Client) doJSON(ctx context.Context, method, path string, withAppLang bo
 		c.mu.Unlock()
 	}
 
+	if err := c.waitForRequestBudget(ctx); err != nil {
+		return nil, 0, err
+	}
+
 	log.Info().
 		Str("source", c.Name()).
 		Str("method", method).
@@ -346,6 +373,42 @@ func (c *Client) doJSON(ctx context.Context, method, path string, withAppLang bo
 		Msg("received API response")
 
 	return raw, resp.StatusCode, nil
+}
+
+func (c *Client) waitForRequestBudget(ctx context.Context) error {
+	if c.cfg.YearlyRequestLimit <= 0 {
+		return nil
+	}
+
+	minInterval := yearlyRequestWindow / time.Duration(c.cfg.YearlyRequestLimit)
+	if minInterval <= 0 {
+		return nil
+	}
+
+	for {
+		c.mu.Lock()
+		wait := time.Until(c.lastRequestAt.Add(minInterval))
+		if c.lastRequestAt.IsZero() || wait <= 0 {
+			c.lastRequestAt = time.Now()
+			c.mu.Unlock()
+			return nil
+		}
+		c.mu.Unlock()
+
+		log.Info().
+			Str("source", c.Name()).
+			Dur("wait", wait).
+			Int("yearly_request_limit", c.cfg.YearlyRequestLimit).
+			Msg("waiting to stay within Solarman API request budget")
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (c *Client) doJSONAuthRetry(ctx context.Context, method, path string, withAppLang bool, body any) ([]byte, int, error) {

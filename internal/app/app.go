@@ -148,7 +148,7 @@ func runServe(parent context.Context, cfg config.Config) error {
 	}()
 
 	log.Info().
-		Str("source", src.Name()).
+		Str("source_priority", src.Name()).
 		Str("listen", cfg.ListenAddress).
 		Str("metrics_path", cfg.MetricsPath).
 		Dur("poll_interval", cfg.PollInterval).
@@ -182,7 +182,22 @@ func runFetch(ctx context.Context, cfg config.Config) error {
 }
 
 func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error) {
-	switch cfg.Source {
+	sources := make([]source.Source, 0, len(cfg.SourcePriority))
+	for _, sourceName := range cfg.SourcePriority {
+		src, err := buildSingleSource(sourceName, cfg, alerts)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, src)
+	}
+	if len(sources) == 1 {
+		return sources[0], nil
+	}
+	return source.NewPriority(sources), nil
+}
+
+func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manager) (source.Source, error) {
+	switch sourceName {
 	case "jinko":
 		return jinko.New(cfg.Jinko, alerts), nil
 	case "solarman":
@@ -190,7 +205,7 @@ func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error
 	case "modbus":
 		return modbus.New(cfg.Modbus), nil
 	default:
-		return nil, fmt.Errorf("unsupported source %q", cfg.Source)
+		return nil, fmt.Errorf("unsupported source %q", sourceName)
 	}
 }
 

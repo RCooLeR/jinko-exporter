@@ -107,5 +107,5 @@ func (r *Runner) pollOnce(ctx context.Context) {
 	r.state.mu.Unlock()
 
 	alert.EvaluateSnapshot(ctx, r.alerts, r.alertCfg, snapshot)
-	log.Info().Str("source", r.src.Name()).Int("metric_count", len(snapshot.Metrics)).Dur("duration", duration).Msg("poll succeeded")
+	log.Info().Str("source", snapshot.Source).Int("metric_count", len(snapshot.Metrics)).Dur("duration", duration).Msg("poll succeeded")
 }

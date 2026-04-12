@@ -42,6 +42,7 @@ services:
 
       JINKO_URL: "https://smart-global.jinkosolar.com/device-s/device/v3/detail"
       JINKO_TIMEOUT: "20s"
+      JINKO_INSECURE_SKIP_VERIFY: "false"
       JINKO_DEVICE_ID: "100000001"
       JINKO_SITE_ID: "200000001"
       JINKO_LANGUAGE: "en"
@@ -94,6 +95,9 @@ services:
       SOLARMAN_API_VERSION: "v1.0"
       SOLARMAN_LANGUAGE: "en"
       SOLARMAN_TIMEOUT: "20s"
+      SOLARMAN_INSECURE_SKIP_VERIFY: "false"
+      SOLARMAN_YEARLY_REQUEST_LIMIT: "200000"
+      SOLARMAN_DISCOVERY_REFRESH_INTERVAL: "24h"
       SOLARMAN_APP_ID: "<APP_ID>"
       SOLARMAN_APP_SECRET: "<APP_SECRET>"
       SOLARMAN_EMAIL: "user@example.com"
@@ -123,6 +127,50 @@ services:
       ALERT_GRID_DOWN_VOLTAGE_THRESHOLD: "20"
       ALERT_BATTERY_SOC_LOW_THRESHOLD: "15"
       ALERT_HIGH_TEMPERATURE_THRESHOLD: "55"
+
+    ports:
+      - "9876:9876"
+```
+
+## Jinko then Solarman failover
+
+```yaml
+services:
+  jinko_exporter:
+    build: .
+    image: rcooler/jinko-exporter:local
+    container_name: jinko_exporter
+    restart: unless-stopped
+    environment:
+      EXPORTER_SOURCE_PRIORITY: "jinko,solarman"
+      EXPORTER_LISTEN: ":9876"
+      EXPORTER_METRICS_PATH: "/metrics"
+      EXPORTER_POLL_INTERVAL: "60s"
+      EXPORTER_LOG_LEVEL: "info"
+      EXPORTER_METRIC_PREFIX: "solar"
+
+      JINKO_URL: "https://smart-global.jinkosolar.com/device-s/device/v3/detail"
+      JINKO_TIMEOUT: "20s"
+      JINKO_INSECURE_SKIP_VERIFY: "true"
+      JINKO_DEVICE_ID: "100000001"
+      JINKO_SITE_ID: "200000001"
+      JINKO_LANGUAGE: "en"
+      JINKO_NEED_REALTIME_DATA: "true"
+      JINKO_BEARER_TOKEN: "<JWT>"
+
+      SOLARMAN_BASE_URL: "https://globalapi.solarmanpv.com"
+      SOLARMAN_API_VERSION: "v1.0"
+      SOLARMAN_LANGUAGE: "en"
+      SOLARMAN_TIMEOUT: "20s"
+      SOLARMAN_INSECURE_SKIP_VERIFY: "false"
+      SOLARMAN_YEARLY_REQUEST_LIMIT: "200000"
+      SOLARMAN_DISCOVERY_REFRESH_INTERVAL: "24h"
+      SOLARMAN_APP_ID: "<APP_ID>"
+      SOLARMAN_APP_SECRET: "<APP_SECRET>"
+      SOLARMAN_EMAIL: "user@example.com"
+      SOLARMAN_PASSWORD: "<PASSWORD>"
+      SOLARMAN_DEVICE_SN: "1234567890"
+      # SOLARMAN_STATION_ID: "123456"
 
     ports:
       - "9876:9876"

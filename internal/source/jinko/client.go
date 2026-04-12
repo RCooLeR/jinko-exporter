@@ -3,6 +3,7 @@ package jinko
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -33,10 +34,17 @@ func New(cfg config.JinkoConfig, alerts *alert.Manager) *Client {
 		token = token[7:]
 	}
 	cfg.BearerToken = strings.TrimSpace(token)
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if cfg.InsecureSkipVerify {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
 	return &Client{
 		cfg: cfg,
 		hc: &http.Client{
-			Timeout: cfg.Timeout,
+			Timeout:   cfg.Timeout,
+			Transport: transport,
 		},
 		alerts: alerts,
 	}

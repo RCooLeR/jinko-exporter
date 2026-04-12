@@ -25,6 +25,16 @@ The exporter exposes:
 
 `solar_metric` is the generic numeric metric stream. For the Jinko detail source it uses values from `paramCategoryList.fieldList`, typically keyed by `storageName`.
 
+## Source priority
+
+By default, the exporter uses `--source` / `EXPORTER_SOURCE`.
+
+To configure failover, set `--source-priority` / `EXPORTER_SOURCE_PRIORITY` to a comma-separated list:
+
+- `EXPORTER_SOURCE_PRIORITY=jinko,solarman`
+
+Each poll tries sources in that order and returns the first successful snapshot. The poll is marked failed only when all configured sources fail. All sources in the priority list must have their required config set.
+
 ## Alerts
 
 SMTP alerts are optional and disabled by default.
@@ -84,6 +94,7 @@ Required config:
 Optional config:
 
 - `--jinko-cookie` / `JINKO_COOKIE`
+- `--jinko-insecure-skip-verify` / `JINKO_INSECURE_SKIP_VERIFY`
 - `--jinko-request-jitter-max` / `JINKO_REQUEST_JITTER_MAX`
 - `--jinko-token-alert-window` / `JINKO_TOKEN_ALERT_WINDOW`
 - `--jinko-language` / `JINKO_LANGUAGE`
@@ -95,6 +106,7 @@ Token note:
 - if the token expires, fetches will fail with `401` until you provide a fresh token
 - with SMTP alerts enabled, the exporter can notify you before expiry and on `401` / `403`
 - if bearer-only is not enough for your account, set `JINKO_COOKIE` too
+- if Jinko serves an expired TLS certificate, set `JINKO_INSECURE_SKIP_VERIFY=true`; this disables HTTPS certificate verification for Jinko requests only
 
 ## Solarman OpenAPI source
 
@@ -111,6 +123,18 @@ Optional config:
 - `--solarman-station-id` to guide discovery
 - `--solarman-base-url`
 - `--solarman-api-version`
+- `--solarman-insecure-skip-verify` / `SOLARMAN_INSECURE_SKIP_VERIFY`
+- `--solarman-yearly-request-limit` / `SOLARMAN_YEARLY_REQUEST_LIMIT`
+- `--solarman-discovery-refresh-interval` / `SOLARMAN_DISCOVERY_REFRESH_INTERVAL`
+
+If Solarman serves an invalid TLS certificate, set `SOLARMAN_INSECURE_SKIP_VERIFY=true`; this disables HTTPS certificate verification for Solarman requests only.
+
+Solarman request-budget notes:
+
+- `SOLARMAN_YEARLY_REQUEST_LIMIT=200000` paces Solarman HTTP calls to stay under an even yearly budget; `0` disables pacing.
+- The limit applies to all Solarman API calls made by this process, including token, discovery, and currentData requests. It resets when the exporter restarts.
+- `SOLARMAN_DISCOVERY_REFRESH_INTERVAL=24h` refreshes cached device discovery at most once per day; `0` caches discovery forever.
+- Set `SOLARMAN_DEVICE_SN` to skip discovery entirely. If you do not know the device serial, set `SOLARMAN_STATION_ID` to skip station-list discovery and only list devices for that station.
 
 ### 1) Solarman Smart account
 - Your Solarman Smart **email** + **password**

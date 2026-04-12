@@ -9,16 +9,17 @@ import (
 )
 
 type Config struct {
-	Source        string
-	ListenAddress string
-	MetricsPath   string
-	PollInterval  time.Duration
-	LogLevel      string
-	MetricPrefix  string
-	Alerts        AlertConfig
-	Jinko         JinkoConfig
-	Solarman      SolarmanConfig
-	Modbus        ModbusConfig
+	Source         string
+	SourcePriority []string
+	ListenAddress  string
+	MetricsPath    string
+	PollInterval   time.Duration
+	LogLevel       string
+	MetricPrefix   string
+	Alerts         AlertConfig
+	Jinko          JinkoConfig
+	Solarman       SolarmanConfig
+	Modbus         ModbusConfig
 }
 
 type AlertConfig struct {
@@ -41,31 +42,35 @@ type AlertConfig struct {
 }
 
 type JinkoConfig struct {
-	URL              string
-	Timeout          time.Duration
-	DeviceID         int64
-	SiteID           int64
-	Language         string
-	NeedRealtimeData bool
-	BearerToken      string
-	Cookie           string
-	UserAgent        string
-	RequestJitterMax time.Duration
-	TokenAlertWindow time.Duration
+	URL                string
+	Timeout            time.Duration
+	InsecureSkipVerify bool
+	DeviceID           int64
+	SiteID             int64
+	Language           string
+	NeedRealtimeData   bool
+	BearerToken        string
+	Cookie             string
+	UserAgent          string
+	RequestJitterMax   time.Duration
+	TokenAlertWindow   time.Duration
 }
 
 type SolarmanConfig struct {
-	BaseURL        string
-	APIVersion     string
-	Language       string
-	Timeout        time.Duration
-	AppID          string
-	AppSecret      string
-	Email          string
-	Password       string
-	PasswordSHA256 string
-	DeviceSN       string
-	StationID      int64
+	BaseURL                  string
+	APIVersion               string
+	Language                 string
+	Timeout                  time.Duration
+	InsecureSkipVerify       bool
+	YearlyRequestLimit       int
+	DiscoveryRefreshInterval time.Duration
+	AppID                    string
+	AppSecret                string
+	Email                    string
+	Password                 string
+	PasswordSHA256           string
+	DeviceSN                 string
+	StationID                int64
 }
 
 type ModbusConfig struct {
@@ -79,6 +84,7 @@ type ModbusConfig struct {
 func Flags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "source", Value: "jinko", Usage: "Data source: jinko, solarman, modbus", EnvVars: []string{"EXPORTER_SOURCE"}},
+		&cli.StringFlag{Name: "source-priority", Usage: "Comma-separated source failover priority list; overrides source when set", EnvVars: []string{"EXPORTER_SOURCE_PRIORITY", "EXPORTER_SOURCE_priority"}},
 		&cli.StringFlag{Name: "listen", Value: ":9876", Usage: "HTTP listen address", EnvVars: []string{"EXPORTER_LISTEN"}},
 		&cli.StringFlag{Name: "metrics-path", Value: "/metrics", Usage: "Prometheus metrics path", EnvVars: []string{"EXPORTER_METRICS_PATH"}},
 		&cli.DurationFlag{Name: "poll-interval", Value: 60 * time.Second, Usage: "Polling interval", EnvVars: []string{"EXPORTER_POLL_INTERVAL"}},
@@ -103,6 +109,7 @@ func Flags() []cli.Flag {
 
 		&cli.StringFlag{Name: "jinko-url", Value: "https://smart-global.jinkosolar.com/device-s/device/v3/detail", Usage: "Jinko detail endpoint", EnvVars: []string{"JINKO_URL"}},
 		&cli.DurationFlag{Name: "jinko-timeout", Value: 20 * time.Second, Usage: "Jinko HTTP timeout", EnvVars: []string{"JINKO_TIMEOUT"}},
+		&cli.BoolFlag{Name: "jinko-insecure-skip-verify", Value: false, Usage: "Skip TLS certificate verification for Jinko HTTPS requests; insecure", EnvVars: []string{"JINKO_INSECURE_SKIP_VERIFY"}},
 		&cli.Int64Flag{Name: "jinko-device-id", Usage: "Jinko deviceId request field", EnvVars: []string{"JINKO_DEVICE_ID"}},
 		&cli.Int64Flag{Name: "jinko-site-id", Usage: "Jinko siteId request field", EnvVars: []string{"JINKO_SITE_ID"}},
 		&cli.StringFlag{Name: "jinko-language", Value: "en", Usage: "Jinko request language", EnvVars: []string{"JINKO_LANGUAGE"}},
@@ -117,6 +124,9 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "solarman-api-version", Value: "v1.0", Usage: "Solarman OpenAPI version", EnvVars: []string{"SOLARMAN_API_VERSION"}},
 		&cli.StringFlag{Name: "solarman-language", Value: "en", Usage: "Solarman request language", EnvVars: []string{"SOLARMAN_LANGUAGE"}},
 		&cli.DurationFlag{Name: "solarman-timeout", Value: 20 * time.Second, Usage: "Solarman HTTP timeout", EnvVars: []string{"SOLARMAN_TIMEOUT"}},
+		&cli.BoolFlag{Name: "solarman-insecure-skip-verify", Value: false, Usage: "Skip TLS certificate verification for Solarman HTTPS requests; insecure", EnvVars: []string{"SOLARMAN_INSECURE_SKIP_VERIFY"}},
+		&cli.IntFlag{Name: "solarman-yearly-request-limit", Value: 0, Usage: "Solarman yearly API request limit used to pace requests; 0 disables pacing", EnvVars: []string{"SOLARMAN_YEARLY_REQUEST_LIMIT"}},
+		&cli.DurationFlag{Name: "solarman-discovery-refresh-interval", Value: 24 * time.Hour, Usage: "How often Solarman device discovery may refresh; 0 caches discovery forever", EnvVars: []string{"SOLARMAN_DISCOVERY_REFRESH_INTERVAL"}},
 		&cli.StringFlag{Name: "solarman-app-id", Usage: "Solarman OpenAPI appId", EnvVars: []string{"SOLARMAN_APP_ID"}},
 		&cli.StringFlag{Name: "solarman-app-secret", Usage: "Solarman OpenAPI appSecret", EnvVars: []string{"SOLARMAN_APP_SECRET"}},
 		&cli.StringFlag{Name: "solarman-email", Usage: "Solarman account email", EnvVars: []string{"SOLARMAN_EMAIL"}},
@@ -135,12 +145,13 @@ func Flags() []cli.Flag {
 
 func FromCLI(c *cli.Context) (Config, error) {
 	cfg := Config{
-		Source:        strings.ToLower(strings.TrimSpace(c.String("source"))),
-		ListenAddress: c.String("listen"),
-		MetricsPath:   c.String("metrics-path"),
-		PollInterval:  c.Duration("poll-interval"),
-		LogLevel:      c.String("log-level"),
-		MetricPrefix:  strings.TrimSpace(c.String("metric-prefix")),
+		Source:         strings.ToLower(strings.TrimSpace(c.String("source"))),
+		SourcePriority: normalizeSourceList(c.String("source-priority")),
+		ListenAddress:  c.String("listen"),
+		MetricsPath:    c.String("metrics-path"),
+		PollInterval:   c.Duration("poll-interval"),
+		LogLevel:       c.String("log-level"),
+		MetricPrefix:   strings.TrimSpace(c.String("metric-prefix")),
 		Alerts: AlertConfig{
 			Enabled:                  c.Bool("alerts-enabled"),
 			Cooldown:                 c.Duration("alerts-cooldown"),
@@ -160,30 +171,34 @@ func FromCLI(c *cli.Context) (Config, error) {
 			HighTemperatureThreshold: c.Float64("alert-high-temperature-threshold"),
 		},
 		Jinko: JinkoConfig{
-			URL:              c.String("jinko-url"),
-			Timeout:          c.Duration("jinko-timeout"),
-			DeviceID:         c.Int64("jinko-device-id"),
-			SiteID:           c.Int64("jinko-site-id"),
-			Language:         c.String("jinko-language"),
-			NeedRealtimeData: c.Bool("jinko-need-realtime"),
-			BearerToken:      c.String("jinko-bearer-token"),
-			Cookie:           c.String("jinko-cookie"),
-			UserAgent:        c.String("jinko-user-agent"),
-			RequestJitterMax: c.Duration("jinko-request-jitter-max"),
-			TokenAlertWindow: c.Duration("jinko-token-alert-window"),
+			URL:                c.String("jinko-url"),
+			Timeout:            c.Duration("jinko-timeout"),
+			InsecureSkipVerify: c.Bool("jinko-insecure-skip-verify"),
+			DeviceID:           c.Int64("jinko-device-id"),
+			SiteID:             c.Int64("jinko-site-id"),
+			Language:           c.String("jinko-language"),
+			NeedRealtimeData:   c.Bool("jinko-need-realtime"),
+			BearerToken:        c.String("jinko-bearer-token"),
+			Cookie:             c.String("jinko-cookie"),
+			UserAgent:          c.String("jinko-user-agent"),
+			RequestJitterMax:   c.Duration("jinko-request-jitter-max"),
+			TokenAlertWindow:   c.Duration("jinko-token-alert-window"),
 		},
 		Solarman: SolarmanConfig{
-			BaseURL:        c.String("solarman-base-url"),
-			APIVersion:     c.String("solarman-api-version"),
-			Language:       c.String("solarman-language"),
-			Timeout:        c.Duration("solarman-timeout"),
-			AppID:          c.String("solarman-app-id"),
-			AppSecret:      c.String("solarman-app-secret"),
-			Email:          c.String("solarman-email"),
-			Password:       c.String("solarman-password"),
-			PasswordSHA256: c.String("solarman-password-sha256"),
-			DeviceSN:       c.String("solarman-device-sn"),
-			StationID:      c.Int64("solarman-station-id"),
+			BaseURL:                  c.String("solarman-base-url"),
+			APIVersion:               c.String("solarman-api-version"),
+			Language:                 c.String("solarman-language"),
+			Timeout:                  c.Duration("solarman-timeout"),
+			InsecureSkipVerify:       c.Bool("solarman-insecure-skip-verify"),
+			YearlyRequestLimit:       c.Int("solarman-yearly-request-limit"),
+			DiscoveryRefreshInterval: c.Duration("solarman-discovery-refresh-interval"),
+			AppID:                    c.String("solarman-app-id"),
+			AppSecret:                c.String("solarman-app-secret"),
+			Email:                    c.String("solarman-email"),
+			Password:                 c.String("solarman-password"),
+			PasswordSHA256:           c.String("solarman-password-sha256"),
+			DeviceSN:                 c.String("solarman-device-sn"),
+			StationID:                c.Int64("solarman-station-id"),
 		},
 		Modbus: ModbusConfig{
 			Host:         c.String("modbus-host"),
@@ -205,6 +220,9 @@ func FromCLI(c *cli.Context) (Config, error) {
 	}
 	if cfg.Source == "" {
 		return Config{}, fmt.Errorf("source is required")
+	}
+	if len(cfg.SourcePriority) == 0 {
+		cfg.SourcePriority = []string{cfg.Source}
 	}
 	if err := validate(cfg); err != nil {
 		return Config{}, err
@@ -249,7 +267,22 @@ func validate(cfg Config) error {
 		}
 	}
 
-	switch cfg.Source {
+	seenSources := make(map[string]struct{}, len(cfg.SourcePriority))
+	for _, sourceName := range cfg.SourcePriority {
+		if _, ok := seenSources[sourceName]; ok {
+			return fmt.Errorf("duplicate source %q in source-priority", sourceName)
+		}
+		seenSources[sourceName] = struct{}{}
+
+		if err := validateSourceConfig(cfg, sourceName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSourceConfig(cfg Config, sourceName string) error {
+	switch sourceName {
 	case "jinko":
 		if cfg.Jinko.DeviceID == 0 {
 			return fmt.Errorf("jinko-device-id is required")
@@ -261,6 +294,12 @@ func validate(cfg Config) error {
 			return fmt.Errorf("jinko-bearer-token is required")
 		}
 	case "solarman":
+		if cfg.Solarman.YearlyRequestLimit < 0 {
+			return fmt.Errorf("solarman-yearly-request-limit must be >= 0")
+		}
+		if cfg.Solarman.DiscoveryRefreshInterval < 0 {
+			return fmt.Errorf("solarman-discovery-refresh-interval must be >= 0")
+		}
 		if cfg.Solarman.AppID == "" || cfg.Solarman.AppSecret == "" {
 			return fmt.Errorf("solarman-app-id and solarman-app-secret are required")
 		}
@@ -275,9 +314,17 @@ func validate(cfg Config) error {
 			return fmt.Errorf("modbus-host is required")
 		}
 	default:
-		return fmt.Errorf("unknown source %q", cfg.Source)
+		return fmt.Errorf("unknown source %q", sourceName)
 	}
 	return nil
+}
+
+func normalizeSourceList(value string) []string {
+	values := normalizeList([]string{value})
+	for i, item := range values {
+		values[i] = strings.ToLower(item)
+	}
+	return values
 }
 
 func normalizeList(values []string) []string {
