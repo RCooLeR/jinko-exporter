@@ -65,6 +65,7 @@ type SolarmanConfig struct {
 	Language                 string
 	Timeout                  time.Duration
 	InsecureSkipVerify       bool
+	CanonicalJinkoMetrics    bool
 	YearlyRequestLimit       int
 	DiscoveryRefreshInterval time.Duration
 	AppID                    string
@@ -199,6 +200,7 @@ func FromCLI(c *cli.Context) (Config, error) {
 			Language:                 c.String("solarman-language"),
 			Timeout:                  c.Duration("solarman-timeout"),
 			InsecureSkipVerify:       c.Bool("solarman-insecure-skip-verify"),
+			CanonicalJinkoMetrics:    c.Bool("metrics-drop-source-label"),
 			YearlyRequestLimit:       c.Int("solarman-yearly-request-limit"),
 			DiscoveryRefreshInterval: c.Duration("solarman-discovery-refresh-interval"),
 			AppID:                    c.String("solarman-app-id"),

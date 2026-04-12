@@ -193,7 +193,7 @@ func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error
 	if len(sources) == 1 {
 		return sources[0], nil
 	}
-	return source.NewPriority(sources), nil
+	return source.NewPriority(sources, cfg.DropSourceLabel), nil
 }
 
 func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manager) (source.Source, error) {

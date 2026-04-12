@@ -1,6 +1,7 @@
 package prom
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/RCooLeR/jinko-exporter/internal/poller"
@@ -109,13 +110,21 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 
-	// Keep the public metric surface generic across all sources; source-specific field names stay in labels.
+	// Label dropping can collapse source-specific metrics into the same Prometheus series.
+	seenValueLabels := make(map[string]struct{}, len(snapshot.Metrics))
 	for _, metric := range snapshot.Metrics {
+		labelValues := c.valueLabelValues(snapshot.Source, deviceSN, metric.Group, metric.Key, metric.Name, metric.Unit)
+		labelSignature := labelsSignature(labelValues)
+		if _, ok := seenValueLabels[labelSignature]; ok {
+			continue
+		}
+		seenValueLabels[labelSignature] = struct{}{}
+
 		ch <- prometheus.MustNewConstMetric(
 			c.valueDesc,
 			prometheus.GaugeValue,
 			metric.Value,
-			c.valueLabelValues(snapshot.Source, deviceSN, metric.Group, metric.Key, metric.Name, metric.Unit)...,
+			labelValues...,
 		)
 	}
 }
@@ -139,4 +148,15 @@ func (c *Collector) valueLabelValues(sourceName, deviceSN, group, key, name, uni
 		return []string{deviceSN, group, key, name, unit}
 	}
 	return []string{sourceName, deviceSN, group, key, name, unit}
+}
+
+func labelsSignature(values []string) string {
+	var b strings.Builder
+	for _, value := range values {
+		b.WriteString(strconv.Itoa(len(value)))
+		b.WriteByte(':')
+		b.WriteString(value)
+		b.WriteByte('|')
+	}
+	return b.String()
 }

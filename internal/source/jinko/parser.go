@@ -51,13 +51,17 @@ func ParseDetailResponse(raw []byte) (*model.Snapshot, error) {
 			if key == "" {
 				key = SanitizeKey(f.Key)
 			}
-			metrics = append(metrics, model.Metric{
+			metric := model.Metric{
 				Group: group,
 				Key:   key,
 				Name:  strings.TrimSpace(f.Key),
 				Unit:  normalizeUnit(f.Unit),
 				Value: value,
-			})
+			}
+			if canonical, ok := CanonicalizeMetric(metric); ok {
+				metric = canonical
+			}
+			metrics = append(metrics, metric)
 		}
 	}
 

@@ -127,16 +127,11 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 				continue
 			}
 		}
-		if key == "" {
-			key = jinko.SanitizeKey(name)
+		metric, ok := c.metricFromPoint(key, name, unit, value)
+		if !ok {
+			continue
 		}
-		metrics = append(metrics, model.Metric{
-			Group: classifyGroup(key, name),
-			Key:   key,
-			Name:  name,
-			Unit:  unit,
-			Value: value,
-		})
+		metrics = append(metrics, metric)
 	}
 
 	return &model.Snapshot{
@@ -148,6 +143,23 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 			"base_url": c.cfg.BaseURL,
 		},
 	}, nil
+}
+
+func (c *Client) metricFromPoint(key, name, unit string, value float64) (model.Metric, bool) {
+	if key == "" {
+		key = jinko.SanitizeKey(name)
+	}
+	metric := model.Metric{
+		Group: classifyGroup(key, name),
+		Key:   key,
+		Name:  name,
+		Unit:  unit,
+		Value: value,
+	}
+	if !c.cfg.CanonicalJinkoMetrics {
+		return metric, true
+	}
+	return jinko.CanonicalizeMetric(metric)
 }
 
 func (c *Client) resolveDeviceSN(ctx context.Context) (string, error) {
@@ -497,21 +509,44 @@ func (c *Client) buildURL(path string, withAppLang bool) (string, error) {
 
 func classifyGroup(key string, name string) string {
 	text := strings.ToLower(key + " " + name)
+	normalizedKey := strings.ToUpper(strings.TrimSpace(key))
 	switch {
-	case strings.Contains(text, "pv"), strings.Contains(text, "dc "):
-		return "pv"
+	case strings.HasPrefix(normalizedKey, "DV"),
+		strings.HasPrefix(normalizedKey, "DC"),
+		strings.HasPrefix(normalizedKey, "DP"),
+		strings.HasPrefix(normalizedKey, "AV"),
+		strings.HasPrefix(normalizedKey, "A_V_"),
+		strings.HasPrefix(normalizedKey, "INV_O_P_"),
+		strings.HasPrefix(normalizedKey, "AC_S_"),
+		normalizedKey == "AC1",
+		normalizedKey == "AC2",
+		normalizedKey == "AC3",
+		normalizedKey == "S_P_T",
+		normalizedKey == "PV_D_P_G",
+		normalizedKey == "O_P",
+		normalizedKey == "P_F1",
+		normalizedKey == "A_FO1",
+		strings.HasPrefix(normalizedKey, "ET_GE"),
+		strings.HasPrefix(normalizedKey, "ETDY_GE"),
+		strings.Contains(text, "solar"),
+		strings.Contains(text, " pv"),
+		strings.Contains(text, "dc "),
+		strings.Contains(text, "inverter output"):
+		return "electric"
 	case strings.Contains(text, "grid"):
 		return "grid"
+	case strings.Contains(text, "alarm"), strings.Contains(text, "fault"):
+		return "alert"
 	case strings.Contains(text, "bms"):
 		return "bms"
 	case strings.Contains(text, "battery"), strings.Contains(text, "soc"):
 		return "battery"
 	case strings.Contains(text, "load"), strings.Contains(text, "house"), strings.Contains(text, "consumption"):
-		return "load"
+		return "consumption"
 	case strings.Contains(text, "temp"):
 		return "temperature"
-	case strings.Contains(text, "alarm"), strings.Contains(text, "fault"):
-		return "alarms"
+	case strings.Contains(text, "gen"):
+		return "generator"
 	default:
 		return "inverter"
 	}
