@@ -13,6 +13,7 @@ import (
 
 	"github.com/RCooLeR/jinko-exporter/internal/alert"
 	"github.com/RCooLeR/jinko-exporter/internal/config"
+	"github.com/RCooLeR/jinko-exporter/internal/hamqtt"
 	"github.com/RCooLeR/jinko-exporter/internal/poller"
 	"github.com/RCooLeR/jinko-exporter/internal/prom"
 	"github.com/RCooLeR/jinko-exporter/internal/source"
@@ -104,10 +105,25 @@ func runServe(parent context.Context, cfg config.Config) error {
 	}
 
 	state := poller.NewState(src.Name())
-	runner := poller.NewRunner(src, cfg.PollInterval, state, alerts, cfg.Alerts)
 
 	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	var observers []poller.Observer
+	var mqttPublisher *hamqtt.Publisher
+	if cfg.MQTT.Enabled {
+		mqttPublisher, err = hamqtt.NewPublisher(cfg.MQTT)
+		if err != nil {
+			return err
+		}
+		if err := mqttPublisher.Start(); err != nil {
+			return err
+		}
+		defer mqttPublisher.Close()
+		observers = append(observers, mqttPublisher)
+	}
+
+	runner := poller.NewRunner(src, cfg.PollInterval, state, alerts, cfg.Alerts, observers...)
 
 	registry := prometheus.NewRegistry()
 	collector := prom.NewCollector(cfg.MetricPrefix, state, cfg.DropSourceLabel)
@@ -152,6 +168,7 @@ func runServe(parent context.Context, cfg config.Config) error {
 		Str("listen", cfg.ListenAddress).
 		Str("metrics_path", cfg.MetricsPath).
 		Dur("poll_interval", cfg.PollInterval).
+		Bool("mqtt_enabled", cfg.MQTT.Enabled).
 		Msg("starting exporter")
 
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

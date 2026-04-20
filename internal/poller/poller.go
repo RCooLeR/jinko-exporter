@@ -46,16 +46,23 @@ type Runner struct {
 	state     *State
 	alerts    *alert.Manager
 	alertCfg  config.AlertConfig
+	observers []Observer
 	startedAt time.Time
 }
 
-func NewRunner(src source.Source, interval time.Duration, state *State, alerts *alert.Manager, alertCfg config.AlertConfig) *Runner {
+type Observer interface {
+	OnPollSuccess(snapshot *model.Snapshot, duration time.Duration) error
+	OnPollFailure(sourceName string, err error, duration time.Duration, errorCount uint64) error
+}
+
+func NewRunner(src source.Source, interval time.Duration, state *State, alerts *alert.Manager, alertCfg config.AlertConfig, observers ...Observer) *Runner {
 	return &Runner{
 		src:       src,
 		interval:  interval,
 		state:     state,
 		alerts:    alerts,
 		alertCfg:  alertCfg,
+		observers: observers,
 		startedAt: time.Now(),
 	}
 }
@@ -89,11 +96,20 @@ func (r *Runner) pollOnce(ctx context.Context) {
 		r.state.up = false
 		r.state.errorCount++
 		r.state.lastError = err.Error()
+		errorCount := r.state.errorCount
 		lastSuccessAt = r.state.lastSuccessAt
 		lastError = r.state.lastError
 		r.state.mu.Unlock()
 
 		log.Error().Err(err).Str("source", r.src.Name()).Dur("duration", duration).Msg("poll failed")
+		for _, observer := range r.observers {
+			if observer == nil {
+				continue
+			}
+			if observerErr := observer.OnPollFailure(r.src.Name(), err, duration, errorCount); observerErr != nil {
+				log.Warn().Err(observerErr).Str("source", r.src.Name()).Msg("poll observer failed")
+			}
+		}
 		alert.EvaluateNoSuccessfulPoll(ctx, r.alerts, r.alertCfg, r.src.Name(), r.startedAt, lastSuccessAt, lastError)
 		return
 	}
@@ -107,5 +123,13 @@ func (r *Runner) pollOnce(ctx context.Context) {
 	r.state.mu.Unlock()
 
 	alert.EvaluateSnapshot(ctx, r.alerts, r.alertCfg, snapshot)
+	for _, observer := range r.observers {
+		if observer == nil {
+			continue
+		}
+		if observerErr := observer.OnPollSuccess(snapshot, duration); observerErr != nil {
+			log.Warn().Err(observerErr).Str("source", snapshot.Source).Msg("poll observer failed")
+		}
+	}
 	log.Info().Str("source", snapshot.Source).Int("metric_count", len(snapshot.Metrics)).Dur("duration", duration).Msg("poll succeeded")
 }

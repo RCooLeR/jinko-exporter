@@ -18,6 +18,7 @@ type Config struct {
 	MetricPrefix    string
 	DropSourceLabel bool
 	Alerts          AlertConfig
+	MQTT            MQTTConfig
 	Jinko           JinkoConfig
 	Solarman        SolarmanConfig
 	Modbus          ModbusConfig
@@ -40,6 +41,22 @@ type AlertConfig struct {
 	GridDownVoltageThreshold float64
 	BatterySOCLowThreshold   float64
 	HighTemperatureThreshold float64
+}
+
+type MQTTConfig struct {
+	Enabled            bool
+	Broker             string
+	ClientID           string
+	Username           string
+	Password           string
+	TopicPrefix        string
+	DiscoveryPrefix    string
+	DeviceName         string
+	DeviceID           string
+	QOS                byte
+	Retain             bool
+	Timeout            time.Duration
+	InsecureSkipVerify bool
 }
 
 type JinkoConfig struct {
@@ -95,6 +112,21 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "log-level", Value: "info", Usage: "zerolog level", EnvVars: []string{"EXPORTER_LOG_LEVEL"}},
 		&cli.StringFlag{Name: "metric-prefix", Value: "solar", Usage: "Metric name prefix", EnvVars: []string{"EXPORTER_METRIC_PREFIX"}},
 		&cli.BoolFlag{Name: "metrics-drop-source-label", Value: false, Usage: "Drop the source label from generic exporter metrics; last source sync keeps the source label", EnvVars: []string{"EXPORTER_METRICS_DROP_SOURCE_LABEL"}},
+
+		&cli.BoolFlag{Name: "mqtt-enabled", Value: false, Usage: "Enable read-only Home Assistant MQTT discovery and state publishing", EnvVars: []string{"MQTT_ENABLED"}},
+		&cli.StringFlag{Name: "mqtt-broker", Value: "tcp://localhost:1883", Usage: "MQTT broker URL, for example tcp://homeassistant.local:1883 or tls://broker.example:8883", EnvVars: []string{"MQTT_BROKER"}},
+		&cli.StringFlag{Name: "mqtt-client-id", Value: "jinko-exporter", Usage: "MQTT client ID", EnvVars: []string{"MQTT_CLIENT_ID"}},
+		&cli.StringFlag{Name: "mqtt-username", Usage: "MQTT username", EnvVars: []string{"MQTT_USERNAME"}},
+		&cli.StringFlag{Name: "mqtt-password", Usage: "MQTT password", EnvVars: []string{"MQTT_PASSWORD"}},
+		&cli.StringFlag{Name: "mqtt-topic-prefix", Value: "jinko-exporter", Usage: "Base topic for state and availability payloads", EnvVars: []string{"MQTT_TOPIC_PREFIX"}},
+		&cli.StringFlag{Name: "mqtt-discovery-prefix", Value: "homeassistant", Usage: "Home Assistant MQTT discovery prefix", EnvVars: []string{"MQTT_DISCOVERY_PREFIX"}},
+		&cli.StringFlag{Name: "mqtt-device-name", Usage: "Optional Home Assistant device name; defaults to Jinko Inverter plus device serial when available", EnvVars: []string{"MQTT_DEVICE_NAME"}},
+		&cli.StringFlag{Name: "mqtt-device-id", Usage: "Optional stable Home Assistant device identifier; defaults to the inverter/logger serial when available", EnvVars: []string{"MQTT_DEVICE_ID"}},
+		&cli.IntFlag{Name: "mqtt-qos", Value: 0, Usage: "MQTT QoS for discovery and state publishes: 0, 1, or 2", EnvVars: []string{"MQTT_QOS"}},
+		&cli.BoolFlag{Name: "mqtt-retain", Value: true, Usage: "Retain Home Assistant discovery, availability, and state messages", EnvVars: []string{"MQTT_RETAIN"}},
+		&cli.DurationFlag{Name: "mqtt-timeout", Value: 10 * time.Second, Usage: "MQTT connect and publish timeout", EnvVars: []string{"MQTT_TIMEOUT"}},
+		&cli.BoolFlag{Name: "mqtt-insecure-skip-verify", Value: false, Usage: "Skip TLS certificate verification for MQTT TLS connections; insecure", EnvVars: []string{"MQTT_INSECURE_SKIP_VERIFY"}},
+
 		&cli.BoolFlag{Name: "alerts-enabled", Value: false, Usage: "Enable outbound alert delivery", EnvVars: []string{"ALERTS_ENABLED"}},
 		&cli.DurationFlag{Name: "alerts-cooldown", Value: 6 * time.Hour, Usage: "Minimum interval between repeated alerts with the same key", EnvVars: []string{"ALERTS_COOLDOWN"}},
 		&cli.DurationFlag{Name: "smtp-timeout", Value: 15 * time.Second, Usage: "SMTP dial/send timeout", EnvVars: []string{"SMTP_TIMEOUT"}},
@@ -160,6 +192,21 @@ func FromCLI(c *cli.Context) (Config, error) {
 		LogLevel:        c.String("log-level"),
 		MetricPrefix:    strings.TrimSpace(c.String("metric-prefix")),
 		DropSourceLabel: c.Bool("metrics-drop-source-label"),
+		MQTT: MQTTConfig{
+			Enabled:            c.Bool("mqtt-enabled"),
+			Broker:             c.String("mqtt-broker"),
+			ClientID:           c.String("mqtt-client-id"),
+			Username:           c.String("mqtt-username"),
+			Password:           c.String("mqtt-password"),
+			TopicPrefix:        c.String("mqtt-topic-prefix"),
+			DiscoveryPrefix:    c.String("mqtt-discovery-prefix"),
+			DeviceName:         c.String("mqtt-device-name"),
+			DeviceID:           c.String("mqtt-device-id"),
+			QOS:                byte(c.Int("mqtt-qos")),
+			Retain:             c.Bool("mqtt-retain"),
+			Timeout:            c.Duration("mqtt-timeout"),
+			InsecureSkipVerify: c.Bool("mqtt-insecure-skip-verify"),
+		},
 		Alerts: AlertConfig{
 			Enabled:                  c.Bool("alerts-enabled"),
 			Cooldown:                 c.Duration("alerts-cooldown"),
@@ -242,6 +289,27 @@ func FromCLI(c *cli.Context) (Config, error) {
 }
 
 func validate(cfg Config) error {
+	if cfg.MQTT.Enabled {
+		if strings.TrimSpace(cfg.MQTT.Broker) == "" {
+			return fmt.Errorf("mqtt-broker is required when MQTT is enabled")
+		}
+		if strings.TrimSpace(cfg.MQTT.ClientID) == "" {
+			return fmt.Errorf("mqtt-client-id is required when MQTT is enabled")
+		}
+		if strings.Trim(strings.TrimSpace(cfg.MQTT.TopicPrefix), "/") == "" {
+			return fmt.Errorf("mqtt-topic-prefix is required when MQTT is enabled")
+		}
+		if strings.Trim(strings.TrimSpace(cfg.MQTT.DiscoveryPrefix), "/") == "" {
+			return fmt.Errorf("mqtt-discovery-prefix is required when MQTT is enabled")
+		}
+		if cfg.MQTT.QOS > 2 {
+			return fmt.Errorf("mqtt-qos must be 0, 1, or 2")
+		}
+		if cfg.MQTT.Timeout <= 0 {
+			return fmt.Errorf("mqtt-timeout must be > 0 when MQTT is enabled")
+		}
+	}
+
 	if cfg.Alerts.Enabled {
 		if strings.TrimSpace(cfg.Alerts.SMTPHost) == "" {
 			return fmt.Errorf("smtp-host is required when alerts are enabled")

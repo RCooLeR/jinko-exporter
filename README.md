@@ -28,6 +28,33 @@ The exporter exposes:
 
 Set `EXPORTER_METRICS_DROP_SOURCE_LABEL=true` to remove the `source` label from generic metrics. `solar_last_source_sync_timestamp_seconds{source}` still keeps the source label so failover source changes remain visible.
 
+## Home Assistant MQTT
+
+Read-only Home Assistant MQTT Discovery is optional.
+
+When enabled, the exporter publishes retained discovery configs and a retained JSON state payload after each successful poll. Home Assistant gets one device with entities for every numeric metric returned by the source, plus diagnostics and binary problem sensors for alarm/fault values.
+
+Minimum config:
+
+- `--mqtt-enabled` / `MQTT_ENABLED=true`
+- `--mqtt-broker` / `MQTT_BROKER=tcp://homeassistant.local:1883`
+- `--mqtt-username` / `MQTT_USERNAME`
+- `--mqtt-password` / `MQTT_PASSWORD`
+
+Useful optional config:
+
+- `--mqtt-topic-prefix` / `MQTT_TOPIC_PREFIX`
+- `--mqtt-discovery-prefix` / `MQTT_DISCOVERY_PREFIX`
+- `--mqtt-device-name` / `MQTT_DEVICE_NAME`
+- `--mqtt-device-id` / `MQTT_DEVICE_ID`
+- `--mqtt-client-id` / `MQTT_CLIENT_ID`
+- `--mqtt-retain` / `MQTT_RETAIN`
+- `--mqtt-qos` / `MQTT_QOS`
+- `--mqtt-timeout` / `MQTT_TIMEOUT`
+- `--mqtt-insecure-skip-verify` / `MQTT_INSECURE_SKIP_VERIFY`
+
+See [ha.md](./ha.md) for Home Assistant setup, topics, Docker Compose examples, and troubleshooting.
+
 ## Source priority
 
 By default, the exporter uses `--source` / `EXPORTER_SOURCE`.
