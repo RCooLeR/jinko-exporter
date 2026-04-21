@@ -1,0 +1,12 @@
+FROM alpine:3.23
+
+ARG TARGETPLATFORM
+
+RUN apk add --no-cache ca-certificates
+
+COPY ${TARGETPLATFORM}/jinko-exporter /usr/bin/jinko-exporter
+
+EXPOSE 9876
+
+ENTRYPOINT ["/usr/bin/jinko-exporter"]
+CMD ["serve"]

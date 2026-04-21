@@ -203,6 +203,25 @@ The current result is an explicit `not implemented` error rather than a guessed 
 - Health: `http://localhost:9876/healthz`
 - Ready: `http://localhost:9876/readyz`
 
+## Releases
+
+Tagged releases are handled by GoReleaser via [`.github/workflows/release.yml`](./.github/workflows/release.yml).
+
+Before pushing a release tag, add these repository secrets:
+
+- `DOCKER_USERNAME`: Docker Hub username
+- `DOCKER_PASSWORD`: Docker Hub access token for `rcooler/jinko_exporter`
+
+Publishing flow:
+
+1. Push a semantic version tag such as `v1.2.3`.
+2. GitHub Actions runs GoReleaser.
+3. GoReleaser publishes release archives and a multi-arch Docker image to `rcooler/jinko_exporter`.
+
+Stable tags publish Docker tags `1.2.3`, `1.2`, `1`, and `latest`. Pre-release tags publish only the exact version tag.
+
+For a local dry run, use `goreleaser release --snapshot --clean`.
+
 ## Development
 The repository includes a Jinko detail response fixture at:
 

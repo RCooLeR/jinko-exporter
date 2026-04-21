@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+
+version: 2
+
+project_name: jinko-exporter
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: jinko-exporter
+    main: .
+    binary: jinko-exporter
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: jinko-exporter
+    ids:
+      - jinko-exporter
+    formats:
+      - tar.gz
+    files:
+      - README.md
+      - docker-compose.md
+      - ha.md
+
+checksum:
+  name_template: checksums.txt
+
+dockers_v2:
+  - id: dockerhub
+    ids:
+      - jinko-exporter
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - rcooler/jinko_exporter
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}{{ end }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    labels:
+      org.opencontainers.image.title: jinko-exporter
+      org.opencontainers.image.description: Prometheus exporter for Jinko and Solarman solar data sources
+      org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+changelog:
+  sort: asc
