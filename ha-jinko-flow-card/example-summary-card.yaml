@@ -1,0 +1,5 @@
+type: custom:jinko-power-summary-card
+title: Jinko ESS Overview
+battery_capacity_kwh: 21.31
+battery_negative_is_charging: true
+show_entity_map: false
