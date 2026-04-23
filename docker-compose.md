@@ -1,6 +1,6 @@
 # Docker Compose Examples
 
-This file shows example Docker Compose setups for all three source modes supported by `jinko-exporter`.
+This file shows example Docker Compose setups for all three source modes supported by `jinko-exporter`, including the optional Home Assistant MQTT integration.
 
 Notes:
 
@@ -8,6 +8,7 @@ Notes:
 - The Jinko bearer token is expected to be copied from an active browser session.
 - SMTP alerts are optional; examples below use placeholders only.
 - The Modbus source is still a placeholder until protocol/register details are available.
+- To integrate with Home Assistant, add the `MQTT_*` variables shown in the dedicated example below or merge them into any other source example.
 
 ## Build the image locally
 
@@ -76,6 +77,41 @@ services:
     ports:
       - "9876:9876"
 ```
+
+## Jinko with Home Assistant MQTT
+
+This is the same Jinko source, plus MQTT Discovery so Home Assistant can auto-create entities from the exporter data.
+
+```yaml
+services:
+  jinko_exporter:
+    build: .
+    image: rcooler/jinko-exporter:local
+    container_name: jinko_exporter
+    restart: unless-stopped
+    environment:
+      EXPORTER_SOURCE: "jinko"
+      EXPORTER_LISTEN: ":9876"
+      EXPORTER_POLL_INTERVAL: "60s"
+
+      JINKO_DEVICE_ID: "100000001"
+      JINKO_SITE_ID: "200000001"
+      JINKO_BEARER_TOKEN: "<JWT>"
+
+      MQTT_ENABLED: "true"
+      MQTT_BROKER: "tcp://mosquitto:1883"
+      MQTT_USERNAME: "<MQTT_USER>"
+      MQTT_PASSWORD: "<MQTT_PASSWORD>"
+      MQTT_TOPIC_PREFIX: "jinko-exporter"
+      MQTT_DISCOVERY_PREFIX: "homeassistant"
+      MQTT_DEVICE_NAME: "Jinko Inverter"
+      MQTT_RETAIN: "true"
+
+    ports:
+      - "9876:9876"
+```
+
+If Home Assistant already has an MQTT broker, point `MQTT_BROKER` at that broker instead. For the full Home Assistant guide and topics, see [ha.md](./ha.md).
 
 ## Solarman OpenAPI
 

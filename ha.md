@@ -1,7 +1,12 @@
-# Home Assistant MQTT
+# Home Assistant Integration
 
-`jinko-exporter` can publish read-only Home Assistant MQTT Discovery messages.
+`jinko-exporter` has built-in Home Assistant integration through read-only MQTT Discovery.
 It does not create command topics and does not control the inverter.
+
+The integration has two parts:
+
+- built-in MQTT Discovery publishing from `jinko-exporter`
+- optional Lovelace cards in [`ha-jinko-flow-card/`](./ha-jinko-flow-card/README.md) for a Jinko-focused dashboard
 
 ## What Home Assistant gets
 
@@ -26,6 +31,8 @@ The exporter creates one Home Assistant device and adds entities for every numer
 - numeric alarm/fault values
 - binary problem sensors for overall alarm/fault state and each alarm/fault metric
 - diagnostic entities for source, serials, IDs, collection time, publish time, poll duration, metric count, and active alarm/fault count
+
+If you only want the entity integration, MQTT Discovery is enough. The custom Lovelace cards are optional and sit on top of the discovered entities.
 
 ## Home Assistant setup
 
@@ -55,6 +62,12 @@ The exporter creates one Home Assistant device and adds entities for every numer
 5. Start or restart `jinko-exporter`.
 
    After the first successful poll, Home Assistant should discover the device automatically.
+
+## Optional dashboard cards
+
+This repository also includes Home Assistant dashboard cards in [`ha-jinko-flow-card/`](./ha-jinko-flow-card/README.md).
+
+Use them if you want a ready-made Lovelace UI for the entities published by the exporter. They are not required for MQTT Discovery to work.
 
 ## Docker Compose example
 

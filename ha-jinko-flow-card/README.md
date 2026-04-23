@@ -1,6 +1,7 @@
 # Jinko Power Flow Card
 
 Large animated Home Assistant Lovelace card for a single Jinko ESS installation.
+It is an optional UI layer for the Home Assistant entities published by `jinko-exporter` over MQTT Discovery.
 
 This card is tailored to your topology:
 
