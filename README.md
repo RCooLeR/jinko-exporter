@@ -1,17 +1,30 @@
 # jinko-exporter
 
-`jinko-exporter` is a Prometheus exporter with pluggable data sources:
+<div align="center" style="text-align: center">
+    <img src="./assets/jinko.png" width="70%">
+</div>
+
+`jinko-exporter` is a solar telemetry exporter with pluggable data sources.
+It exposes Prometheus metrics on HTTP and can optionally publish the same data into Home Assistant over MQTT Discovery.
+
+Supported integrations:
+
+- Prometheus scraping for dashboards and alerting
+- Home Assistant MQTT Discovery for read-only entities, diagnostics, and alarm sensors
+
+Supported upstream sources:
 
 - `jinko`: private browser-backed Jinko detail API
 - `solarman`: Solarman OpenAPI
 - `modbus`: placeholder module until the local protocol/register map is confirmed
 
-The exporter polls upstream on a fixed interval, keeps the latest snapshot in memory, and exposes Prometheus metrics on HTTP.
+The exporter polls upstream on a fixed interval, keeps the latest snapshot in memory, and republishes it to the enabled integrations.
 
-
-<p align="center" style="text-align: center">
-    <img src="./img.png" width="70%">
-</p>
+## Screenshots
+<div align="center" style="text-align: center">
+    <img src="./assets/home-assistant.png" width="70%" style="margin-bottom: 20px">
+    <img src="./assets/grafana.png" width="70%">
+</div>
 
 ## Metrics
 
@@ -28,7 +41,7 @@ The exporter exposes:
 
 Set `EXPORTER_METRICS_DROP_SOURCE_LABEL=true` to remove the `source` label from generic metrics. `solar_last_source_sync_timestamp_seconds{source}` still keeps the source label so failover source changes remain visible.
 
-## Home Assistant MQTT
+## Home Assistant Integration
 
 Read-only Home Assistant MQTT Discovery is optional.
 
@@ -54,6 +67,8 @@ Useful optional config:
 - `--mqtt-insecure-skip-verify` / `MQTT_INSECURE_SKIP_VERIFY`
 
 See [ha.md](./ha.md) for Home Assistant setup, topics, Docker Compose examples, and troubleshooting.
+
+Optional custom Lovelace cards that consume the discovered entities live in [ha-jinko-flow-card](./ha-jinko-flow-card/README.md).
 
 ## Source priority
 
