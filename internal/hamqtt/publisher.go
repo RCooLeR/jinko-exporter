@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ type Publisher struct {
 	mu                sync.Mutex
 	discoveryPayloads map[string]string
 	discoveredMetrics map[string]metricEntity
+	discoveryShapeSig string
 }
 
 type metricEntity struct {
@@ -131,18 +133,22 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 	device := p.device(snapshot)
 	stateTopic := p.stateTopic(device.ID)
 
-	discoveryMessages, err := p.discoveryMessages(snapshot, device, stateTopic)
-	if err != nil {
-		return err
-	}
-	for _, msg := range discoveryMessages {
-		if p.discoveryPayloads[msg.topic] == msg.payload {
-			continue
-		}
-		if err := p.publishString(msg.topic, msg.payload, true); err != nil {
+	discoveryShapeSig := p.discoverySignature(snapshot, device, stateTopic)
+	if discoveryShapeSig != p.discoveryShapeSig {
+		discoveryMessages, err := p.discoveryMessages(snapshot, device, stateTopic)
+		if err != nil {
 			return err
 		}
-		p.discoveryPayloads[msg.topic] = msg.payload
+		for _, msg := range discoveryMessages {
+			if p.discoveryPayloads[msg.topic] == msg.payload {
+				continue
+			}
+			if err := p.publishString(msg.topic, msg.payload, true); err != nil {
+				return err
+			}
+			p.discoveryPayloads[msg.topic] = msg.payload
+		}
+		p.discoveryShapeSig = discoveryShapeSig
 	}
 
 	payload, err := json.Marshal(p.buildStatePayload(snapshot, duration))
@@ -200,7 +206,7 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 		return nil
 	}
 
-	for _, entity := range diagnosticSensorEntities() {
+	for _, entity := range diagnosticEntities {
 		payload := p.baseDiscoveryPayload(device, entity.Name, device.ID+"_"+entity.StateKey, stateTopic)
 		payload["value_template"] = entity.ValueTemplate
 		payload["entity_category"] = "diagnostic"
@@ -221,7 +227,12 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 		}
 	}
 
+	metaKeys := make([]string, 0, len(snapshot.Meta))
 	for key := range snapshot.Meta {
+		metaKeys = append(metaKeys, key)
+	}
+	sort.Strings(metaKeys)
+	for _, key := range metaKeys {
 		stateKey := sanitizeID(key)
 		if stateKey == "" {
 			continue
@@ -323,7 +334,11 @@ func (p *Publisher) baseDiscoveryPayload(device deviceInfo, name string, uniqueI
 }
 
 func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Duration) statePayload {
-	metricsByStateKey := make(map[string]float64, len(snapshot.Metrics))
+	metrics := make(map[string]*float64, len(p.discoveredMetrics)+len(snapshot.Metrics))
+	for stateKey := range p.discoveredMetrics {
+		metrics[stateKey] = nil
+	}
+
 	alertMetrics := make(map[string]float64)
 	alertCount := 0
 	for _, metric := range snapshot.Metrics {
@@ -331,23 +346,18 @@ func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Du
 		if stateKey == "" {
 			continue
 		}
-		metricsByStateKey[stateKey] = metric.Value
+		if !math.IsNaN(metric.Value) && !math.IsInf(metric.Value, 0) {
+			value := metric.Value
+			metrics[stateKey] = &value
+		} else if _, ok := metrics[stateKey]; !ok {
+			metrics[stateKey] = nil
+		}
 		if isAlertMetric(metric) {
 			alertMetrics[stateKey] = metric.Value
 			if metric.Value != 0 {
 				alertCount++
 			}
 		}
-	}
-
-	metrics := make(map[string]*float64, len(p.discoveredMetrics))
-	for stateKey := range p.discoveredMetrics {
-		if value, ok := metricsByStateKey[stateKey]; ok && !math.IsNaN(value) && !math.IsInf(value, 0) {
-			v := value
-			metrics[stateKey] = &v
-			continue
-		}
-		metrics[stateKey] = nil
 	}
 
 	return statePayload{
@@ -412,6 +422,41 @@ func (p *Publisher) wait(token mqtt.Token) error {
 	return token.Error()
 }
 
+func (p *Publisher) discoverySignature(snapshot *model.Snapshot, device deviceInfo, stateTopic string) string {
+	var b strings.Builder
+	b.Grow(len(snapshot.Metrics)*32 + len(snapshot.Meta)*16 + len(device.ID) + len(stateTopic) + 64)
+	b.WriteString(device.ID)
+	b.WriteByte('|')
+	b.WriteString(device.Identifier)
+	b.WriteByte('|')
+	b.WriteString(stateTopic)
+	b.WriteByte('|')
+	for _, metric := range snapshot.Metrics {
+		stateKey := metricStateKey(metric)
+		if stateKey == "" {
+			continue
+		}
+		b.WriteString(stateKey)
+		b.WriteByte('=')
+		b.WriteString(metric.Name)
+		b.WriteByte('=')
+		b.WriteString(metric.Unit)
+		b.WriteByte('=')
+		b.WriteString(metric.Group)
+		b.WriteByte('|')
+	}
+	for key := range snapshot.Meta {
+		stateKey := sanitizeID(key)
+		if stateKey == "" {
+			continue
+		}
+		b.WriteString("meta:")
+		b.WriteString(stateKey)
+		b.WriteByte('|')
+	}
+	return b.String()
+}
+
 type diagnosticEntity struct {
 	StateKey      string
 	Name          string
@@ -422,19 +467,17 @@ type diagnosticEntity struct {
 	Icon          string
 }
 
-func diagnosticSensorEntities() []diagnosticEntity {
-	return []diagnosticEntity{
-		{StateKey: "source", Name: "Data Source", ValueTemplate: "{{ value_json.source }}", Icon: "mdi:database-import"},
-		{StateKey: "device_sn", Name: "Device Serial", ValueTemplate: "{{ value_json.device_sn }}", Icon: "mdi:identifier"},
-		{StateKey: "parent_sn", Name: "Parent Serial", ValueTemplate: "{{ value_json.parent_sn }}", Icon: "mdi:identifier"},
-		{StateKey: "device_id", Name: "Device ID", ValueTemplate: "{{ value_json.device_id }}", Icon: "mdi:identifier"},
-		{StateKey: "site_id", Name: "Site ID", ValueTemplate: "{{ value_json.site_id }}", Icon: "mdi:home-lightning-bolt"},
-		{StateKey: "collected_at", Name: "Collected At", ValueTemplate: "{{ value_json.collected_at }}", DeviceClass: "timestamp"},
-		{StateKey: "published_at", Name: "Published At", ValueTemplate: "{{ value_json.published_at }}", DeviceClass: "timestamp"},
-		{StateKey: "poll_duration", Name: "Poll Duration", ValueTemplate: "{{ value_json.poll_duration_seconds }}", DeviceClass: "duration", StateClass: "measurement", Unit: "s"},
-		{StateKey: "metric_count", Name: "Metric Count", ValueTemplate: "{{ value_json.metric_count }}", StateClass: "measurement", Icon: "mdi:counter"},
-		{StateKey: "alert_count", Name: "Active Alarm Or Fault Count", ValueTemplate: "{{ value_json.alert_count }}", StateClass: "measurement", Icon: "mdi:alert-circle"},
-	}
+var diagnosticEntities = []diagnosticEntity{
+	{StateKey: "source", Name: "Data Source", ValueTemplate: "{{ value_json.source }}", Icon: "mdi:database-import"},
+	{StateKey: "device_sn", Name: "Device Serial", ValueTemplate: "{{ value_json.device_sn }}", Icon: "mdi:identifier"},
+	{StateKey: "parent_sn", Name: "Parent Serial", ValueTemplate: "{{ value_json.parent_sn }}", Icon: "mdi:identifier"},
+	{StateKey: "device_id", Name: "Device ID", ValueTemplate: "{{ value_json.device_id }}", Icon: "mdi:identifier"},
+	{StateKey: "site_id", Name: "Site ID", ValueTemplate: "{{ value_json.site_id }}", Icon: "mdi:home-lightning-bolt"},
+	{StateKey: "collected_at", Name: "Collected At", ValueTemplate: "{{ value_json.collected_at }}", DeviceClass: "timestamp"},
+	{StateKey: "published_at", Name: "Published At", ValueTemplate: "{{ value_json.published_at }}", DeviceClass: "timestamp"},
+	{StateKey: "poll_duration", Name: "Poll Duration", ValueTemplate: "{{ value_json.poll_duration_seconds }}", DeviceClass: "duration", StateClass: "measurement", Unit: "s"},
+	{StateKey: "metric_count", Name: "Metric Count", ValueTemplate: "{{ value_json.metric_count }}", StateClass: "measurement", Icon: "mdi:counter"},
+	{StateKey: "alert_count", Name: "Active Alarm Or Fault Count", ValueTemplate: "{{ value_json.alert_count }}", StateClass: "measurement", Icon: "mdi:alert-circle"},
 }
 
 type metricMeta struct {

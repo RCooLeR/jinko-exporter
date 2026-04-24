@@ -6,7 +6,7 @@ It does not create command topics and does not control the inverter.
 The integration has two parts:
 
 - built-in MQTT Discovery publishing from `jinko-exporter`
-- optional Lovelace cards in [`ha-jinko-flow-card/`](./ha-jinko-flow-card/README.md) for a Jinko-focused dashboard
+- optional Lovelace cards in [`ha-jinko-flow-card/`](old-ha-cards/README.md) for a Jinko-focused dashboard
 
 ## What Home Assistant gets
 
@@ -65,7 +65,10 @@ If you only want the entity integration, MQTT Discovery is enough. The custom Lo
 
 ## Optional dashboard cards
 
-This repository also includes Home Assistant dashboard cards in [`ha-jinko-flow-card/`](./ha-jinko-flow-card/README.md).
+This repository includes two card sets:
+
+- current TypeScript cards in [`ha-cards/`](ha-cards/README.md)
+- archived plain JavaScript cards in [`old-ha-cards/`](old-ha-cards/README.md)
 
 Use them if you want a ready-made Lovelace UI for the entities published by the exporter. They are not required for MQTT Discovery to work.
 

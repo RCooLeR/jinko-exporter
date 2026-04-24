@@ -1,9 +1,0 @@
-title: Power Flow
-path: power-flow
-panel: true
-cards:
-  - type: custom:jinko-power-flow-card
-    title: Jinko ESS Power Flow
-    battery_capacity_kwh: 21.31
-    battery_negative_is_charging: true
-    show_entity_map: false

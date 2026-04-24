@@ -22,7 +22,7 @@ The exporter polls upstream on a fixed interval, keeps the latest snapshot in me
 
 ## Screenshots
 <div align="center" style="text-align: center">
-    <img src="./assets/home-assistant.png" width="70%" style="margin-bottom: 20px">
+    <img src="assets/home-assistant-old.png" width="70%" style="margin-bottom: 20px">
     <img src="./assets/grafana.png" width="70%">
 </div>
 
@@ -68,7 +68,7 @@ Useful optional config:
 
 See [ha.md](./ha.md) for Home Assistant setup, topics, Docker Compose examples, and troubleshooting.
 
-Optional custom Lovelace cards that consume the discovered entities live in [ha-jinko-flow-card](./ha-jinko-flow-card/README.md).
+Optional custom Lovelace cards that consume the discovered entities live in [ha-jinko-flow-card](old-ha-cards/README.md).
 
 ## Source priority
 

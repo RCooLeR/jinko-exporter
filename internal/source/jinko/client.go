@@ -25,9 +25,14 @@ import (
 var _ source.Source = (*Client)(nil)
 
 type Client struct {
-	cfg    config.JinkoConfig
-	hc     *http.Client
-	alerts *alert.Manager
+	cfg               config.JinkoConfig
+	hc                *http.Client
+	alerts            *alert.Manager
+	requestBody       []byte
+	deviceID          string
+	siteID            string
+	bearerTokenExp    time.Time
+	hasBearerTokenExp bool
 }
 
 func New(cfg config.JinkoConfig, alerts *alert.Manager) *Client {
@@ -36,6 +41,18 @@ func New(cfg config.JinkoConfig, alerts *alert.Manager) *Client {
 		token = token[7:]
 	}
 	cfg.BearerToken = strings.TrimSpace(token)
+	requestBody, _ := json.Marshal(struct {
+		DeviceID             int64  `json:"deviceId"`
+		Language             string `json:"language"`
+		NeedRealtimeDataFlag bool   `json:"needRealTimeDataFlag"`
+		SiteID               int64  `json:"siteId"`
+	}{
+		DeviceID:             cfg.DeviceID,
+		Language:             cfg.Language,
+		NeedRealtimeDataFlag: cfg.NeedRealtimeData,
+		SiteID:               cfg.SiteID,
+	})
+	bearerTokenExp, hasBearerTokenExp := bearerExpiry(cfg.BearerToken)
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if cfg.InsecureSkipVerify {
@@ -48,7 +65,12 @@ func New(cfg config.JinkoConfig, alerts *alert.Manager) *Client {
 			Timeout:   cfg.Timeout,
 			Transport: transport,
 		},
-		alerts: alerts,
+		alerts:            alerts,
+		requestBody:       requestBody,
+		deviceID:          fmt.Sprintf("%d", cfg.DeviceID),
+		siteID:            fmt.Sprintf("%d", cfg.SiteID),
+		bearerTokenExp:    bearerTokenExp,
+		hasBearerTokenExp: hasBearerTokenExp,
 	}
 }
 
@@ -72,15 +94,9 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		}
 	}
 
-	body := map[string]any{
-		"deviceId":             c.cfg.DeviceID,
-		"language":             c.cfg.Language,
-		"needRealTimeDataFlag": c.cfg.NeedRealtimeData,
-		"siteId":               c.cfg.SiteID,
-	}
-	reqBody, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
+	reqBody := c.requestBody
+	if len(reqBody) == 0 {
+		return nil, fmt.Errorf("jinko request body is empty")
 	}
 
 	raw, status, err := c.doDetailRequestWithRetry(ctx, reqBody)
@@ -102,8 +118,8 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, err
 	}
 	snapshot.Source = c.Name()
-	snapshot.DeviceID = fmt.Sprintf("%d", c.cfg.DeviceID)
-	snapshot.SiteID = fmt.Sprintf("%d", c.cfg.SiteID)
+	snapshot.DeviceID = c.deviceID
+	snapshot.SiteID = c.siteID
 	return snapshot, nil
 }
 
@@ -168,8 +184,8 @@ func (c *Client) doDetailRequest(ctx context.Context, reqBody []byte, attempt, a
 		Int("max_attempts", attempts).
 		Int64("device_id", c.cfg.DeviceID).
 		Int64("site_id", c.cfg.SiteID)
-	if exp, ok := bearerExpiry(c.cfg.BearerToken); ok {
-		fields = fields.Time("token_expires_at", exp)
+	if c.hasBearerTokenExp {
+		fields = fields.Time("token_expires_at", c.bearerTokenExp)
 	}
 	fields.Bytes("request_body", reqBody).Msg("sending API request")
 
@@ -291,10 +307,10 @@ func (c *Client) checkBearerToken(ctx context.Context) {
 		return
 	}
 
-	expiry, ok := bearerExpiry(c.cfg.BearerToken)
-	if !ok {
+	if !c.hasBearerTokenExp {
 		return
 	}
+	expiry := c.bearerTokenExp
 
 	now := time.Now()
 	if !expiry.After(now) {
