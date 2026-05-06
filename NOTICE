@@ -1,0 +1,5 @@
+JinkoBridge is an unofficial DIY open-source project for compatibility, monitoring, and integration. It is not affiliated with, endorsed by, sponsored by, or supported by Jinko Solar, Solarman, Deye, or any related vendor.
+
+Jinko, Jinko Solar, Solarman, Deye, Home Assistant, Prometheus, Docker, and related product names, service names, logos, and trademarks are the property of their respective owners. Names are referenced only to describe compatibility, configuration, and integration behavior.
+
+This project is read-only and does not control inverter operation. Data exposed by this project may be delayed, incomplete, renamed by upstream services, or unavailable. Use official vendor applications and certified equipment for safety-critical, warranty, regulatory, billing, or operational decisions.

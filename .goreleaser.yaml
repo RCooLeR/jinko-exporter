@@ -6,11 +6,12 @@ project_name: jinko-exporter
 
 before:
   hooks:
-    - go mod download
+    - go -C bridge mod download
 
 builds:
   - id: jinko-exporter
     main: .
+    dir: bridge
     binary: jinko-exporter
     env:
       - CGO_ENABLED=0
@@ -32,8 +33,11 @@ archives:
       - tar.gz
     files:
       - README.md
-      - docker-compose.md
-      - ha.md
+      - LICENSE
+      - NOTICE
+      - bridge/docs/*.md
+      - ha-cards/README.md
+      - ha-cards/docs/*.md
 
 checksum:
   name_template: checksums.txt
@@ -42,7 +46,7 @@ dockers_v2:
   - id: dockerhub
     ids:
       - jinko-exporter
-    dockerfile: Dockerfile.goreleaser
+    dockerfile: bridge/Dockerfile.goreleaser
     images:
       - rcooler/jinko_exporter
     tags:
