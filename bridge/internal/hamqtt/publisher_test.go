@@ -120,6 +120,40 @@ func TestStartDoesNotFailWithoutBroker(t *testing.T) {
 	}
 }
 
+func TestPollCallbacksDoNotFailWithoutBroker(t *testing.T) {
+	publisher, err := NewPublisher(config.MQTTConfig{
+		Broker:          "tcp://127.0.0.1:1",
+		ClientID:        "test-no-broker-callbacks",
+		TopicPrefix:     "jinko-exporter",
+		DiscoveryPrefix: "homeassistant",
+		Retain:          true,
+		Timeout:         100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher() error = %v", err)
+	}
+	defer publisher.Close()
+
+	if err := publisher.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	snapshot := &model.Snapshot{
+		Source:      "jinko",
+		DeviceSN:    "ABC123",
+		CollectedAt: time.Now().UTC(),
+		Metrics: []model.Metric{
+			{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 1840},
+		},
+	}
+	if err := publisher.OnPollSuccess(snapshot, time.Millisecond); err != nil {
+		t.Fatalf("OnPollSuccess() error = %v", err)
+	}
+	if err := publisher.OnPollFailure("jinko", errClientNotConnected, time.Millisecond, 1); err != nil {
+		t.Fatalf("OnPollFailure() error = %v", err)
+	}
+}
+
 func decodeDiscovery(t *testing.T, messages []discoveryMessage, topic string) map[string]any {
 	t.Helper()
 	for _, msg := range messages {

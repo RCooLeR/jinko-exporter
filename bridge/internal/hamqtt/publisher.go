@@ -3,6 +3,7 @@ package hamqtt
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -21,6 +22,8 @@ const (
 	availabilityOffline  = "offline"
 	connectRetryInterval = 5 * time.Second
 )
+
+var errClientNotConnected = errors.New("MQTT client is not connected")
 
 type Publisher struct {
 	cfg               config.MQTTConfig
@@ -113,7 +116,15 @@ func NewPublisher(cfg config.MQTTConfig) (*Publisher, error) {
 }
 
 func (p *Publisher) Start() error {
-	p.client.Connect()
+	go func() {
+		if err := p.wait(p.client.Connect()); err != nil {
+			log.Warn().
+				Err(err).
+				Str("broker", p.cfg.Broker).
+				Dur("retry_interval", connectRetryInterval).
+				Msg("MQTT broker unavailable; publisher will retry in background")
+		}
+	}()
 	log.Info().
 		Str("broker", p.cfg.Broker).
 		Str("topic_prefix", p.topicPrefix).
@@ -156,7 +167,8 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 				continue
 			}
 			if err := p.publishString(msg.topic, msg.payload, true); err != nil {
-				return err
+				p.logPublishSkipped(err, msg.topic)
+				return nil
 			}
 			p.discoveryPayloads[msg.topic] = msg.payload
 		}
@@ -168,10 +180,12 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 		return fmt.Errorf("encode MQTT state payload: %w", err)
 	}
 	if err := p.publishBytes(stateTopic, payload, p.cfg.Retain); err != nil {
-		return err
+		p.logPublishSkipped(err, stateTopic)
+		return nil
 	}
 	if err := p.publishString(p.availabilityTopic, availabilityOnline, p.cfg.Retain); err != nil {
-		return err
+		p.logPublishSkipped(err, p.availabilityTopic)
+		return nil
 	}
 
 	log.Debug().
@@ -189,7 +203,10 @@ func (p *Publisher) OnPollFailure(sourceName string, err error, duration time.Du
 		Dur("duration", duration).
 		Uint64("error_count", errorCount).
 		Msg("marking MQTT entities unavailable after poll failure")
-	return p.publishString(p.availabilityTopic, availabilityOffline, p.cfg.Retain)
+	if err := p.publishString(p.availabilityTopic, availabilityOffline, p.cfg.Retain); err != nil {
+		p.logPublishSkipped(err, p.availabilityTopic)
+	}
+	return nil
 }
 
 type deviceInfo struct {
@@ -419,12 +436,24 @@ func (p *Publisher) publishString(topic string, payload string, retain bool) err
 
 func (p *Publisher) publishBytes(topic string, payload []byte, retain bool) error {
 	if !p.client.IsConnectionOpen() {
-		return fmt.Errorf("MQTT client is not connected")
+		return errClientNotConnected
 	}
 	if err := p.wait(p.client.Publish(topic, p.cfg.QOS, retain, payload)); err != nil {
 		return fmt.Errorf("publish MQTT topic %s: %w", topic, err)
 	}
 	return nil
+}
+
+func (p *Publisher) logPublishSkipped(err error, topic string) {
+	event := log.Warn()
+	if errors.Is(err, errClientNotConnected) {
+		event = log.Debug()
+	}
+	event.
+		Err(err).
+		Str("broker", p.cfg.Broker).
+		Str("topic", topic).
+		Msg("skipping MQTT publish")
 }
 
 func (p *Publisher) wait(token mqtt.Token) error {
