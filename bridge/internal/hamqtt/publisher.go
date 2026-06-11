@@ -169,6 +169,8 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 		p.cachedDiscoverySig = discoveryShapeSig
 	}
 
+	// Cache state before publishing so a reconnect can replay the latest poll even
+	// when the broker was unavailable during the original publish attempt.
 	payload, err := json.Marshal(p.buildStatePayload(snapshot, duration))
 	if err != nil {
 		return fmt.Errorf("encode MQTT state payload: %w", err)
@@ -229,6 +231,8 @@ func (p *Publisher) onConnect(_ mqtt.Client) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Home Assistant may miss retained discovery/state writes during broker
+	// restarts, so replay the cached shape and state on every reconnect.
 	for _, msg := range p.cachedDiscovery {
 		if err := p.publishString(msg.topic, msg.payload, true); err != nil {
 			log.Warn().Err(err).Str("broker", p.cfg.Broker).Str("topic", msg.topic).Msg("failed to republish MQTT discovery after connect")
@@ -251,6 +255,8 @@ func (p *Publisher) onConnect(_ mqtt.Client) {
 	if availability == "" {
 		availability = availabilityOffline
 	}
+	// Preserve offline after a failed poll; reconnect alone must not make stale
+	// values look healthy.
 	if err := p.publishString(p.availabilityTopic, availability, p.cfg.Retain); err != nil {
 		log.Warn().Err(err).Str("broker", p.cfg.Broker).Msg("failed to publish MQTT availability after connect")
 		return

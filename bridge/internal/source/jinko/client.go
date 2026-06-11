@@ -315,6 +315,8 @@ func sleepBeforeRetry(ctx context.Context, delay time.Duration) error {
 }
 
 func readResponseBody(body io.Reader) ([]byte, error) {
+	// Read one byte past the cap so callers can report oversize responses
+	// without buffering an unbounded upstream body.
 	raw, err := io.ReadAll(io.LimitReader(body, maxHTTPResponseBodyBytes+1))
 	if err != nil {
 		return nil, err

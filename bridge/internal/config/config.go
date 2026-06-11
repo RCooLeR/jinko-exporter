@@ -500,6 +500,8 @@ func secretValue(c *cli.Context, valueName string, fileName string) (string, err
 		return value, nil
 	}
 
+	// Secret files are read once at startup; direct values intentionally win so
+	// operators can override a mounted secret without changing the file.
 	path := strings.TrimSpace(c.String(fileName))
 	if path == "" {
 		return "", nil

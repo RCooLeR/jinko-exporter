@@ -92,6 +92,8 @@ func (r *Runner) runNoSuccessfulPollMonitor(ctx context.Context) {
 
 	interval := noSuccessfulPollMonitorInterval(r.alertCfg.NoSuccessfulPollWindow)
 	go func() {
+		// This monitor is intentionally outside the poll loop so it still fires
+		// when a source Fetch call hangs and no normal failure path can run.
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
