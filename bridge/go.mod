@@ -2,7 +2,7 @@ module github.com/RCooLeR/jinko-exporter/bridge
 
 go 1.26.0
 
-toolchain go1.26.1
+toolchain go1.26.4
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1

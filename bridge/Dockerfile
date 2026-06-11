@@ -1,5 +1,5 @@
 # --- Stage 1: Build the Go binary ---
-FROM golang:1.26.2-alpine AS builder
+FROM golang:1.26.4-alpine AS builder
 
 # Install git and CA certs (if needed for Go modules)
 RUN apk add --no-cache git ca-certificates
