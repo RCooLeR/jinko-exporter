@@ -27,6 +27,7 @@ import (
 var _ source.Source = (*Client)(nil)
 
 const yearlyRequestWindow = 365 * 24 * time.Hour
+const maxHTTPResponseBodyBytes = 2 * 1024 * 1024
 
 type Client struct {
 	cfg    config.SolarmanConfig
@@ -359,7 +360,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, withAppLang bo
 		Str("method", method).
 		Str("url", u).
 		Bool("with_auth", withAuth).
-		Bytes("request_body", payload).
+		Int("request_bytes", len(payload)).
 		Msg("sending API request")
 
 	start := time.Now()
@@ -370,7 +371,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, withAppLang bo
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readResponseBody(resp.Body)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -505,6 +506,17 @@ func (c *Client) buildURL(path string, withAppLang bool) (string, error) {
 		u.RawQuery = query.Encode()
 	}
 	return u.String(), nil
+}
+
+func readResponseBody(body io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxHTTPResponseBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxHTTPResponseBodyBytes {
+		return raw[:maxHTTPResponseBodyBytes], fmt.Errorf("response body exceeds %d bytes", maxHTTPResponseBodyBytes)
+	}
+	return raw, nil
 }
 
 func classifyGroup(key string, name string) string {

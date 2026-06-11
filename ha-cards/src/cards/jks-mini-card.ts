@@ -175,7 +175,13 @@ class JksMiniCard extends HTMLElement {
       this._attemptedEntityKeys.clear();
     }
 
-    const keys = force ? ENTITY_KEYS : ENTITY_KEYS.filter((key) => !this._attemptedEntityKeys.has(key));
+    const keys = force
+      ? ENTITY_KEYS
+      : ENTITY_KEYS.filter((key) => {
+          if (!this._attemptedEntityKeys.has(key)) return true;
+          const entityId = this._resolved[key];
+          return !entityId || !this._hass?.states[entityId];
+        });
     if (!keys.length) return;
 
     this._resolved = {

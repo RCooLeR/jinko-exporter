@@ -244,6 +244,7 @@ Behavior:
 - On poll failure, the bridge publishes `offline`.
 - On clean shutdown, the bridge publishes `offline`.
 - The MQTT will message also uses `offline`.
+- On broker reconnect, the bridge republishes the latest retained discovery messages and state payload, then republishes the last known availability value. If the last poll failed, reconnect keeps availability `offline` until a later successful poll.
 
 If a source temporarily fails, Home Assistant marks the device entities unavailable until a later successful poll publishes `online` again.
 

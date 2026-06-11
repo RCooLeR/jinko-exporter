@@ -33,11 +33,7 @@ func Run(args []string) int {
 		Usage: "Poll solar data from Jinko detail API, Solarman OpenAPI, or a future Modbus source and expose Prometheus metrics",
 		Flags: config.Flags(),
 		Before: func(ctx *cli.Context) error {
-			cfg, err := config.FromCLI(ctx)
-			if err != nil {
-				return err
-			}
-			setupLogger(cfg.LogLevel)
+			setupLogger(ctx.String("log-level"))
 			return nil
 		},
 		Commands: []*cli.Command{
@@ -61,6 +57,17 @@ func Run(args []string) int {
 						return err
 					}
 					return runFetch(ctx.Context, cfg)
+				},
+			},
+			{
+				Name:  "healthcheck",
+				Usage: "Check the exporter HTTP health endpoint",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "url", Value: "http://127.0.0.1:9876/healthz", Usage: "Health endpoint URL", EnvVars: []string{"EXPORTER_HEALTHCHECK_URL"}},
+					&cli.DurationFlag{Name: "timeout", Value: 5 * time.Second, Usage: "Healthcheck timeout", EnvVars: []string{"EXPORTER_HEALTHCHECK_TIMEOUT"}},
+				},
+				Action: func(ctx *cli.Context) error {
+					return runHealthcheck(ctx.Context, ctx.String("url"), ctx.Duration("timeout"))
 				},
 			},
 		},
@@ -196,6 +203,30 @@ func runFetch(ctx context.Context, cfg config.Config) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(snapshot)
+}
+
+func runHealthcheck(parent context.Context, endpoint string, timeout time.Duration) error {
+	if timeout <= 0 {
+		return fmt.Errorf("healthcheck timeout must be > 0")
+	}
+
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("healthcheck failed: status=%d", resp.StatusCode)
+	}
+	return nil
 }
 
 func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error) {

@@ -11,13 +11,18 @@ import (
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/model"
 )
 
+const (
+	batterySOCRecoveryHysteresis  = 5.0
+	temperatureRecoveryHysteresis = 5.0
+)
+
 func EvaluateSnapshot(ctx context.Context, manager *Manager, cfg config.AlertConfig, snapshot *model.Snapshot) {
 	if manager == nil || snapshot == nil {
 		return
 	}
 
 	index := indexMetrics(snapshot.Metrics)
-	evaluateAlarmMetrics(ctx, manager, snapshot)
+	evaluateAlarmMetrics(ctx, manager, cfg, snapshot)
 	evaluateGridDown(ctx, manager, cfg, snapshot, index)
 	evaluateBatterySOC(ctx, manager, cfg, snapshot, index)
 	evaluateHighTemperature(ctx, manager, cfg, snapshot, index)
@@ -55,17 +60,32 @@ func EvaluateNoSuccessfulPoll(ctx context.Context, manager *Manager, cfg config.
 	})
 }
 
-func evaluateAlarmMetrics(ctx context.Context, manager *Manager, snapshot *model.Snapshot) {
+func evaluateAlarmMetrics(ctx context.Context, manager *Manager, cfg config.AlertConfig, snapshot *model.Snapshot) {
 	var triggered []model.Metric
+	foundAlertMetric := false
 	for _, metric := range snapshot.Metrics {
 		text := strings.ToLower(metric.Group + " " + metric.Key + " " + metric.Name)
 		if strings.Contains(text, "alarm") || strings.Contains(text, "fault") || metric.Group == "alert" {
+			foundAlertMetric = true
 			if metric.Value != 0 {
 				triggered = append(triggered, metric)
 			}
 		}
 	}
 	if len(triggered) == 0 {
+		if foundAlertMetric {
+			activeKey := "metric_alarm_" + alertIdentity(snapshot)
+			manager.Resolve(ctx, activeKey, Event{
+				Key:     activeKey + "_recovered",
+				Subject: fmt.Sprintf("Inverter alarm metrics recovered for %s", alertIdentity(snapshot)),
+				Body: fmt.Sprintf(
+					"All available inverter alarm and fault metrics have returned to zero.\n\nSource: %s\nDevice: %s\nCollected At: %s",
+					snapshot.Source,
+					alertIdentity(snapshot),
+					snapshot.CollectedAt.Format("2006-01-02T15:04:05Z07:00"),
+				),
+			}, cfg.NotifyRecovery)
+		}
 		return
 	}
 
@@ -75,8 +95,9 @@ func evaluateAlarmMetrics(ctx context.Context, manager *Manager, snapshot *model
 		lines = append(lines, formatMetricLine(metric))
 	}
 
-	manager.Notify(ctx, Event{
-		Key:     "metric_alarm_" + alertIdentity(snapshot),
+	activeKey := "metric_alarm_" + alertIdentity(snapshot)
+	manager.NotifyActive(ctx, Event{
+		Key:     activeKey,
 		Subject: fmt.Sprintf("Inverter alarm metrics active for %s", alertIdentity(snapshot)),
 		Body: fmt.Sprintf(
 			"One or more inverter alarm or fault metrics are non-zero.\n\nSource: %s\nDevice: %s\nCollected At: %s\n\nTriggered Metrics:\n%s",
@@ -105,8 +126,21 @@ func evaluateGridDown(ctx context.Context, manager *Manager, cfg config.AlertCon
 		return
 	}
 
+	activeKey := "grid_down_" + alertIdentity(snapshot)
 	for _, metric := range present {
 		if metric.Value > threshold {
+			manager.Resolve(ctx, activeKey, Event{
+				Key:     activeKey + "_recovered",
+				Subject: fmt.Sprintf("Grid restored for %s", alertIdentity(snapshot)),
+				Body: fmt.Sprintf(
+					"At least one available grid voltage metric is above the configured grid-down threshold.\n\nSource: %s\nDevice: %s\nCollected At: %s\nThreshold: %.2f V\nMetric: %s",
+					snapshot.Source,
+					alertIdentity(snapshot),
+					snapshot.CollectedAt.Format("2006-01-02T15:04:05Z07:00"),
+					threshold,
+					formatMetricLine(metric),
+				),
+			}, cfg.NotifyRecovery)
 			return
 		}
 	}
@@ -116,8 +150,8 @@ func evaluateGridDown(ctx context.Context, manager *Manager, cfg config.AlertCon
 		lines = append(lines, formatMetricLine(metric))
 	}
 
-	manager.Notify(ctx, Event{
-		Key:     "grid_down_" + alertIdentity(snapshot),
+	manager.NotifyActive(ctx, Event{
+		Key:     activeKey,
 		Subject: fmt.Sprintf("Grid down detected for %s", alertIdentity(snapshot)),
 		Body: fmt.Sprintf(
 			"All available grid voltage metrics are at or below the configured threshold.\n\nSource: %s\nDevice: %s\nCollected At: %s\nThreshold: %.2f V\n\nGrid Voltages:\n%s",
@@ -136,14 +170,20 @@ func evaluateBatterySOC(ctx context.Context, manager *Manager, cfg config.AlertC
 		return
 	}
 
+	activeKey := "battery_soc_low_" + alertIdentity(snapshot)
+	var present []model.Metric
 	for _, key := range []string{"BMS_SOC", "B_left_cap1"} {
 		metric, ok := index[key]
-		if !ok || metric.Value > threshold {
+		if !ok {
+			continue
+		}
+		present = append(present, metric)
+		if metric.Value > threshold {
 			continue
 		}
 
-		manager.Notify(ctx, Event{
-			Key:     "battery_soc_low_" + alertIdentity(snapshot),
+		manager.NotifyActive(ctx, Event{
+			Key:     activeKey,
 			Subject: fmt.Sprintf("Battery SOC low for %s", alertIdentity(snapshot)),
 			Body: fmt.Sprintf(
 				"Battery state of charge is at or below the configured threshold.\n\nSource: %s\nDevice: %s\nCollected At: %s\nThreshold: %.2f %%\nMetric: %s",
@@ -156,6 +196,29 @@ func evaluateBatterySOC(ctx context.Context, manager *Manager, cfg config.AlertC
 		})
 		return
 	}
+
+	if len(present) == 0 {
+		return
+	}
+	recoveryThreshold := threshold + batterySOCRecoveryHysteresis
+	for _, metric := range present {
+		if metric.Value < recoveryThreshold {
+			return
+		}
+	}
+	manager.Resolve(ctx, activeKey, Event{
+		Key:     activeKey + "_recovered",
+		Subject: fmt.Sprintf("Battery SOC recovered for %s", alertIdentity(snapshot)),
+		Body: fmt.Sprintf(
+			"Battery state of charge recovered above the configured threshold plus hysteresis.\n\nSource: %s\nDevice: %s\nCollected At: %s\nAlert Threshold: %.2f %%\nRecovery Threshold: %.2f %%\nMetrics:\n%s",
+			snapshot.Source,
+			alertIdentity(snapshot),
+			snapshot.CollectedAt.Format("2006-01-02T15:04:05Z07:00"),
+			threshold,
+			recoveryThreshold,
+			formatMetricLines(present),
+		),
+	}, cfg.NotifyRecovery)
 }
 
 func evaluateHighTemperature(ctx context.Context, manager *Manager, cfg config.AlertConfig, snapshot *model.Snapshot, index map[string]model.Metric) {
@@ -166,13 +229,41 @@ func evaluateHighTemperature(ctx context.Context, manager *Manager, cfg config.A
 
 	keys := []string{"AC_T", "T_DC", "B_T1", "BMST"}
 	var triggered []model.Metric
+	var present []model.Metric
 	for _, key := range keys {
 		metric, ok := index[key]
-		if ok && metric.Value >= threshold {
+		if !ok {
+			continue
+		}
+		present = append(present, metric)
+		if metric.Value >= threshold {
 			triggered = append(triggered, metric)
 		}
 	}
+	activeKey := "high_temperature_" + alertIdentity(snapshot)
 	if len(triggered) == 0 {
+		if len(present) == 0 {
+			return
+		}
+		recoveryThreshold := threshold - temperatureRecoveryHysteresis
+		for _, metric := range present {
+			if metric.Value > recoveryThreshold {
+				return
+			}
+		}
+		manager.Resolve(ctx, activeKey, Event{
+			Key:     activeKey + "_recovered",
+			Subject: fmt.Sprintf("Temperature recovered for %s", alertIdentity(snapshot)),
+			Body: fmt.Sprintf(
+				"All available temperature metrics recovered below the configured threshold minus hysteresis.\n\nSource: %s\nDevice: %s\nCollected At: %s\nAlert Threshold: %.2f C\nRecovery Threshold: %.2f C\nMetrics:\n%s",
+				snapshot.Source,
+				alertIdentity(snapshot),
+				snapshot.CollectedAt.Format("2006-01-02T15:04:05Z07:00"),
+				threshold,
+				recoveryThreshold,
+				formatMetricLines(present),
+			),
+		}, cfg.NotifyRecovery)
 		return
 	}
 
@@ -181,8 +272,8 @@ func evaluateHighTemperature(ctx context.Context, manager *Manager, cfg config.A
 		lines = append(lines, formatMetricLine(metric))
 	}
 
-	manager.Notify(ctx, Event{
-		Key:     "high_temperature_" + alertIdentity(snapshot),
+	manager.NotifyActive(ctx, Event{
+		Key:     activeKey,
 		Subject: fmt.Sprintf("High temperature detected for %s", alertIdentity(snapshot)),
 		Body: fmt.Sprintf(
 			"One or more temperature metrics are at or above the configured threshold.\n\nSource: %s\nDevice: %s\nCollected At: %s\nThreshold: %.2f C\n\nTriggered Metrics:\n%s",
@@ -218,6 +309,14 @@ func formatMetricLine(metric model.Metric) string {
 		return fmt.Sprintf("- %s (%s): %.2f", metric.Name, metric.Key, metric.Value)
 	}
 	return fmt.Sprintf("- %s (%s): %.2f %s", metric.Name, metric.Key, metric.Value, metric.Unit)
+}
+
+func formatMetricLines(metrics []model.Metric) string {
+	lines := make([]string, 0, len(metrics))
+	for _, metric := range metrics {
+		lines = append(lines, formatMetricLine(metric))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func fallbackText(value string, fallback string) string {

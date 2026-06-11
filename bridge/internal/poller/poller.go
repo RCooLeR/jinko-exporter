@@ -2,6 +2,7 @@ package poller
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -68,6 +69,7 @@ func NewRunner(src source.Source, interval time.Duration, state *State, alerts *
 }
 
 func (r *Runner) Run(ctx context.Context) {
+	r.runNoSuccessfulPollMonitor(ctx)
 	r.pollOnce(ctx)
 
 	ticker := time.NewTicker(r.interval)
@@ -83,34 +85,50 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 }
 
+func (r *Runner) runNoSuccessfulPollMonitor(ctx context.Context) {
+	if r.alerts == nil || r.alertCfg.NoSuccessfulPollWindow <= 0 {
+		return
+	}
+
+	interval := noSuccessfulPollMonitorInterval(r.alertCfg.NoSuccessfulPollWindow)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, _, lastError, lastSuccessAt, _, _ := r.state.Snapshot()
+				alert.EvaluateNoSuccessfulPoll(ctx, r.alerts, r.alertCfg, r.src.Name(), r.startedAt, lastSuccessAt, lastError)
+			}
+		}
+	}()
+}
+
+func noSuccessfulPollMonitorInterval(window time.Duration) time.Duration {
+	interval := window / 2
+	if interval < 10*time.Millisecond {
+		return 10 * time.Millisecond
+	}
+	if interval > time.Minute {
+		return time.Minute
+	}
+	return interval
+}
+
 func (r *Runner) pollOnce(ctx context.Context) {
 	start := time.Now()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			r.recordFailure(ctx, fmt.Errorf("poll panic: %v", recovered), time.Since(start))
+		}
+	}()
+
 	snapshot, err := r.src.Fetch(ctx)
 	duration := time.Since(start)
 	if err != nil {
-		var lastSuccessAt time.Time
-		var lastError string
-
-		r.state.mu.Lock()
-		r.state.lastPollDuration = duration
-		r.state.up = false
-		r.state.errorCount++
-		r.state.lastError = err.Error()
-		errorCount := r.state.errorCount
-		lastSuccessAt = r.state.lastSuccessAt
-		lastError = r.state.lastError
-		r.state.mu.Unlock()
-
-		log.Error().Err(err).Str("source", r.src.Name()).Dur("duration", duration).Msg("poll failed")
-		for _, observer := range r.observers {
-			if observer == nil {
-				continue
-			}
-			if observerErr := observer.OnPollFailure(r.src.Name(), err, duration, errorCount); observerErr != nil {
-				log.Warn().Err(observerErr).Str("source", r.src.Name()).Msg("poll observer failed")
-			}
-		}
-		alert.EvaluateNoSuccessfulPoll(ctx, r.alerts, r.alertCfg, r.src.Name(), r.startedAt, lastSuccessAt, lastError)
+		r.recordFailure(ctx, err, duration)
 		return
 	}
 
@@ -132,4 +150,30 @@ func (r *Runner) pollOnce(ctx context.Context) {
 		}
 	}
 	log.Info().Str("source", snapshot.Source).Int("metric_count", len(snapshot.Metrics)).Dur("duration", duration).Msg("poll succeeded")
+}
+
+func (r *Runner) recordFailure(ctx context.Context, err error, duration time.Duration) {
+	var lastSuccessAt time.Time
+	var lastError string
+
+	r.state.mu.Lock()
+	r.state.lastPollDuration = duration
+	r.state.up = false
+	r.state.errorCount++
+	r.state.lastError = err.Error()
+	errorCount := r.state.errorCount
+	lastSuccessAt = r.state.lastSuccessAt
+	lastError = r.state.lastError
+	r.state.mu.Unlock()
+
+	log.Error().Err(err).Str("source", r.src.Name()).Dur("duration", duration).Msg("poll failed")
+	for _, observer := range r.observers {
+		if observer == nil {
+			continue
+		}
+		if observerErr := observer.OnPollFailure(r.src.Name(), err, duration, errorCount); observerErr != nil {
+			log.Warn().Err(observerErr).Str("source", r.src.Name()).Msg("poll observer failed")
+		}
+	}
+	alert.EvaluateNoSuccessfulPoll(ctx, r.alerts, r.alertCfg, r.src.Name(), r.startedAt, lastSuccessAt, lastError)
 }

@@ -24,6 +24,8 @@ import (
 
 var _ source.Source = (*Client)(nil)
 
+const maxHTTPResponseBodyBytes = 2 * 1024 * 1024
+
 type Client struct {
 	cfg               config.JinkoConfig
 	hc                *http.Client
@@ -128,6 +130,21 @@ func (c *Client) doDetailRequestWithRetry(ctx context.Context, reqBody []byte) (
 	for attempt := 1; attempt <= attempts; attempt++ {
 		raw, status, err := c.doDetailRequest(ctx, reqBody, attempt, attempts)
 		if err == nil {
+			if shouldRetryHTTPStatus(status) && attempt < attempts {
+				delay := c.retryDelay(attempt)
+				log.Warn().
+					Str("source", c.Name()).
+					Str("url", c.cfg.URL).
+					Int("status", status).
+					Int("attempt", attempt).
+					Int("max_attempts", attempts).
+					Dur("retry_in", delay).
+					Msg("API request returned retryable HTTP status, retrying")
+				if err := sleepBeforeRetry(ctx, delay); err != nil {
+					return nil, 0, err
+				}
+				continue
+			}
 			return raw, status, nil
 		}
 
@@ -155,15 +172,8 @@ func (c *Client) doDetailRequestWithRetry(ctx context.Context, reqBody []byte) (
 			Dur("retry_in", delay).
 			Msg("API request failed, retrying")
 
-		if delay <= 0 {
-			continue
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, 0, ctx.Err()
-		case <-timer.C:
+		if err := sleepBeforeRetry(ctx, delay); err != nil {
+			return nil, 0, err
 		}
 	}
 
@@ -196,7 +206,7 @@ func (c *Client) doDetailRequest(ctx context.Context, reqBody []byte, attempt, a
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readResponseBody(resp.Body)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -262,8 +272,11 @@ func isRetryableRequestError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) {
 		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
@@ -280,7 +293,36 @@ func isRetryableRequestError(err error) bool {
 	}
 
 	var netErr net.Error
-	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func shouldRetryHTTPStatus(status int) bool {
+	return status >= http.StatusInternalServerError && status <= 599
+}
+
+func sleepBeforeRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func readResponseBody(body io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxHTTPResponseBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxHTTPResponseBodyBytes {
+		return raw[:maxHTTPResponseBodyBytes], fmt.Errorf("response body exceeds %d bytes", maxHTTPResponseBodyBytes)
+	}
+	return raw, nil
 }
 
 func bearerExpiry(token string) (time.Time, bool) {

@@ -16,11 +16,15 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o
 FROM alpine:3.23
 
 # Add CA certs for HTTPS support
-RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
+RUN apk upgrade --no-cache \
+    && apk add --no-cache ca-certificates \
+    && adduser -D -H -u 65532 appuser
 
 COPY --from=builder /out/jinko-exporter /jinko-exporter
 
 EXPOSE 9876
 
+USER appuser
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/jinko-exporter", "healthcheck"]
 ENTRYPOINT ["/jinko-exporter"]
 CMD ["serve"]

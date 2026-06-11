@@ -25,6 +25,7 @@ type Manager struct {
 
 	mu       sync.Mutex
 	lastSent map[string]time.Time
+	active   map[string]struct{}
 }
 
 func NewManager(notifier Notifier, cooldown time.Duration) *Manager {
@@ -32,6 +33,7 @@ func NewManager(notifier Notifier, cooldown time.Duration) *Manager {
 		notifier: notifier,
 		cooldown: cooldown,
 		lastSent: make(map[string]time.Time),
+		active:   make(map[string]struct{}),
 	}
 }
 
@@ -61,6 +63,33 @@ func (m *Manager) Notify(ctx context.Context, event Event) {
 	log.Info().Str("alert_key", event.Key).Msg("alert delivered")
 }
 
+func (m *Manager) NotifyActive(ctx context.Context, event Event) {
+	if m == nil {
+		return
+	}
+	if event.Key == "" {
+		event.Key = event.Subject
+	}
+	m.markActive(event.Key)
+	m.Notify(ctx, event)
+}
+
+func (m *Manager) Resolve(ctx context.Context, activeKey string, recovery Event, notify bool) {
+	if m == nil || activeKey == "" {
+		return
+	}
+	if !m.markResolved(activeKey) {
+		return
+	}
+	if !notify {
+		return
+	}
+	if recovery.Key == "" {
+		recovery.Key = activeKey + "_recovered"
+	}
+	m.Notify(ctx, recovery)
+}
+
 func (m *Manager) shouldSend(key string, cooldown time.Duration) bool {
 	if cooldown <= 0 {
 		return true
@@ -77,4 +106,20 @@ func (m *Manager) markSent(key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.lastSent[key] = time.Now()
+}
+
+func (m *Manager) markActive(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.active[key] = struct{}{}
+}
+
+func (m *Manager) markResolved(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.active[key]; !ok {
+		return false
+	}
+	delete(m.active, key)
+	return true
 }

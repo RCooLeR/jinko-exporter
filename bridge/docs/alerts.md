@@ -48,6 +48,16 @@ Default:
 ALERTS_COOLDOWN: "6h"
 ```
 
+## Recovery Notifications
+
+Recovery notifications are disabled by default. Enable them with:
+
+```yaml
+ALERTS_NOTIFY_RECOVERY: "true"
+```
+
+The bridge tracks active alert conditions even when recovery emails are disabled. Grid-down and alarm/fault alerts recover when the underlying condition clears. Low battery SOC recovers at the configured threshold plus `5%`; high temperature recovers at the configured threshold minus `5 C`. This hysteresis prevents threshold-edge values from flapping between alert and recovery.
+
 ## Alert Types
 
 ### Jinko Token And Request Alerts
@@ -158,6 +168,7 @@ services:
       JINKO_SITE_ID: "200000001"
       JINKO_BEARER_TOKEN: "<JWT_FROM_BROWSER>"
       ALERTS_ENABLED: "true"
+      ALERTS_NOTIFY_RECOVERY: "true"
       ALERTS_COOLDOWN: "2h"
       ALERT_NO_SUCCESSFUL_POLL_WINDOW: "10m"
       ALERT_BATTERY_SOC_LOW_THRESHOLD: "20"

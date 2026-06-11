@@ -1,0 +1,24 @@
+{
+  "canvas": {
+    "width": 941,
+    "height": 1672,
+    "background_image": "mobile.png"
+  },
+  "elements": [
+    { "id": "logo", "type": "brand_card", "bbox": [0, 0, 220, 90] },
+    { "id": "daily_production", "type": "summary_card", "bbox": [120, 215, 220, 52], "value_box": [120, 215, 220, 52] },
+    { "id": "daily_generator", "type": "summary_card", "bbox": [410, 215, 220, 52], "value_box": [410, 215, 220, 52] },
+    { "id": "daily_import", "type": "summary_card", "bbox": [690, 215, 220, 52], "value_box": [690, 215, 220, 52] },
+    { "id": "daily_export", "type": "summary_card", "bbox": [120, 360, 220, 52], "value_box": [120, 360, 220, 52] },
+    { "id": "daily_consumption", "type": "summary_card", "bbox": [410, 360, 220, 52], "value_box": [410, 360, 220, 52] },
+    { "id": "daily_costs", "type": "summary_card", "bbox": [410, 360, 220, 52], "value_box": [410, 360, 220, 52] },
+    { "id": "ups_load", "type": "metric_card", "bbox": [80, 500, 240, 170], "rows": [{ "id": "voltage", "row_box": [80, 500, 220, 36], "value_box": [80, 500, 220, 36] }, { "id": "current", "row_box": [80, 540, 220, 36], "value_box": [80, 540, 220, 36] }, { "id": "power", "row_box": [80, 580, 220, 36], "value_box": [80, 580, 220, 36] }, { "id": "energy_today", "row_box": [80, 620, 220, 36], "value_box": [80, 620, 220, 36] }] },
+    { "id": "pv1", "type": "metric_card", "bbox": [80, 700, 240, 170], "rows": [{ "id": "voltage", "row_box": [80, 700, 220, 36], "value_box": [80, 700, 220, 36] }, { "id": "current", "row_box": [80, 740, 220, 36], "value_box": [80, 740, 220, 36] }, { "id": "power", "row_box": [80, 780, 220, 36], "value_box": [80, 780, 220, 36] }, { "id": "energy_today", "row_box": [80, 820, 220, 36], "value_box": [80, 820, 220, 36] }] },
+    { "id": "pv2", "type": "metric_card", "bbox": [610, 700, 240, 170], "rows": [{ "id": "voltage", "row_box": [610, 700, 220, 36], "value_box": [610, 700, 220, 36] }, { "id": "current", "row_box": [610, 740, 220, 36], "value_box": [610, 740, 220, 36] }, { "id": "power", "row_box": [610, 780, 220, 36], "value_box": [610, 780, 220, 36] }, { "id": "energy_today", "row_box": [610, 820, 220, 36], "value_box": [610, 820, 220, 36] }] },
+    { "id": "grid", "type": "metric_card", "bbox": [80, 930, 240, 170], "rows": [{ "id": "voltage", "row_box": [80, 930, 220, 36], "value_box": [80, 930, 220, 36] }, { "id": "current", "row_box": [80, 970, 220, 36], "value_box": [80, 970, 220, 36] }, { "id": "power", "row_box": [80, 1010, 220, 36], "value_box": [80, 1010, 220, 36] }, { "id": "energy_today", "row_box": [80, 1050, 220, 36], "value_box": [80, 1050, 220, 36] }] },
+    { "id": "battery", "type": "metric_card_with_soc", "bbox": [80, 1220, 240, 220], "rows": [{ "id": "voltage", "row_box": [80, 1220, 220, 36], "value_box": [80, 1220, 220, 36] }, { "id": "current", "row_box": [80, 1260, 220, 36], "value_box": [80, 1260, 220, 36] }, { "id": "power", "row_box": [80, 1300, 220, 36], "value_box": [80, 1300, 220, 36] }], "soc_value_box": [390, 1360, 160, 72], "energy_today_value_box": [80, 1410, 220, 36] },
+    { "id": "inverter", "type": "inverter_card", "bbox": [365, 1030, 250, 220], "rows": [{ "id": "voltage", "row_box": [365, 1030, 220, 36], "value_box": [365, 1030, 220, 36] }, { "id": "current", "row_box": [365, 1070, 220, 36], "value_box": [365, 1070, 220, 36] }, { "id": "power", "row_box": [365, 1110, 220, 36], "value_box": [365, 1110, 220, 36] }, { "id": "energy_today", "row_box": [365, 1150, 220, 36], "value_box": [365, 1150, 220, 36] }], "temp_value_box": [430, 1185, 130, 44], "status_value_box": [395, 1240, 170, 42] },
+    { "id": "generator", "type": "metric_card", "bbox": [620, 1220, 240, 170], "rows": [{ "id": "voltage", "row_box": [620, 1220, 220, 36], "value_box": [620, 1220, 220, 36] }, { "id": "current", "row_box": [620, 1260, 220, 36], "value_box": [620, 1260, 220, 36] }, { "id": "power", "row_box": [620, 1300, 220, 36], "value_box": [620, 1300, 220, 36] }, { "id": "energy_today", "row_box": [620, 1340, 220, 36], "value_box": [620, 1340, 220, 36] }] },
+    { "id": "parallel_grid_load", "type": "metric_card", "bbox": [620, 930, 240, 170], "rows": [{ "id": "voltage", "row_box": [620, 930, 220, 36], "value_box": [620, 930, 220, 36] }, { "id": "current", "row_box": [620, 970, 220, 36], "value_box": [620, 970, 220, 36] }, { "id": "power", "row_box": [620, 1010, 220, 36], "value_box": [620, 1010, 220, 36] }, { "id": "energy_today", "row_box": [620, 1050, 220, 36], "value_box": [620, 1050, 220, 36] }] }
+  ]
+}

@@ -2,11 +2,13 @@ package hamqtt
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/config"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/model"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 func TestDiscoveryMessagesAndStatePayload(t *testing.T) {
@@ -97,6 +99,122 @@ func TestDiscoveryMessagesAndStatePayload(t *testing.T) {
 	}
 }
 
+func TestDiscoveryPayloadContracts(t *testing.T) {
+	publisher, err := NewPublisher(config.MQTTConfig{
+		Broker:          "tcp://localhost:1883",
+		ClientID:        "test",
+		TopicPrefix:     "jinko-exporter",
+		DiscoveryPrefix: "homeassistant",
+		QOS:             1,
+		Retain:          true,
+		Timeout:         time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher() error = %v", err)
+	}
+
+	snapshot := &model.Snapshot{
+		Source:      "jinko",
+		DeviceSN:    "ABC123",
+		CollectedAt: time.Date(2026, 4, 20, 10, 30, 0, 0, time.UTC),
+		Metrics: []model.Metric{
+			{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 1840},
+			{Group: "grid", Key: "E_B_TO", Name: "Total Energy Buy", Unit: "kWh", Value: 1234},
+		},
+	}
+
+	device := publisher.device(snapshot)
+	messages, err := publisher.discoveryMessages(snapshot, device, publisher.stateTopic(device.ID))
+	if err != nil {
+		t.Fatalf("discoveryMessages() error = %v", err)
+	}
+
+	power := decodeDiscovery(t, messages, "homeassistant/sensor/abc123_electric_dp1/config")
+	assertDiscoveryContract(t, power, map[string]any{
+		"unique_id":                   "abc123_electric_dp1",
+		"state_topic":                 "jinko-exporter/abc123/state",
+		"availability_topic":          "jinko-exporter/availability",
+		"payload_available":           "online",
+		"payload_not_available":       "offline",
+		"qos":                         float64(1),
+		"device_class":                "power",
+		"state_class":                 "measurement",
+		"unit_of_measurement":         "W",
+		"suggested_display_precision": nil,
+	})
+
+	energy := decodeDiscovery(t, messages, "homeassistant/sensor/abc123_grid_e_b_to/config")
+	assertDiscoveryContract(t, energy, map[string]any{
+		"unique_id":           "abc123_grid_e_b_to",
+		"device_class":        "energy",
+		"state_class":         "total_increasing",
+		"unit_of_measurement": "kWh",
+	})
+
+	pollUp := decodeDiscovery(t, messages, "homeassistant/binary_sensor/abc123_poll_up/config")
+	assertDiscoveryContract(t, pollUp, map[string]any{
+		"unique_id":             "abc123_poll_up",
+		"availability_topic":    "jinko-exporter/availability",
+		"payload_available":     "online",
+		"payload_not_available": "offline",
+		"device_class":          "connectivity",
+		"entity_category":       "diagnostic",
+	})
+
+	deviceBlock, ok := power["device"].(map[string]any)
+	if !ok {
+		t.Fatalf("device block = %#v, want object", power["device"])
+	}
+	if deviceBlock["manufacturer"] != "Jinko" {
+		t.Fatalf("manufacturer = %#v, want Jinko", deviceBlock["manufacturer"])
+	}
+}
+
+func TestStatePayloadMarksPreviouslyDiscoveredMissingMetricsNull(t *testing.T) {
+	publisher, err := NewPublisher(config.MQTTConfig{
+		Broker:          "tcp://localhost:1883",
+		ClientID:        "test",
+		TopicPrefix:     "jinko-exporter",
+		DiscoveryPrefix: "homeassistant",
+		Retain:          true,
+		Timeout:         time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher() error = %v", err)
+	}
+
+	firstSnapshot := &model.Snapshot{
+		Source:      "jinko",
+		DeviceSN:    "ABC123",
+		CollectedAt: time.Now().UTC(),
+		Metrics: []model.Metric{
+			{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 1840},
+			{Group: "battery", Key: "B_left_cap1", Name: "SoC", Unit: "%", Value: 82},
+		},
+	}
+	device := publisher.device(firstSnapshot)
+	if _, err := publisher.discoveryMessages(firstSnapshot, device, publisher.stateTopic(device.ID)); err != nil {
+		t.Fatalf("discoveryMessages() error = %v", err)
+	}
+
+	nextSnapshot := &model.Snapshot{
+		Source:      "jinko",
+		DeviceSN:    "ABC123",
+		CollectedAt: time.Now().UTC(),
+		Metrics: []model.Metric{
+			{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 1000},
+		},
+	}
+	state := publisher.buildStatePayload(nextSnapshot, time.Second)
+
+	if got := derefFloat(state.Metrics["electric_dp1"]); got != 1000 {
+		t.Fatalf("electric_dp1 = %v, want 1000", got)
+	}
+	if state.Metrics["battery_b_left_cap1"] != nil {
+		t.Fatalf("battery_b_left_cap1 = %v, want nil for missing metric", *state.Metrics["battery_b_left_cap1"])
+	}
+}
+
 func TestStartDoesNotFailWithoutBroker(t *testing.T) {
 	publisher, err := NewPublisher(config.MQTTConfig{
 		Broker:          "tcp://127.0.0.1:1",
@@ -154,6 +272,63 @@ func TestPollCallbacksDoNotFailWithoutBroker(t *testing.T) {
 	}
 }
 
+func TestOnConnectRepublishesCachedState(t *testing.T) {
+	publisher, client := newPublisherWithRecordingClient(t)
+	snapshot := &model.Snapshot{
+		Source:      "jinko",
+		DeviceSN:    "ABC123",
+		CollectedAt: time.Date(2026, 4, 20, 10, 30, 0, 0, time.UTC),
+		Metrics: []model.Metric{
+			{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 1840},
+		},
+	}
+
+	if err := publisher.OnPollSuccess(snapshot, 250*time.Millisecond); err != nil {
+		t.Fatalf("OnPollSuccess() error = %v", err)
+	}
+	client.clear()
+
+	publisher.onConnect(client)
+
+	if !client.hasTopic("homeassistant/sensor/abc123_electric_dp1/config", true, "") {
+		t.Fatalf("cached discovery was not republished: %#v", client.messages)
+	}
+	if !client.hasTopic("jinko-exporter/abc123/state", true, `"up":true`) {
+		t.Fatalf("cached state was not republished: %#v", client.messages)
+	}
+	if !client.hasTopic("jinko-exporter/availability", true, availabilityOnline) {
+		t.Fatalf("online availability was not republished: %#v", client.messages)
+	}
+}
+
+func TestOnConnectKeepsOfflineAfterPollFailure(t *testing.T) {
+	publisher, client := newPublisherWithRecordingClient(t)
+	snapshot := &model.Snapshot{
+		Source:      "jinko",
+		DeviceSN:    "ABC123",
+		CollectedAt: time.Date(2026, 4, 20, 10, 30, 0, 0, time.UTC),
+		Metrics: []model.Metric{
+			{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 1840},
+		},
+	}
+	if err := publisher.OnPollSuccess(snapshot, 250*time.Millisecond); err != nil {
+		t.Fatalf("OnPollSuccess() error = %v", err)
+	}
+	if err := publisher.OnPollFailure("jinko", errClientNotConnected, time.Second, 1); err != nil {
+		t.Fatalf("OnPollFailure() error = %v", err)
+	}
+	client.clear()
+
+	publisher.onConnect(client)
+
+	if !client.hasTopic("jinko-exporter/abc123/state", true, `"up":true`) {
+		t.Fatalf("cached state was not republished while offline: %#v", client.messages)
+	}
+	if !client.hasTopic("jinko-exporter/availability", true, availabilityOffline) {
+		t.Fatalf("offline availability was not preserved after reconnect: %#v", client.messages)
+	}
+}
+
 func decodeDiscovery(t *testing.T, messages []discoveryMessage, topic string) map[string]any {
 	t.Helper()
 	for _, msg := range messages {
@@ -170,9 +345,138 @@ func decodeDiscovery(t *testing.T, messages []discoveryMessage, topic string) ma
 	return nil
 }
 
+func assertDiscoveryContract(t *testing.T, payload map[string]any, expected map[string]any) {
+	t.Helper()
+	for key, want := range expected {
+		if want == nil {
+			if _, ok := payload[key]; ok {
+				t.Fatalf("%s = %#v, want absent", key, payload[key])
+			}
+			continue
+		}
+		if got := payload[key]; got != want {
+			t.Fatalf("%s = %#v, want %#v in payload %#v", key, got, want, payload)
+		}
+	}
+}
+
 func derefFloat(value *float64) float64 {
 	if value == nil {
 		return 0
 	}
 	return *value
+}
+
+func newPublisherWithRecordingClient(t *testing.T) (*Publisher, *recordingMQTTClient) {
+	t.Helper()
+	publisher, err := NewPublisher(config.MQTTConfig{
+		Broker:          "tcp://localhost:1883",
+		ClientID:        "test",
+		TopicPrefix:     "jinko-exporter",
+		DiscoveryPrefix: "homeassistant",
+		Retain:          true,
+		Timeout:         time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewPublisher() error = %v", err)
+	}
+	client := &recordingMQTTClient{open: true}
+	publisher.client = client
+	return publisher, client
+}
+
+type publishedMQTTMessage struct {
+	topic  string
+	retain bool
+	body   string
+}
+
+type recordingMQTTClient struct {
+	open     bool
+	messages []publishedMQTTMessage
+}
+
+func (c *recordingMQTTClient) IsConnected() bool {
+	return c.open
+}
+
+func (c *recordingMQTTClient) IsConnectionOpen() bool {
+	return c.open
+}
+
+func (c *recordingMQTTClient) Connect() mqtt.Token {
+	return staticMQTTToken{}
+}
+
+func (c *recordingMQTTClient) Disconnect(uint) {
+	c.open = false
+}
+
+func (c *recordingMQTTClient) Publish(topic string, _ byte, retained bool, payload any) mqtt.Token {
+	body := ""
+	switch value := payload.(type) {
+	case string:
+		body = value
+	case []byte:
+		body = string(value)
+	default:
+		raw, _ := json.Marshal(value)
+		body = string(raw)
+	}
+	c.messages = append(c.messages, publishedMQTTMessage{topic: topic, retain: retained, body: body})
+	return staticMQTTToken{}
+}
+
+func (c *recordingMQTTClient) Subscribe(string, byte, mqtt.MessageHandler) mqtt.Token {
+	return staticMQTTToken{}
+}
+
+func (c *recordingMQTTClient) SubscribeMultiple(map[string]byte, mqtt.MessageHandler) mqtt.Token {
+	return staticMQTTToken{}
+}
+
+func (c *recordingMQTTClient) Unsubscribe(...string) mqtt.Token {
+	return staticMQTTToken{}
+}
+
+func (c *recordingMQTTClient) AddRoute(string, mqtt.MessageHandler) {}
+
+func (c *recordingMQTTClient) OptionsReader() mqtt.ClientOptionsReader {
+	return mqtt.NewOptionsReader(mqtt.NewClientOptions())
+}
+
+func (c *recordingMQTTClient) clear() {
+	c.messages = nil
+}
+
+func (c *recordingMQTTClient) hasTopic(topic string, retain bool, contains string) bool {
+	for _, msg := range c.messages {
+		if msg.topic != topic || msg.retain != retain {
+			continue
+		}
+		if contains == "" || strings.Contains(msg.body, contains) {
+			return true
+		}
+	}
+	return false
+}
+
+type staticMQTTToken struct{}
+
+func (staticMQTTToken) Wait() bool {
+	return true
+}
+
+func (staticMQTTToken) WaitTimeout(time.Duration) bool {
+	return true
+}
+
+func (staticMQTTToken) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
+func (staticMQTTToken) Error() error {
+	return nil
 }

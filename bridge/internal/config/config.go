@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -24,8 +26,28 @@ type Config struct {
 	Modbus          ModbusConfig
 }
 
+func (cfg Config) Redacted() Config {
+	redacted := cfg
+	redacted.Alerts.SMTPPassword = redactSecret(redacted.Alerts.SMTPPassword)
+	redacted.MQTT.Password = redactSecret(redacted.MQTT.Password)
+	redacted.Jinko.BearerToken = redactSecret(redacted.Jinko.BearerToken)
+	redacted.Jinko.Cookie = redactSecret(redacted.Jinko.Cookie)
+	redacted.Solarman.AppSecret = redactSecret(redacted.Solarman.AppSecret)
+	redacted.Solarman.Password = redactSecret(redacted.Solarman.Password)
+	redacted.Solarman.PasswordSHA256 = redactSecret(redacted.Solarman.PasswordSHA256)
+	return redacted
+}
+
+func redactSecret(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return "********"
+}
+
 type AlertConfig struct {
 	Enabled                  bool
+	NotifyRecovery           bool
 	Cooldown                 time.Duration
 	Timeout                  time.Duration
 	SMTPHost                 string
@@ -118,6 +140,7 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "mqtt-client-id", Value: "jinko-exporter", Usage: "MQTT client ID", EnvVars: []string{"MQTT_CLIENT_ID"}},
 		&cli.StringFlag{Name: "mqtt-username", Usage: "MQTT username", EnvVars: []string{"MQTT_USERNAME"}},
 		&cli.StringFlag{Name: "mqtt-password", Usage: "MQTT password", EnvVars: []string{"MQTT_PASSWORD"}},
+		&cli.StringFlag{Name: "mqtt-password-file", Usage: "Read MQTT password from a file when mqtt-password is empty", EnvVars: []string{"MQTT_PASSWORD_FILE"}},
 		&cli.StringFlag{Name: "mqtt-topic-prefix", Value: "jinko-exporter", Usage: "Base topic for state and availability payloads", EnvVars: []string{"MQTT_TOPIC_PREFIX"}},
 		&cli.StringFlag{Name: "mqtt-discovery-prefix", Value: "homeassistant", Usage: "Home Assistant MQTT discovery prefix", EnvVars: []string{"MQTT_DISCOVERY_PREFIX"}},
 		&cli.StringFlag{Name: "mqtt-device-name", Usage: "Optional Home Assistant device name; defaults to Jinko Inverter plus device serial when available", EnvVars: []string{"MQTT_DEVICE_NAME"}},
@@ -128,12 +151,14 @@ func Flags() []cli.Flag {
 		&cli.BoolFlag{Name: "mqtt-insecure-skip-verify", Value: false, Usage: "Skip TLS certificate verification for MQTT TLS connections; insecure", EnvVars: []string{"MQTT_INSECURE_SKIP_VERIFY"}},
 
 		&cli.BoolFlag{Name: "alerts-enabled", Value: false, Usage: "Enable outbound alert delivery", EnvVars: []string{"ALERTS_ENABLED"}},
+		&cli.BoolFlag{Name: "alerts-notify-recovery", Value: false, Usage: "Send recovery notifications when alert conditions clear", EnvVars: []string{"ALERTS_NOTIFY_RECOVERY"}},
 		&cli.DurationFlag{Name: "alerts-cooldown", Value: 6 * time.Hour, Usage: "Minimum interval between repeated alerts with the same key", EnvVars: []string{"ALERTS_COOLDOWN"}},
 		&cli.DurationFlag{Name: "smtp-timeout", Value: 15 * time.Second, Usage: "SMTP dial/send timeout", EnvVars: []string{"SMTP_TIMEOUT"}},
 		&cli.StringFlag{Name: "smtp-host", Usage: "SMTP server hostname", EnvVars: []string{"SMTP_HOST"}},
 		&cli.IntFlag{Name: "smtp-port", Value: 587, Usage: "SMTP server port", EnvVars: []string{"SMTP_PORT"}},
 		&cli.StringFlag{Name: "smtp-username", Usage: "SMTP username", EnvVars: []string{"SMTP_USERNAME"}},
 		&cli.StringFlag{Name: "smtp-password", Usage: "SMTP password", EnvVars: []string{"SMTP_PASSWORD"}},
+		&cli.StringFlag{Name: "smtp-password-file", Usage: "Read SMTP password from a file when smtp-password is empty", EnvVars: []string{"SMTP_PASSWORD_FILE"}},
 		&cli.StringFlag{Name: "smtp-from-email", Usage: "Alert sender email address", EnvVars: []string{"SMTP_FROM_EMAIL"}},
 		&cli.StringFlag{Name: "smtp-from-name", Usage: "Alert sender display name", EnvVars: []string{"SMTP_FROM_NAME"}},
 		&cli.StringSliceFlag{Name: "smtp-to-email", Usage: "Alert recipient email address; repeat or comma-separate to add more than one", EnvVars: []string{"SMTP_TO_EMAILS"}},
@@ -154,7 +179,9 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "jinko-language", Value: "en", Usage: "Jinko request language", EnvVars: []string{"JINKO_LANGUAGE"}},
 		&cli.BoolFlag{Name: "jinko-need-realtime", Value: true, Usage: "Jinko needRealTimeDataFlag", EnvVars: []string{"JINKO_NEED_REALTIME_DATA"}},
 		&cli.StringFlag{Name: "jinko-bearer-token", Usage: "Jinko bearer token copied from the browser session", EnvVars: []string{"JINKO_BEARER_TOKEN"}},
+		&cli.StringFlag{Name: "jinko-bearer-token-file", Usage: "Read Jinko bearer token from a file when jinko-bearer-token is empty", EnvVars: []string{"JINKO_BEARER_TOKEN_FILE"}},
 		&cli.StringFlag{Name: "jinko-cookie", Usage: "Optional Jinko cookie header if bearer-only is not enough", EnvVars: []string{"JINKO_COOKIE"}},
+		&cli.StringFlag{Name: "jinko-cookie-file", Usage: "Read Jinko cookie header from a file when jinko-cookie is empty", EnvVars: []string{"JINKO_COOKIE_FILE"}},
 		&cli.StringFlag{Name: "jinko-user-agent", Value: "jinko-exporter/1.0", Usage: "Optional Jinko HTTP user-agent", EnvVars: []string{"JINKO_USER_AGENT"}},
 		&cli.DurationFlag{Name: "jinko-request-jitter-max", Value: 5 * time.Second, Usage: "Maximum random delay added before each Jinko request", EnvVars: []string{"JINKO_REQUEST_JITTER_MAX"}},
 		&cli.DurationFlag{Name: "jinko-token-alert-window", Value: 24 * time.Hour, Usage: "Send an alert when the Jinko bearer token expires within this window", EnvVars: []string{"JINKO_TOKEN_ALERT_WINDOW"}},
@@ -168,9 +195,12 @@ func Flags() []cli.Flag {
 		&cli.DurationFlag{Name: "solarman-discovery-refresh-interval", Value: 24 * time.Hour, Usage: "How often Solarman device discovery may refresh; 0 caches discovery forever", EnvVars: []string{"SOLARMAN_DISCOVERY_REFRESH_INTERVAL"}},
 		&cli.StringFlag{Name: "solarman-app-id", Usage: "Solarman OpenAPI appId", EnvVars: []string{"SOLARMAN_APP_ID"}},
 		&cli.StringFlag{Name: "solarman-app-secret", Usage: "Solarman OpenAPI appSecret", EnvVars: []string{"SOLARMAN_APP_SECRET"}},
+		&cli.StringFlag{Name: "solarman-app-secret-file", Usage: "Read Solarman app secret from a file when solarman-app-secret is empty", EnvVars: []string{"SOLARMAN_APP_SECRET_FILE"}},
 		&cli.StringFlag{Name: "solarman-email", Usage: "Solarman account email", EnvVars: []string{"SOLARMAN_EMAIL"}},
 		&cli.StringFlag{Name: "solarman-password", Usage: "Solarman account password", EnvVars: []string{"SOLARMAN_PASSWORD"}},
+		&cli.StringFlag{Name: "solarman-password-file", Usage: "Read Solarman password from a file when solarman-password is empty", EnvVars: []string{"SOLARMAN_PASSWORD_FILE"}},
 		&cli.StringFlag{Name: "solarman-password-sha256", Usage: "Precomputed Solarman password SHA256 hex", EnvVars: []string{"SOLARMAN_PASSWORD_SHA256"}},
+		&cli.StringFlag{Name: "solarman-password-sha256-file", Usage: "Read precomputed Solarman password SHA256 hex from a file when solarman-password-sha256 is empty", EnvVars: []string{"SOLARMAN_PASSWORD_SHA256_FILE"}},
 		&cli.StringFlag{Name: "solarman-device-sn", Usage: "Solarman device serial number; skips discovery when set", EnvVars: []string{"SOLARMAN_DEVICE_SN"}},
 		&cli.Int64Flag{Name: "solarman-station-id", Usage: "Optional Solarman station ID for device discovery", EnvVars: []string{"SOLARMAN_STATION_ID"}},
 
@@ -183,6 +213,35 @@ func Flags() []cli.Flag {
 }
 
 func FromCLI(c *cli.Context) (Config, error) {
+	mqttPassword, err := secretValue(c, "mqtt-password", "mqtt-password-file")
+	if err != nil {
+		return Config{}, err
+	}
+	smtpPassword, err := secretValue(c, "smtp-password", "smtp-password-file")
+	if err != nil {
+		return Config{}, err
+	}
+	jinkoBearerToken, err := secretValue(c, "jinko-bearer-token", "jinko-bearer-token-file")
+	if err != nil {
+		return Config{}, err
+	}
+	jinkoCookie, err := secretValue(c, "jinko-cookie", "jinko-cookie-file")
+	if err != nil {
+		return Config{}, err
+	}
+	solarmanAppSecret, err := secretValue(c, "solarman-app-secret", "solarman-app-secret-file")
+	if err != nil {
+		return Config{}, err
+	}
+	solarmanPassword, err := secretValue(c, "solarman-password", "solarman-password-file")
+	if err != nil {
+		return Config{}, err
+	}
+	solarmanPasswordSHA256, err := secretValue(c, "solarman-password-sha256", "solarman-password-sha256-file")
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		Source:          strings.ToLower(strings.TrimSpace(c.String("source"))),
 		SourcePriority:  normalizeSourceList(c.String("source-priority")),
@@ -197,7 +256,7 @@ func FromCLI(c *cli.Context) (Config, error) {
 			Broker:             c.String("mqtt-broker"),
 			ClientID:           c.String("mqtt-client-id"),
 			Username:           c.String("mqtt-username"),
-			Password:           c.String("mqtt-password"),
+			Password:           mqttPassword,
 			TopicPrefix:        c.String("mqtt-topic-prefix"),
 			DiscoveryPrefix:    c.String("mqtt-discovery-prefix"),
 			DeviceName:         c.String("mqtt-device-name"),
@@ -209,12 +268,13 @@ func FromCLI(c *cli.Context) (Config, error) {
 		},
 		Alerts: AlertConfig{
 			Enabled:                  c.Bool("alerts-enabled"),
+			NotifyRecovery:           c.Bool("alerts-notify-recovery"),
 			Cooldown:                 c.Duration("alerts-cooldown"),
 			Timeout:                  c.Duration("smtp-timeout"),
 			SMTPHost:                 c.String("smtp-host"),
 			SMTPPort:                 c.Int("smtp-port"),
 			SMTPUsername:             c.String("smtp-username"),
-			SMTPPassword:             c.String("smtp-password"),
+			SMTPPassword:             smtpPassword,
 			SMTPFromEmail:            c.String("smtp-from-email"),
 			SMTPFromName:             c.String("smtp-from-name"),
 			SMTPToEmails:             normalizeList(c.StringSlice("smtp-to-email")),
@@ -235,8 +295,8 @@ func FromCLI(c *cli.Context) (Config, error) {
 			SiteID:             c.Int64("jinko-site-id"),
 			Language:           c.String("jinko-language"),
 			NeedRealtimeData:   c.Bool("jinko-need-realtime"),
-			BearerToken:        c.String("jinko-bearer-token"),
-			Cookie:             c.String("jinko-cookie"),
+			BearerToken:        jinkoBearerToken,
+			Cookie:             jinkoCookie,
 			UserAgent:          c.String("jinko-user-agent"),
 			RequestJitterMax:   c.Duration("jinko-request-jitter-max"),
 			TokenAlertWindow:   c.Duration("jinko-token-alert-window"),
@@ -251,10 +311,10 @@ func FromCLI(c *cli.Context) (Config, error) {
 			YearlyRequestLimit:       c.Int("solarman-yearly-request-limit"),
 			DiscoveryRefreshInterval: c.Duration("solarman-discovery-refresh-interval"),
 			AppID:                    c.String("solarman-app-id"),
-			AppSecret:                c.String("solarman-app-secret"),
+			AppSecret:                solarmanAppSecret,
 			Email:                    c.String("solarman-email"),
-			Password:                 c.String("solarman-password"),
-			PasswordSHA256:           c.String("solarman-password-sha256"),
+			Password:                 solarmanPassword,
+			PasswordSHA256:           solarmanPasswordSHA256,
 			DeviceSN:                 c.String("solarman-device-sn"),
 			StationID:                c.Int64("solarman-station-id"),
 		},
@@ -289,6 +349,16 @@ func FromCLI(c *cli.Context) (Config, error) {
 }
 
 func validate(cfg Config) error {
+	if err := validateListenAddress(cfg.ListenAddress); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(cfg.MetricsPath, "/") {
+		return fmt.Errorf("metrics-path must start with /")
+	}
+	if strings.Trim(strings.TrimSpace(cfg.MetricPrefix), "_") == "" {
+		return fmt.Errorf("metric-prefix is required")
+	}
+
 	if cfg.MQTT.Enabled {
 		if strings.TrimSpace(cfg.MQTT.Broker) == "" {
 			return fmt.Errorf("mqtt-broker is required when MQTT is enabled")
@@ -360,6 +430,23 @@ func validate(cfg Config) error {
 	return nil
 }
 
+func validateListenAddress(address string) error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return fmt.Errorf("listen address must be host:port or :port: %w", err)
+	}
+	if port == "" {
+		return fmt.Errorf("listen address port is required")
+	}
+	if _, err := net.LookupPort("tcp", port); err != nil {
+		return fmt.Errorf("listen address port %q is invalid: %w", port, err)
+	}
+	if strings.Contains(host, "/") {
+		return fmt.Errorf("listen address host %q is invalid", host)
+	}
+	return nil
+}
+
 func validateSourceConfig(cfg Config, sourceName string) error {
 	switch sourceName {
 	case "jinko":
@@ -405,6 +492,23 @@ func validateSourceConfig(cfg Config, sourceName string) error {
 		return fmt.Errorf("unknown source %q", sourceName)
 	}
 	return nil
+}
+
+func secretValue(c *cli.Context, valueName string, fileName string) (string, error) {
+	value := c.String(valueName)
+	if strings.TrimSpace(value) != "" {
+		return value, nil
+	}
+
+	path := strings.TrimSpace(c.String(fileName))
+	if path == "" {
+		return "", nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", fileName, err)
+	}
+	return strings.TrimRight(string(raw), "\r\n"), nil
 }
 
 func normalizeSourceList(value string) []string {

@@ -43,7 +43,7 @@ func ParseDetailResponse(raw []byte) (*model.Snapshot, error) {
 	for _, cat := range payload.Categories {
 		group := normalizeGroup(cat.Tag, cat.Name)
 		for _, f := range cat.FieldList {
-			value, ok := parseNumber(firstNonEmpty(f.OrgValue, f.Value))
+			value, ok := parseFieldNumber(f)
 			if !ok {
 				continue
 			}
@@ -101,17 +101,46 @@ func normalizeUnit(unit string) string {
 	}
 }
 
+func parseFieldNumber(f field) (float64, bool) {
+	for _, candidate := range []string{f.OrgValue, f.Value} {
+		if value, ok := parseNumber(candidate); ok {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
 func parseNumber(raw string) (float64, bool) {
 	raw = strings.TrimSpace(strings.ReplaceAll(raw, "\u00a0", " "))
 	if raw == "" {
 		return 0, false
 	}
-	raw = strings.ReplaceAll(raw, ",", "")
+	raw = normalizeNumberSeparators(raw)
 	value, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
 		return 0, false
 	}
 	return value, true
+}
+
+func normalizeNumberSeparators(raw string) string {
+	raw = strings.ReplaceAll(raw, " ", "")
+	if !strings.Contains(raw, ",") {
+		return raw
+	}
+	if strings.Contains(raw, ".") {
+		return strings.ReplaceAll(raw, ",", "")
+	}
+
+	parts := strings.Split(raw, ",")
+	if len(parts) == 2 {
+		whole, fraction := parts[0], parts[1]
+		if len(fraction) == 3 && len(whole) > 0 {
+			return whole + fraction
+		}
+		return whole + "." + fraction
+	}
+	return strings.ReplaceAll(raw, ",", "")
 }
 
 func SanitizeKey(input string) string {

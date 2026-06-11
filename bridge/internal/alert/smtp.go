@@ -62,6 +62,9 @@ func (n *SMTPNotifier) Notify(ctx context.Context, subject string, body string) 
 	}
 	defer func() { _ = conn.Close() }()
 	defer func() { _ = client.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(n.cfg.Timeout)); err != nil {
+		return err
+	}
 
 	if err := n.authenticate(client); err != nil {
 		return err

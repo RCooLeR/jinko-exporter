@@ -32,10 +32,15 @@ type Publisher struct {
 	discoveryPrefix   string
 	availabilityTopic string
 
-	mu                sync.Mutex
-	discoveryPayloads map[string]string
-	discoveredMetrics map[string]metricEntity
-	discoveryShapeSig string
+	mu                 sync.Mutex
+	discoveryPayloads  map[string]string
+	discoveredMetrics  map[string]metricEntity
+	discoveryShapeSig  string
+	cachedDiscovery    []discoveryMessage
+	cachedDiscoverySig string
+	cachedStateTopic   string
+	cachedState        []byte
+	lastAvailability   string
 }
 
 type metricEntity struct {
@@ -94,11 +99,7 @@ func NewPublisher(cfg config.MQTTConfig) (*Publisher, error) {
 	opts.SetOrderMatters(false)
 	opts.SetWill(p.availabilityTopic, availabilityOffline, cfg.QOS, cfg.Retain)
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		if err := p.publishString(p.availabilityTopic, availabilityOffline, p.cfg.Retain); err != nil {
-			log.Warn().Err(err).Str("broker", p.cfg.Broker).Msg("failed to publish MQTT availability after connect")
-			return
-		}
-		log.Info().Str("broker", p.cfg.Broker).Str("topic_prefix", p.topicPrefix).Msg("connected MQTT publisher")
+		p.onConnect(client)
 	})
 	opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
 		log.Warn().Err(err).Str("broker", p.cfg.Broker).Msg("lost MQTT broker connection")
@@ -157,28 +158,39 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 	stateTopic := p.stateTopic(device.ID)
 
 	discoveryShapeSig := p.discoverySignature(snapshot, device, stateTopic)
+	var discoveryMessages []discoveryMessage
 	if discoveryShapeSig != p.discoveryShapeSig {
-		discoveryMessages, err := p.discoveryMessages(snapshot, device, stateTopic)
+		var err error
+		discoveryMessages, err = p.discoveryMessages(snapshot, device, stateTopic)
 		if err != nil {
 			return err
 		}
-		for _, msg := range discoveryMessages {
-			if p.discoveryPayloads[msg.topic] == msg.payload {
-				continue
-			}
-			if err := p.publishString(msg.topic, msg.payload, true); err != nil {
-				p.logPublishSkipped(err, msg.topic)
-				return nil
-			}
-			p.discoveryPayloads[msg.topic] = msg.payload
-		}
-		p.discoveryShapeSig = discoveryShapeSig
+		p.cachedDiscovery = cloneDiscoveryMessages(discoveryMessages)
+		p.cachedDiscoverySig = discoveryShapeSig
 	}
 
 	payload, err := json.Marshal(p.buildStatePayload(snapshot, duration))
 	if err != nil {
 		return fmt.Errorf("encode MQTT state payload: %w", err)
 	}
+	p.cachedStateTopic = stateTopic
+	p.cachedState = append(p.cachedState[:0], payload...)
+	p.lastAvailability = availabilityOnline
+
+	for _, msg := range discoveryMessages {
+		if p.discoveryPayloads[msg.topic] == msg.payload {
+			continue
+		}
+		if err := p.publishString(msg.topic, msg.payload, true); err != nil {
+			p.logPublishSkipped(err, msg.topic)
+			return nil
+		}
+		p.discoveryPayloads[msg.topic] = msg.payload
+	}
+	if discoveryShapeSig != p.discoveryShapeSig {
+		p.discoveryShapeSig = discoveryShapeSig
+	}
+
 	if err := p.publishBytes(stateTopic, payload, p.cfg.Retain); err != nil {
 		p.logPublishSkipped(err, stateTopic)
 		return nil
@@ -197,6 +209,10 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 }
 
 func (p *Publisher) OnPollFailure(sourceName string, err error, duration time.Duration, errorCount uint64) error {
+	p.mu.Lock()
+	p.lastAvailability = availabilityOffline
+	p.mu.Unlock()
+
 	log.Warn().
 		Err(err).
 		Str("source", sourceName).
@@ -209,6 +225,39 @@ func (p *Publisher) OnPollFailure(sourceName string, err error, duration time.Du
 	return nil
 }
 
+func (p *Publisher) onConnect(_ mqtt.Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, msg := range p.cachedDiscovery {
+		if err := p.publishString(msg.topic, msg.payload, true); err != nil {
+			log.Warn().Err(err).Str("broker", p.cfg.Broker).Str("topic", msg.topic).Msg("failed to republish MQTT discovery after connect")
+			return
+		}
+		p.discoveryPayloads[msg.topic] = msg.payload
+	}
+	if len(p.cachedDiscovery) > 0 {
+		p.discoveryShapeSig = p.cachedDiscoverySig
+	}
+
+	if p.cachedStateTopic != "" && len(p.cachedState) > 0 {
+		if err := p.publishBytes(p.cachedStateTopic, p.cachedState, p.cfg.Retain); err != nil {
+			log.Warn().Err(err).Str("broker", p.cfg.Broker).Str("topic", p.cachedStateTopic).Msg("failed to republish MQTT state after connect")
+			return
+		}
+	}
+
+	availability := p.lastAvailability
+	if availability == "" {
+		availability = availabilityOffline
+	}
+	if err := p.publishString(p.availabilityTopic, availability, p.cfg.Retain); err != nil {
+		log.Warn().Err(err).Str("broker", p.cfg.Broker).Msg("failed to publish MQTT availability after connect")
+		return
+	}
+	log.Info().Str("broker", p.cfg.Broker).Str("topic_prefix", p.topicPrefix).Msg("connected MQTT publisher")
+}
+
 type deviceInfo struct {
 	ID           string
 	Identifier   string
@@ -219,6 +268,15 @@ type deviceInfo struct {
 type discoveryMessage struct {
 	topic   string
 	payload string
+}
+
+func cloneDiscoveryMessages(messages []discoveryMessage) []discoveryMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	cloned := make([]discoveryMessage, len(messages))
+	copy(cloned, messages)
+	return cloned
 }
 
 func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInfo, stateTopic string) ([]discoveryMessage, error) {

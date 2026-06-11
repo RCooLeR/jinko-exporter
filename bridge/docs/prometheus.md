@@ -52,7 +52,9 @@ environment:
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
+| `<prefix>_build_info` | Gauge | `version`, `commit`, `date` | Always `1`; exporter build metadata. |
 | `<prefix>_up` | Gauge | `source`, `device_sn` | `1` when the latest poll succeeded, `0` otherwise. |
+| `<prefix>_poll_success` | Gauge | `source` | `1` when the latest source poll succeeded, `0` otherwise. |
 | `<prefix>_last_update_timestamp_seconds` | Gauge | `source`, `device_sn` | Unix timestamp of the latest successful poll. |
 | `<prefix>_last_source_sync_timestamp_seconds` | Gauge | `source` | Unix timestamp of latest successful poll by source. Keeps `source` even when source labels are otherwise dropped. |
 | `<prefix>_poll_duration_seconds` | Gauge | `source` | Duration of the latest poll in seconds. |
@@ -62,7 +64,9 @@ environment:
 ## Example Output
 
 ```text
+solar_build_info{version="dev",commit="unknown",date="unknown"} 1
 solar_up{source="jinko",device_sn="SYNTHETIC_INV_001"} 1
+solar_poll_success{source="jinko"} 1
 solar_last_update_timestamp_seconds{source="jinko",device_sn="SYNTHETIC_INV_001"} 1778068800
 solar_poll_duration_seconds{source="jinko"} 0.842
 solar_request_errors_total{source="jinko"} 0
@@ -83,10 +87,11 @@ This changes most metrics to remove `source`:
 
 ```text
 solar_up{device_sn="SYNTHETIC_INV_001"} 1
+solar_poll_success 1
 solar_metric{device_sn="SYNTHETIC_INV_001",group="grid",key="PG_Pt1",name="Total Grid Power",unit="W"} 1234
 ```
 
-`solar_last_source_sync_timestamp_seconds{source=...}` keeps `source` so failover visibility is not lost.
+`solar_last_source_sync_timestamp_seconds{source=...}` keeps `source` so failover visibility is not lost. `solar_poll_success` follows the source-label setting because it reports the active exporter view rather than a per-source sync timestamp.
 
 When source labels are dropped, duplicate source-specific metric label sets are collapsed inside one collection pass. This is useful for failover dashboards, but it can hide source-specific differences if two sources report the same logical metric differently.
 

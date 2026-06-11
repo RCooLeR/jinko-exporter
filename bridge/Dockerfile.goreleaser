@@ -2,11 +2,14 @@ FROM alpine:3.23
 
 ARG TARGETPLATFORM
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates \
+    && adduser -D -H -u 65532 appuser
 
 COPY ${TARGETPLATFORM}/jinko-exporter /usr/bin/jinko-exporter
 
 EXPOSE 9876
 
+USER appuser
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/bin/jinko-exporter", "healthcheck"]
 ENTRYPOINT ["/usr/bin/jinko-exporter"]
 CMD ["serve"]

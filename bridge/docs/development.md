@@ -11,6 +11,19 @@ cd bridge
 go test ./...
 ```
 
+Run the same core Go checks as CI:
+
+```shell
+cd bridge
+gofmt -w .
+go vet ./...
+go test ./... -cover
+go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+```
+
+The CI workflow also runs `go test ./... -race -cover` on Ubuntu. On Windows this requires cgo and a C toolchain.
+
 Build locally:
 
 ```shell
@@ -52,6 +65,25 @@ Build from the repository root:
 ```shell
 docker build -f bridge/Dockerfile -t rcooler/jinko-exporter:local bridge
 ```
+
+## Home Assistant Cards
+
+The optional cards live under `ha-cards/`.
+
+```shell
+cd ha-cards
+npm ci
+npm test
+npm run build
+```
+
+## Continuous Integration
+
+Pull requests and branch pushes run `.github/workflows/ci.yml`.
+
+The bridge job checks formatting, `go vet`, race-enabled tests with coverage, `staticcheck`, and `govulncheck`.
+
+The card job installs dependencies with `npm ci`, runs the Node test suite, and builds the Vite bundle.
 
 ## GoReleaser
 

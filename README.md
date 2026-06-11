@@ -1,5 +1,7 @@
 # JinkoBridge
 
+[![CI](https://github.com/RCooLeR/jinko-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/RCooLeR/jinko-exporter/actions/workflows/ci.yml)
+
 JinkoBridge is an unofficial solar telemetry bridge for Jinko and compatible Solarman-backed inverter data. It polls one configured upstream source, exposes Prometheus metrics over HTTP, and can publish read-only Home Assistant MQTT Discovery entities.
 
 <div align="center" style="text-align: center">

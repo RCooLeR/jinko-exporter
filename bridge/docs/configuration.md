@@ -2,17 +2,19 @@
 
 Every option can be passed as a CLI flag or as an environment variable. Docker examples use environment variables.
 
+For secret values, the direct value takes precedence over the matching `*_FILE` option. File-based secrets are read once at startup and trailing newlines are trimmed.
+
 ## Core Options
 
 | Environment variable | CLI flag | Default | Description |
 | --- | --- | --- | --- |
 | `EXPORTER_SOURCE` | `--source` | `jinko` | Single source: `jinko`, `solarman`, or `modbus`. |
 | `EXPORTER_SOURCE_PRIORITY` | `--source-priority` | empty | Comma-separated failover order. Overrides `EXPORTER_SOURCE` when set. |
-| `EXPORTER_LISTEN` | `--listen` | `:9876` | HTTP listen address. |
-| `EXPORTER_METRICS_PATH` | `--metrics-path` | `/metrics` | Prometheus metrics path. |
+| `EXPORTER_LISTEN` | `--listen` | `:9876` | HTTP listen address in `host:port` or `:port` form. |
+| `EXPORTER_METRICS_PATH` | `--metrics-path` | `/metrics` | Prometheus metrics path. Must start with `/`. |
 | `EXPORTER_POLL_INTERVAL` | `--poll-interval` | `60s` | Poll interval. Must be greater than zero. |
 | `EXPORTER_LOG_LEVEL` | `--log-level` | `info` | Zerolog level such as `debug`, `info`, `warn`, or `error`. |
-| `EXPORTER_METRIC_PREFIX` | `--metric-prefix` | `solar` | Prefix for Prometheus metric names. |
+| `EXPORTER_METRIC_PREFIX` | `--metric-prefix` | `solar` | Prefix for Prometheus metric names. Must not be empty after trimming underscores. |
 | `EXPORTER_METRICS_DROP_SOURCE_LABEL` | `--metrics-drop-source-label` | `false` | Drops the `source` label from most generic metric series. |
 
 ## Jinko Options
@@ -29,7 +31,9 @@ Every option can be passed as a CLI flag or as an environment variable. Docker e
 | `JINKO_LANGUAGE` | `--jinko-language` | `en` | No | Request language. |
 | `JINKO_NEED_REALTIME_DATA` | `--jinko-need-realtime` | `true` | No | Jinko `needRealTimeDataFlag`. |
 | `JINKO_BEARER_TOKEN` | `--jinko-bearer-token` | empty | Yes | Bearer token copied from the browser session. |
+| `JINKO_BEARER_TOKEN_FILE` | `--jinko-bearer-token-file` | empty | Yes if token is not set | File containing the bearer token. Read at startup only. |
 | `JINKO_COOKIE` | `--jinko-cookie` | empty | No | Optional cookie header when bearer-only is not enough. |
+| `JINKO_COOKIE_FILE` | `--jinko-cookie-file` | empty | No | File containing the optional cookie header. Read at startup only. |
 | `JINKO_USER_AGENT` | `--jinko-user-agent` | `jinko-exporter/1.0` | No | HTTP user agent. |
 | `JINKO_REQUEST_JITTER_MAX` | `--jinko-request-jitter-max` | `5s` | No | Random delay before each request. |
 | `JINKO_TOKEN_ALERT_WINDOW` | `--jinko-token-alert-window` | `24h` | No | Alert when a bearer token expires within this window. |
@@ -47,9 +51,12 @@ Every option can be passed as a CLI flag or as an environment variable. Docker e
 | `SOLARMAN_DISCOVERY_REFRESH_INTERVAL` | `--solarman-discovery-refresh-interval` | `24h` | No | Device discovery cache refresh interval. `0` caches forever. |
 | `SOLARMAN_APP_ID` | `--solarman-app-id` | empty | Yes | OpenAPI app ID. |
 | `SOLARMAN_APP_SECRET` | `--solarman-app-secret` | empty | Yes | OpenAPI app secret. |
+| `SOLARMAN_APP_SECRET_FILE` | `--solarman-app-secret-file` | empty | Yes if app secret is not set | File containing the OpenAPI app secret. |
 | `SOLARMAN_EMAIL` | `--solarman-email` | empty | Yes | Solarman account email. |
 | `SOLARMAN_PASSWORD` | `--solarman-password` | empty | One password option | Plain account password. |
+| `SOLARMAN_PASSWORD_FILE` | `--solarman-password-file` | empty | One password option | File containing the plain account password. |
 | `SOLARMAN_PASSWORD_SHA256` | `--solarman-password-sha256` | empty | One password option | Precomputed SHA256 password hex. |
+| `SOLARMAN_PASSWORD_SHA256_FILE` | `--solarman-password-sha256-file` | empty | One password option | File containing the precomputed SHA256 password hex. |
 | `SOLARMAN_DEVICE_SN` | `--solarman-device-sn` | empty | No | Device serial. Skips discovery when set. |
 | `SOLARMAN_STATION_ID` | `--solarman-station-id` | empty | No | Station ID used during discovery. |
 
@@ -62,6 +69,7 @@ Every option can be passed as a CLI flag or as an environment variable. Docker e
 | `MQTT_CLIENT_ID` | `--mqtt-client-id` | `jinko-exporter` | Yes | MQTT client ID. Use a unique value per bridge. |
 | `MQTT_USERNAME` | `--mqtt-username` | empty | No | MQTT username. |
 | `MQTT_PASSWORD` | `--mqtt-password` | empty | No | MQTT password. |
+| `MQTT_PASSWORD_FILE` | `--mqtt-password-file` | empty | No | File containing the MQTT password. |
 | `MQTT_TOPIC_PREFIX` | `--mqtt-topic-prefix` | `jinko-exporter` | Yes | Base topic for availability and state. |
 | `MQTT_DISCOVERY_PREFIX` | `--mqtt-discovery-prefix` | `homeassistant` | Yes | Home Assistant discovery prefix. |
 | `MQTT_DEVICE_NAME` | `--mqtt-device-name` | generated | No | Home Assistant device name. |
@@ -78,12 +86,14 @@ See [Alerts](./alerts.md) for behavior details.
 | Environment variable | CLI flag | Default | Description |
 | --- | --- | --- | --- |
 | `ALERTS_ENABLED` | `--alerts-enabled` | `false` | Enable outbound alerts. |
+| `ALERTS_NOTIFY_RECOVERY` | `--alerts-notify-recovery` | `false` | Send recovery notifications when alert conditions clear. |
 | `ALERTS_COOLDOWN` | `--alerts-cooldown` | `6h` | Minimum time between repeated alerts with the same key. |
 | `SMTP_TIMEOUT` | `--smtp-timeout` | `15s` | SMTP dial/send timeout. |
 | `SMTP_HOST` | `--smtp-host` | empty | SMTP server hostname. |
 | `SMTP_PORT` | `--smtp-port` | `587` | SMTP server port. |
 | `SMTP_USERNAME` | `--smtp-username` | empty | SMTP username. |
 | `SMTP_PASSWORD` | `--smtp-password` | empty | SMTP password. |
+| `SMTP_PASSWORD_FILE` | `--smtp-password-file` | empty | File containing the SMTP password. |
 | `SMTP_FROM_EMAIL` | `--smtp-from-email` | empty | Sender email. |
 | `SMTP_FROM_NAME` | `--smtp-from-name` | empty | Sender display name. |
 | `SMTP_TO_EMAILS` | `--smtp-to-email` | empty | Recipient list. Comma-separated or repeated flag. |

@@ -5,6 +5,7 @@ The recommended installation is the published Docker image. You can also build t
 ## Docker Compose
 
 Create a Compose file on the host that should run the bridge.
+The repository also includes a hardened starter file at `compose.example.yaml`.
 
 ```yaml
 services:
@@ -71,6 +72,22 @@ environment:
 
 If the Jinko endpoint serves a broken TLS certificate, `JINKO_INSECURE_SKIP_VERIFY=true` can bypass certificate verification for Jinko requests only. Use it only as a last resort.
 
+To keep secrets out of Compose environment blocks, mount secret files and point the bridge at them. Secret files are read once when the process starts.
+
+```yaml
+services:
+  jinko_bridge:
+    image: rcooler/jinko_exporter:latest
+    volumes:
+      - ./secrets:/run/secrets:ro
+    environment:
+      EXPORTER_SOURCE: "jinko"
+      JINKO_DEVICE_ID: "100000001"
+      JINKO_SITE_ID: "200000001"
+      JINKO_BEARER_TOKEN_FILE: "/run/secrets/jinko_bearer_token"
+      JINKO_COOKIE_FILE: "/run/secrets/jinko_cookie"
+```
+
 ## Solarman Source
 
 The Solarman source uses Solarman OpenAPI:
@@ -99,6 +116,16 @@ To pace requests against a yearly quota:
 environment:
   SOLARMAN_YEARLY_REQUEST_LIMIT: "200000"
   SOLARMAN_DISCOVERY_REFRESH_INTERVAL: "24h"
+```
+
+Solarman secrets can also come from files:
+
+```yaml
+volumes:
+  - ./secrets:/run/secrets:ro
+environment:
+  SOLARMAN_APP_SECRET_FILE: "/run/secrets/solarman_app_secret"
+  SOLARMAN_PASSWORD_FILE: "/run/secrets/solarman_password"
 ```
 
 ## Source Failover
@@ -154,6 +181,8 @@ MQTT_BROKER: "tcp://mosquitto:1883"
 ```
 
 See [Home Assistant MQTT Discovery](./home-assistant.md) for topics, device naming, and entity naming details.
+
+Use `MQTT_PASSWORD_FILE` and `SMTP_PASSWORD_FILE` when those passwords are mounted as Docker secrets.
 
 ## Build Locally
 

@@ -1,0 +1,27 @@
+{
+  "image": {
+    "width": 941,
+    "height": 1672
+  },
+  "elements": {
+    "frame": {
+      "bbox": [0, 0, 941, 1672]
+    },
+    "summary_cards": [
+      { "id": "production_card", "type": "summary_card", "bbox": [120, 130, 250, 72], "value_box": [120, 130, 250, 72] },
+      { "id": "import_card", "type": "summary_card", "bbox": [545, 130, 250, 72], "value_box": [545, 130, 250, 72] },
+      { "id": "export_card", "type": "summary_card", "bbox": [120, 390, 250, 72], "value_box": [120, 390, 250, 72] },
+      { "id": "consumption_card", "type": "summary_card", "bbox": [545, 390, 250, 72], "value_box": [545, 390, 250, 72] },
+      { "id": "costs_card", "type": "summary_card", "bbox": [120, 650, 250, 72], "value_box": [120, 650, 250, 72] },
+      { "id": "battery_soc_card", "type": "summary_card", "bbox": [545, 650, 250, 72], "value_box": [545, 650, 250, 72] }
+    ],
+    "diagram_nodes": [
+      { "id": "combined_pv", "type": "diagram_node", "bbox": [390, 875, 150, 72], "value_box": [390, 875, 150, 72], "power_value_box": [390, 875, 150, 72] },
+      { "id": "grid_node", "type": "diagram_node", "bbox": [95, 1110, 150, 72], "value_box": [95, 1110, 150, 72], "power_value_box": [95, 1110, 150, 72] },
+      { "id": "inverter_node", "type": "diagram_node", "bbox": [390, 1180, 150, 72], "value_box": [390, 1180, 150, 72], "power_value_box": [390, 1180, 150, 72], "temp_value_box": [395, 1185, 120, 56] },
+      { "id": "combined_load", "type": "diagram_node", "bbox": [720, 1100, 150, 72], "value_box": [720, 1100, 150, 72], "power_value_box": [720, 1100, 150, 72] },
+      { "id": "battery_node", "type": "diagram_node", "bbox": [410, 1385, 150, 72], "value_box": [410, 1385, 150, 72], "power_value_box": [410, 1385, 150, 72] },
+      { "id": "generator_node", "type": "diagram_node", "bbox": [410, 1570, 150, 72], "value_box": [410, 1570, 150, 72], "power_value_box": [410, 1570, 150, 72] }
+    ]
+  }
+}

@@ -1,0 +1,60 @@
+services:
+  jinko_bridge:
+    image: rcooler/jinko_exporter:latest
+    container_name: jinko_bridge
+    restart: unless-stopped
+    ports:
+      - "9876:9876"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      EXPORTER_SOURCE: "jinko"
+      EXPORTER_LISTEN: ":9876"
+      EXPORTER_POLL_INTERVAL: "60s"
+      EXPORTER_METRIC_PREFIX: "solar"
+
+      JINKO_DEVICE_ID: "100000001"
+      JINKO_SITE_ID: "200000001"
+      JINKO_BEARER_TOKEN_FILE: "/run/secrets/jinko_bearer_token"
+      # JINKO_COOKIE_FILE: "/run/secrets/jinko_cookie"
+
+      # MQTT_ENABLED: "true"
+      # MQTT_BROKER: "tcp://homeassistant.local:1883"
+      # MQTT_USERNAME: "<MQTT_USER>"
+      # MQTT_PASSWORD_FILE: "/run/secrets/mqtt_password"
+      # MQTT_TOPIC_PREFIX: "jinko-exporter"
+      # MQTT_DISCOVERY_PREFIX: "homeassistant"
+      # MQTT_RETAIN: "true"
+
+      # To enable Solarman failover, set EXPORTER_SOURCE_PRIORITY to
+      # "jinko,solarman" and provide the Solarman credentials below.
+      # EXPORTER_SOURCE_PRIORITY: "jinko,solarman"
+      # SOLARMAN_APP_ID: "<APP_ID>"
+      # SOLARMAN_APP_SECRET_FILE: "/run/secrets/solarman_app_secret"
+      # SOLARMAN_EMAIL: "<ACCOUNT_EMAIL>"
+      # SOLARMAN_PASSWORD_FILE: "/run/secrets/solarman_password"
+      # SOLARMAN_DEVICE_SN: "<DEVICE_SN>"
+      # SOLARMAN_YEARLY_REQUEST_LIMIT: "200000"
+    secrets:
+      - jinko_bearer_token
+      # - jinko_cookie
+      # - mqtt_password
+      # - solarman_app_secret
+      # - solarman_password
+
+secrets:
+  jinko_bearer_token:
+    file: ./secrets/jinko_bearer_token
+  # jinko_cookie:
+  #   file: ./secrets/jinko_cookie
+  # mqtt_password:
+  #   file: ./secrets/mqtt_password
+  # solarman_app_secret:
+  #   file: ./secrets/solarman_app_secret
+  # solarman_password:
+  #   file: ./secrets/solarman_password
