@@ -69,7 +69,7 @@ The Solarman parser reads `dataList` from `/device/v1.0/currentData` and accepts
 - unit: `unit` or `dataUnit`
 - value: `value` or `val`
 
-Solarman groups are inferred from the key and name. When `EXPORTER_METRICS_DROP_SOURCE_LABEL=true`, Solarman metrics are also canonicalized through the Jinko metric dictionary so failover can keep more stable Prometheus and Home Assistant names.
+Solarman groups are inferred from the key and name. When `SOLARMAN_CANONICAL_JINKO_METRICS=true`, Solarman metrics are also canonicalized through the Jinko metric dictionary so failover can keep more stable Prometheus and Home Assistant names. If this option is not set, it defaults to the legacy value of `EXPORTER_METRICS_DROP_SOURCE_LABEL`.
 
 ## Groups
 

@@ -29,7 +29,10 @@ show_entity_map: false
 battery_negative_is_charging: true
 entities:
   pv_total_power: sensor.example_total_solar_power
+  grid_load_total_power: sensor.example_grid_load_total_power
 ```
+
+When the bridge has `SHELLY_GRID_LOAD_ENABLED=true`, the cards automatically prefer `Grid Load ...` sensors for the grid-load node and fall back to the older derived load calculation when those sensors are missing.
 
 Use `static: true` for development/demo rendering from `src/data/fake-energy-data.json`.
 

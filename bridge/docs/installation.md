@@ -38,7 +38,7 @@ curl http://localhost:9876/readyz
 curl http://localhost:9876/metrics
 ```
 
-`/readyz` returns `503` until the first successful poll.
+`/readyz` returns `503` until the first successful poll, and returns `503` again if the last successful poll is older than three poll intervals. `/healthz` remains a process-health endpoint for Docker healthchecks.
 
 ## Jinko Source
 

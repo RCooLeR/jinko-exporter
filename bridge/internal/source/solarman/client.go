@@ -28,6 +28,8 @@ var _ source.Source = (*Client)(nil)
 
 const yearlyRequestWindow = 365 * 24 * time.Hour
 const maxHTTPResponseBodyBytes = 2 * 1024 * 1024
+const transientRequestAttempts = 2
+const transientRetryBackoff = 100 * time.Millisecond
 
 type Client struct {
 	cfg    config.SolarmanConfig
@@ -253,11 +255,15 @@ func (c *Client) listStationDevices(ctx context.Context, stationID int64) ([]dev
 		return nil, err
 	}
 	var payload struct {
-		DeviceList []device `json:"deviceList"`
+		DeviceList      []device `json:"deviceList"`
+		DeviceListItems []device `json:"deviceListItems"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		c.notifyFailure(ctx, "station-device-list-decode", "", err, raw)
 		return nil, err
+	}
+	if len(payload.DeviceListItems) > 0 {
+		return payload.DeviceListItems, nil
 	}
 	return payload.DeviceList, nil
 }
@@ -431,7 +437,7 @@ func (c *Client) doJSONAuthRetry(ctx context.Context, method, path string, withA
 
 	// Solarman regularly returns 401 when the short-lived token expires. Refresh once and retry
 	// so both discovery and metric reads behave the same way.
-	raw, status, err := c.doJSON(ctx, method, path, withAppLang, true, body)
+	raw, status, err := c.doJSONTransientRetry(ctx, method, path, withAppLang, true, body)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -444,7 +450,57 @@ func (c *Client) doJSONAuthRetry(ctx context.Context, method, path string, withA
 		c.notifyFailure(ctx, "token-refresh-after-401", "", err, raw)
 		return raw, status, fmt.Errorf("solarman token refresh after 401 failed: %w", err)
 	}
-	return c.doJSON(ctx, method, path, withAppLang, true, body)
+	return c.doJSONTransientRetry(ctx, method, path, withAppLang, true, body)
+}
+
+func (c *Client) doJSONTransientRetry(ctx context.Context, method, path string, withAppLang bool, withAuth bool, body any) ([]byte, int, error) {
+	var lastRaw []byte
+	var lastStatus int
+	var lastErr error
+
+	for attempt := 1; attempt <= transientRequestAttempts; attempt++ {
+		raw, status, err := c.doJSON(ctx, method, path, withAppLang, withAuth, body)
+		lastRaw, lastStatus, lastErr = raw, status, err
+		if err == nil && !shouldRetrySolarmanStatus(status) {
+			return raw, status, nil
+		}
+		if status == http.StatusUnauthorized || attempt == transientRequestAttempts {
+			return raw, status, err
+		}
+
+		log.Warn().
+			Err(err).
+			Str("source", c.Name()).
+			Str("path", path).
+			Int("status", status).
+			Int("attempt", attempt).
+			Int("max_attempts", transientRequestAttempts).
+			Dur("retry_in", transientRetryBackoff).
+			Msg("Solarman API request failed transiently, retrying")
+		if err := sleepBeforeSolarmanRetry(ctx, transientRetryBackoff); err != nil {
+			return nil, 0, err
+		}
+	}
+
+	return lastRaw, lastStatus, lastErr
+}
+
+func shouldRetrySolarmanStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+}
+
+func sleepBeforeSolarmanRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *Client) notifyFailure(ctx context.Context, step string, deviceSN string, err error, raw []byte) {

@@ -11,19 +11,21 @@ import (
 )
 
 type Config struct {
-	Source          string
-	SourcePriority  []string
-	ListenAddress   string
-	MetricsPath     string
-	PollInterval    time.Duration
-	LogLevel        string
-	MetricPrefix    string
-	DropSourceLabel bool
-	Alerts          AlertConfig
-	MQTT            MQTTConfig
-	Jinko           JinkoConfig
-	Solarman        SolarmanConfig
-	Modbus          ModbusConfig
+	Source                 string
+	SourcePriority         []string
+	ListenAddress          string
+	MetricsPath            string
+	PollInterval           time.Duration
+	LogLevel               string
+	MetricPrefix           string
+	DropSourceLabel        bool
+	ProjectFailoverMetrics bool
+	Alerts                 AlertConfig
+	MQTT                   MQTTConfig
+	Jinko                  JinkoConfig
+	Solarman               SolarmanConfig
+	Modbus                 ModbusConfig
+	ShellyGridLoad         ShellyGridLoadConfig
 }
 
 func (cfg Config) Redacted() Config {
@@ -124,6 +126,13 @@ type ModbusConfig struct {
 	Timeout      time.Duration
 }
 
+type ShellyGridLoadConfig struct {
+	Enabled bool
+	BaseURL string
+	EMID    int
+	Timeout time.Duration
+}
+
 func Flags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "source", Value: "jinko", Usage: "Data source: jinko, solarman, modbus", EnvVars: []string{"EXPORTER_SOURCE"}},
@@ -134,6 +143,7 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "log-level", Value: "info", Usage: "zerolog level", EnvVars: []string{"EXPORTER_LOG_LEVEL"}},
 		&cli.StringFlag{Name: "metric-prefix", Value: "solar", Usage: "Metric name prefix", EnvVars: []string{"EXPORTER_METRIC_PREFIX"}},
 		&cli.BoolFlag{Name: "metrics-drop-source-label", Value: false, Usage: "Drop the source label from generic exporter metrics; last source sync keeps the source label", EnvVars: []string{"EXPORTER_METRICS_DROP_SOURCE_LABEL"}},
+		&cli.BoolFlag{Name: "source-project-failover-metrics", Value: false, Usage: "Project fallback source metrics onto the primary source metric surface; defaults to metrics-drop-source-label when unset", EnvVars: []string{"EXPORTER_SOURCE_PROJECT_FAILOVER_METRICS"}},
 
 		&cli.BoolFlag{Name: "mqtt-enabled", Value: false, Usage: "Enable read-only Home Assistant MQTT discovery and state publishing", EnvVars: []string{"MQTT_ENABLED"}},
 		&cli.StringFlag{Name: "mqtt-broker", Value: "tcp://localhost:1883", Usage: "MQTT broker URL, for example tcp://homeassistant.local:1883 or tls://broker.example:8883", EnvVars: []string{"MQTT_BROKER"}},
@@ -191,6 +201,7 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "solarman-language", Value: "en", Usage: "Solarman request language", EnvVars: []string{"SOLARMAN_LANGUAGE"}},
 		&cli.DurationFlag{Name: "solarman-timeout", Value: 20 * time.Second, Usage: "Solarman HTTP timeout", EnvVars: []string{"SOLARMAN_TIMEOUT"}},
 		&cli.BoolFlag{Name: "solarman-insecure-skip-verify", Value: false, Usage: "Skip TLS certificate verification for Solarman HTTPS requests; insecure", EnvVars: []string{"SOLARMAN_INSECURE_SKIP_VERIFY"}},
+		&cli.BoolFlag{Name: "solarman-canonical-jinko-metrics", Value: false, Usage: "Canonicalize Solarman points through the Jinko metric dictionary; defaults to metrics-drop-source-label when unset", EnvVars: []string{"SOLARMAN_CANONICAL_JINKO_METRICS"}},
 		&cli.IntFlag{Name: "solarman-yearly-request-limit", Value: 0, Usage: "Solarman yearly API request limit used to pace requests; 0 disables pacing", EnvVars: []string{"SOLARMAN_YEARLY_REQUEST_LIMIT"}},
 		&cli.DurationFlag{Name: "solarman-discovery-refresh-interval", Value: 24 * time.Hour, Usage: "How often Solarman device discovery may refresh; 0 caches discovery forever", EnvVars: []string{"SOLARMAN_DISCOVERY_REFRESH_INTERVAL"}},
 		&cli.StringFlag{Name: "solarman-app-id", Usage: "Solarman OpenAPI appId", EnvVars: []string{"SOLARMAN_APP_ID"}},
@@ -209,6 +220,11 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "modbus-logger-serial", Usage: "Logger serial needed by Solarman V5-over-TCP devices", EnvVars: []string{"MODBUS_LOGGER_SERIAL"}},
 		&cli.UintFlag{Name: "modbus-unit-id", Value: 1, Usage: "Modbus unit/slave ID", EnvVars: []string{"MODBUS_UNIT_ID"}},
 		&cli.DurationFlag{Name: "modbus-timeout", Value: 5 * time.Second, Usage: "Modbus timeout", EnvVars: []string{"MODBUS_TIMEOUT"}},
+
+		&cli.BoolFlag{Name: "shelly-grid-load-enabled", Value: false, Usage: "Append grid-load metrics from a Shelly Pro 3EM meter to the selected inverter source", EnvVars: []string{"SHELLY_GRID_LOAD_ENABLED"}},
+		&cli.StringFlag{Name: "shelly-grid-load-url", Usage: "Shelly Pro 3EM base URL, for example http://192.168.120.50", EnvVars: []string{"SHELLY_GRID_LOAD_URL"}},
+		&cli.IntFlag{Name: "shelly-grid-load-em-id", Value: 0, Usage: "Shelly EM component id used for grid-load measurements", EnvVars: []string{"SHELLY_GRID_LOAD_EM_ID"}},
+		&cli.DurationFlag{Name: "shelly-grid-load-timeout", Value: 5 * time.Second, Usage: "Shelly HTTP timeout", EnvVars: []string{"SHELLY_GRID_LOAD_TIMEOUT"}},
 	}
 }
 
@@ -242,15 +258,18 @@ func FromCLI(c *cli.Context) (Config, error) {
 		return Config{}, err
 	}
 
+	dropSourceLabel := c.Bool("metrics-drop-source-label")
+
 	cfg := Config{
-		Source:          strings.ToLower(strings.TrimSpace(c.String("source"))),
-		SourcePriority:  normalizeSourceList(c.String("source-priority")),
-		ListenAddress:   c.String("listen"),
-		MetricsPath:     c.String("metrics-path"),
-		PollInterval:    c.Duration("poll-interval"),
-		LogLevel:        c.String("log-level"),
-		MetricPrefix:    strings.TrimSpace(c.String("metric-prefix")),
-		DropSourceLabel: c.Bool("metrics-drop-source-label"),
+		Source:                 strings.ToLower(strings.TrimSpace(c.String("source"))),
+		SourcePriority:         normalizeSourceList(c.String("source-priority")),
+		ListenAddress:          c.String("listen"),
+		MetricsPath:            c.String("metrics-path"),
+		PollInterval:           c.Duration("poll-interval"),
+		LogLevel:               c.String("log-level"),
+		MetricPrefix:           strings.TrimSpace(c.String("metric-prefix")),
+		DropSourceLabel:        dropSourceLabel,
+		ProjectFailoverMetrics: boolWithLegacyDefault(c, "source-project-failover-metrics", dropSourceLabel),
 		MQTT: MQTTConfig{
 			Enabled:            c.Bool("mqtt-enabled"),
 			Broker:             c.String("mqtt-broker"),
@@ -307,7 +326,7 @@ func FromCLI(c *cli.Context) (Config, error) {
 			Language:                 c.String("solarman-language"),
 			Timeout:                  c.Duration("solarman-timeout"),
 			InsecureSkipVerify:       c.Bool("solarman-insecure-skip-verify"),
-			CanonicalJinkoMetrics:    c.Bool("metrics-drop-source-label"),
+			CanonicalJinkoMetrics:    boolWithLegacyDefault(c, "solarman-canonical-jinko-metrics", dropSourceLabel),
 			YearlyRequestLimit:       c.Int("solarman-yearly-request-limit"),
 			DiscoveryRefreshInterval: c.Duration("solarman-discovery-refresh-interval"),
 			AppID:                    c.String("solarman-app-id"),
@@ -324,6 +343,12 @@ func FromCLI(c *cli.Context) (Config, error) {
 			LoggerSerial: c.String("modbus-logger-serial"),
 			UnitID:       c.Uint("modbus-unit-id"),
 			Timeout:      c.Duration("modbus-timeout"),
+		},
+		ShellyGridLoad: ShellyGridLoadConfig{
+			Enabled: c.Bool("shelly-grid-load-enabled"),
+			BaseURL: c.String("shelly-grid-load-url"),
+			EMID:    c.Int("shelly-grid-load-em-id"),
+			Timeout: c.Duration("shelly-grid-load-timeout"),
 		},
 	}
 
@@ -416,6 +441,18 @@ func validate(cfg Config) error {
 		}
 	}
 
+	if cfg.ShellyGridLoad.Enabled {
+		if strings.TrimSpace(cfg.ShellyGridLoad.BaseURL) == "" {
+			return fmt.Errorf("shelly-grid-load-url is required when shelly-grid-load-enabled is set")
+		}
+		if cfg.ShellyGridLoad.EMID < 0 {
+			return fmt.Errorf("shelly-grid-load-em-id must be >= 0")
+		}
+		if cfg.ShellyGridLoad.Timeout <= 0 {
+			return fmt.Errorf("shelly-grid-load-timeout must be > 0 when Shelly grid-load collection is enabled")
+		}
+	}
+
 	seenSources := make(map[string]struct{}, len(cfg.SourcePriority))
 	for _, sourceName := range cfg.SourcePriority {
 		if _, ok := seenSources[sourceName]; ok {
@@ -428,6 +465,13 @@ func validate(cfg Config) error {
 		}
 	}
 	return nil
+}
+
+func boolWithLegacyDefault(c *cli.Context, name string, legacyDefault bool) bool {
+	if c.IsSet(name) {
+		return c.Bool(name)
+	}
+	return legacyDefault
 }
 
 func validateListenAddress(address string) error {

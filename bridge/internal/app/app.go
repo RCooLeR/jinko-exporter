@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/source"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/source/jinko"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/source/modbus"
+	"github.com/RCooLeR/jinko-exporter/bridge/internal/source/shelly"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/source/solarman"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -63,11 +67,19 @@ func Run(args []string) int {
 				Name:  "healthcheck",
 				Usage: "Check the exporter HTTP health endpoint",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "url", Value: "http://127.0.0.1:9876/healthz", Usage: "Health endpoint URL", EnvVars: []string{"EXPORTER_HEALTHCHECK_URL"}},
+					&cli.StringFlag{Name: "url", Usage: "Health endpoint URL; defaults to EXPORTER_LISTEN with /healthz", EnvVars: []string{"EXPORTER_HEALTHCHECK_URL"}},
 					&cli.DurationFlag{Name: "timeout", Value: 5 * time.Second, Usage: "Healthcheck timeout", EnvVars: []string{"EXPORTER_HEALTHCHECK_TIMEOUT"}},
 				},
 				Action: func(ctx *cli.Context) error {
-					return runHealthcheck(ctx.Context, ctx.String("url"), ctx.Duration("timeout"))
+					endpoint := ctx.String("url")
+					if endpoint == "" {
+						var err error
+						endpoint, err = defaultHealthcheckURL(ctx.String("listen"))
+						if err != nil {
+							return err
+						}
+					}
+					return runHealthcheck(ctx.Context, endpoint, ctx.Duration("timeout"))
 				},
 			},
 		},
@@ -145,12 +157,12 @@ func runServe(parent context.Context, cfg config.Config) error {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if state.HasSnapshot() {
+		if state.Ready(3 * cfg.PollInterval) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ready\n"))
 			return
 		}
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
+		http.Error(w, "not ready or stale", http.StatusServiceUnavailable)
 	})
 
 	server := &http.Server{
@@ -205,6 +217,28 @@ func runFetch(ctx context.Context, cfg config.Config) error {
 	return enc.Encode(snapshot)
 }
 
+func defaultHealthcheckURL(listenAddress string) (string, error) {
+	host, port, err := net.SplitHostPort(listenAddress)
+	if err != nil {
+		return "", fmt.Errorf("build healthcheck URL from listen address: %w", err)
+	}
+	if port == "" {
+		return "", fmt.Errorf("build healthcheck URL from listen address: port is required")
+	}
+
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+
+	u := url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(host, port),
+		Path:   "/healthz",
+	}
+	return u.String(), nil
+}
+
 func runHealthcheck(parent context.Context, endpoint string, timeout time.Duration) error {
 	if timeout <= 0 {
 		return fmt.Errorf("healthcheck timeout must be > 0")
@@ -239,9 +273,9 @@ func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error
 		sources = append(sources, src)
 	}
 	if len(sources) == 1 {
-		return sources[0], nil
+		return enrichSource(sources[0], cfg)
 	}
-	return source.NewPriority(sources, cfg.DropSourceLabel), nil
+	return enrichSource(source.NewPriority(sources, cfg.ProjectFailoverMetrics), cfg)
 }
 
 func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manager) (source.Source, error) {
@@ -255,6 +289,17 @@ func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manag
 	default:
 		return nil, fmt.Errorf("unsupported source %q", sourceName)
 	}
+}
+
+func enrichSource(src source.Source, cfg config.Config) (source.Source, error) {
+	if !cfg.ShellyGridLoad.Enabled {
+		return src, nil
+	}
+	gridLoad, err := shelly.NewGridLoadClient(cfg.ShellyGridLoad)
+	if err != nil {
+		return nil, err
+	}
+	return source.NewEnriched(src, gridLoad), nil
 }
 
 func buildAlerts(cfg config.Config) (*alert.Manager, error) {

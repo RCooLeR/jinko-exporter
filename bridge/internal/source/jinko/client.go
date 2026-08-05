@@ -119,6 +119,9 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		log.Error().Err(err).Str("source", c.Name()).Str("url", c.cfg.URL).Msg("failed to parse Jinko detail response")
 		return nil, err
 	}
+	if len(snapshot.Metrics) == 0 {
+		return nil, fmt.Errorf("jinko detail response contained no metrics: body=%s", truncateBodyForError(raw))
+	}
 	snapshot.Source = c.Name()
 	snapshot.DeviceID = c.deviceID
 	snapshot.SiteID = c.siteID
@@ -325,6 +328,14 @@ func readResponseBody(body io.Reader) ([]byte, error) {
 		return raw[:maxHTTPResponseBodyBytes], fmt.Errorf("response body exceeds %d bytes", maxHTTPResponseBodyBytes)
 	}
 	return raw, nil
+}
+
+func truncateBodyForError(raw []byte) string {
+	body := strings.TrimSpace(string(raw))
+	if len(body) > 500 {
+		return body[:500] + "...(truncated)"
+	}
+	return body
 }
 
 func bearerExpiry(token string) (time.Time, bool) {

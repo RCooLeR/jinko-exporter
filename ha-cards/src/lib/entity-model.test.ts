@@ -22,6 +22,18 @@ test("resolveEntities matches friendly names and entity ids", () => {
   assert.equal(resolved.battery_soc, "sensor.jinko_bms_soc");
 });
 
+test("resolveEntities matches Shelly-backed grid load sensors", () => {
+  const hass = hassWithStates({
+    "sensor.jinko_grid_load_total_power": state("1533", "Jinko Grid Load Total Power"),
+    "sensor.jinko_grid_load_l1_current": state("1.1", "Jinko Grid Load L1 Current"),
+  });
+
+  const resolved = resolveEntities(hass, {}, ["grid_load_total_power", "grid_load_l1_current"]);
+
+  assert.equal(resolved.grid_load_total_power, "sensor.jinko_grid_load_total_power");
+  assert.equal(resolved.grid_load_l1_current, "sensor.jinko_grid_load_l1_current");
+});
+
 test("explicit overrides win when the entity exists", () => {
   const hass = hassWithStates({
     "sensor.custom_pv": state("777", "My custom PV"),

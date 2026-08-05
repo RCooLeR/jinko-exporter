@@ -16,6 +16,7 @@ For secret values, the direct value takes precedence over the matching `*_FILE` 
 | `EXPORTER_LOG_LEVEL` | `--log-level` | `info` | Zerolog level such as `debug`, `info`, `warn`, or `error`. |
 | `EXPORTER_METRIC_PREFIX` | `--metric-prefix` | `solar` | Prefix for Prometheus metric names. Must not be empty after trimming underscores. |
 | `EXPORTER_METRICS_DROP_SOURCE_LABEL` | `--metrics-drop-source-label` | `false` | Drops the `source` label from most generic metric series. |
+| `EXPORTER_SOURCE_PROJECT_FAILOVER_METRICS` | `--source-project-failover-metrics` | value of `metrics-drop-source-label` | Projects fallback source metrics onto the primary source metric surface when priority failover is used. |
 
 ## Jinko Options
 
@@ -47,6 +48,7 @@ For secret values, the direct value takes precedence over the matching `*_FILE` 
 | `SOLARMAN_LANGUAGE` | `--solarman-language` | `en` | No | Request language. |
 | `SOLARMAN_TIMEOUT` | `--solarman-timeout` | `20s` | No | HTTP timeout. |
 | `SOLARMAN_INSECURE_SKIP_VERIFY` | `--solarman-insecure-skip-verify` | `false` | No | Skip TLS verification for Solarman HTTPS requests. |
+| `SOLARMAN_CANONICAL_JINKO_METRICS` | `--solarman-canonical-jinko-metrics` | value of `metrics-drop-source-label` | No | Canonicalize Solarman telemetry through the Jinko metric dictionary for stable names and groups. |
 | `SOLARMAN_YEARLY_REQUEST_LIMIT` | `--solarman-yearly-request-limit` | `0` | No | Request pacing budget. `0` disables pacing. |
 | `SOLARMAN_DISCOVERY_REFRESH_INTERVAL` | `--solarman-discovery-refresh-interval` | `24h` | No | Device discovery cache refresh interval. `0` caches forever. |
 | `SOLARMAN_APP_ID` | `--solarman-app-id` | empty | Yes | OpenAPI app ID. |
@@ -59,6 +61,19 @@ For secret values, the direct value takes precedence over the matching `*_FILE` 
 | `SOLARMAN_PASSWORD_SHA256_FILE` | `--solarman-password-sha256-file` | empty | One password option | File containing the precomputed SHA256 password hex. |
 | `SOLARMAN_DEVICE_SN` | `--solarman-device-sn` | empty | No | Device serial. Skips discovery when set. |
 | `SOLARMAN_STATION_ID` | `--solarman-station-id` | empty | No | Station ID used during discovery. |
+
+## Shelly Grid Load Options
+
+Shelly grid-load collection is an optional enrichment layer for hybrid inverter setups where the inverter does not directly report non-backup/grid-side load. When enabled, the bridge still polls the selected inverter source, then appends `grid_load_*` metrics from a Shelly Pro 3EM Gen2 RPC device.
+
+If the Shelly request fails, the inverter poll remains successful and the Shelly-backed Home Assistant entities are left missing or `null` until the next successful Shelly read.
+
+| Environment variable | CLI flag | Default | Required when enabled | Description |
+| --- | --- | --- | --- | --- |
+| `SHELLY_GRID_LOAD_ENABLED` | `--shelly-grid-load-enabled` | `false` | No | Enable Shelly Pro 3EM grid-load metric enrichment. |
+| `SHELLY_GRID_LOAD_URL` | `--shelly-grid-load-url` | empty | Yes | Shelly base URL, for example `http://192.168.120.50`. |
+| `SHELLY_GRID_LOAD_EM_ID` | `--shelly-grid-load-em-id` | `0` | No | Shelly EM component id. |
+| `SHELLY_GRID_LOAD_TIMEOUT` | `--shelly-grid-load-timeout` | `5s` | No | Shelly HTTP timeout. |
 
 ## MQTT Options
 

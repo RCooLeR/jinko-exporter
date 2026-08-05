@@ -14,14 +14,16 @@ type Collector struct {
 	state           *poller.State
 	dropSourceLabel bool
 
-	upDesc             *prometheus.Desc
-	buildInfoDesc      *prometheus.Desc
-	pollSuccessDesc    *prometheus.Desc
-	lastUpdateDesc     *prometheus.Desc
-	lastSourceSyncDesc *prometheus.Desc
-	pollDurationDesc   *prometheus.Desc
-	errorCountDesc     *prometheus.Desc
-	valueDesc          *prometheus.Desc
+	upDesc              *prometheus.Desc
+	buildInfoDesc       *prometheus.Desc
+	pollSuccessDesc     *prometheus.Desc
+	pollCountDesc       *prometheus.Desc
+	lastUpdateDesc      *prometheus.Desc
+	lastPollSuccessDesc *prometheus.Desc
+	lastSourceSyncDesc  *prometheus.Desc
+	pollDurationDesc    *prometheus.Desc
+	errorCountDesc      *prometheus.Desc
+	valueDesc           *prometheus.Desc
 }
 
 func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Collector {
@@ -34,6 +36,7 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Col
 		deviceLabels = []string{"device_sn"}
 		valueLabels = []string{"device_sn", "group", "key", "name", "unit"}
 	}
+	pollCountLabels := append(append([]string{}, sourceLabels...), "result")
 
 	return &Collector{
 		state:           state,
@@ -56,10 +59,22 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Col
 			sourceLabels,
 			nil,
 		),
+		pollCountDesc: prometheus.NewDesc(
+			prefix+"_polls_total",
+			"Total number of polls by result.",
+			pollCountLabels,
+			nil,
+		),
 		lastUpdateDesc: prometheus.NewDesc(
 			prefix+"_last_update_timestamp_seconds",
 			"Unix timestamp of the last successful upstream update.",
 			deviceLabels,
+			nil,
+		),
+		lastPollSuccessDesc: prometheus.NewDesc(
+			prefix+"_last_poll_success_timestamp_seconds",
+			"Unix timestamp when the exporter last completed a successful poll.",
+			sourceLabels,
 			nil,
 		),
 		lastSourceSyncDesc: prometheus.NewDesc(
@@ -93,7 +108,9 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.upDesc
 	ch <- c.buildInfoDesc
 	ch <- c.pollSuccessDesc
+	ch <- c.pollCountDesc
 	ch <- c.lastUpdateDesc
+	ch <- c.lastPollSuccessDesc
 	ch <- c.lastSourceSyncDesc
 	ch <- c.pollDurationDesc
 	ch <- c.errorCountDesc
@@ -101,8 +118,12 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
-	snapshot, lastDuration, _, lastSuccessAt, up, errorCount := c.state.Snapshot()
-	sourceName := "unknown"
+	status := c.state.Status()
+	snapshot := status.Snapshot
+	sourceName := strings.TrimSpace(status.SourceName)
+	if sourceName == "" {
+		sourceName = "unknown"
+	}
 	deviceSN := "unknown"
 	if snapshot != nil {
 		sourceName = snapshot.Source
@@ -112,18 +133,23 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	upValue := 0.0
-	if up {
+	if status.Up {
 		upValue = 1
 	}
 	ch <- prometheus.MustNewConstMetric(c.buildInfoDesc, prometheus.GaugeValue, 1, buildinfo.Version, buildinfo.Commit, buildinfo.Date)
 	ch <- prometheus.MustNewConstMetric(c.upDesc, prometheus.GaugeValue, upValue, c.deviceLabelValues(sourceName, deviceSN)...)
 	ch <- prometheus.MustNewConstMetric(c.pollSuccessDesc, prometheus.GaugeValue, upValue, c.sourceLabelValues(sourceName)...)
-	ch <- prometheus.MustNewConstMetric(c.pollDurationDesc, prometheus.GaugeValue, lastDuration.Seconds(), c.sourceLabelValues(sourceName)...)
-	ch <- prometheus.MustNewConstMetric(c.errorCountDesc, prometheus.CounterValue, float64(errorCount), c.sourceLabelValues(sourceName)...)
-	if !lastSuccessAt.IsZero() {
-		syncTimestamp := float64(lastSuccessAt.Unix())
+	ch <- prometheus.MustNewConstMetric(c.pollCountDesc, prometheus.CounterValue, float64(status.SuccessCount), c.pollCountLabelValues(sourceName, "success")...)
+	ch <- prometheus.MustNewConstMetric(c.pollCountDesc, prometheus.CounterValue, float64(status.ErrorCount), c.pollCountLabelValues(sourceName, "error")...)
+	ch <- prometheus.MustNewConstMetric(c.pollDurationDesc, prometheus.GaugeValue, status.LastPollDuration.Seconds(), c.sourceLabelValues(sourceName)...)
+	ch <- prometheus.MustNewConstMetric(c.errorCountDesc, prometheus.CounterValue, float64(status.ErrorCount), c.sourceLabelValues(sourceName)...)
+	if !status.LastSourceSuccessAt.IsZero() {
+		syncTimestamp := float64(status.LastSourceSuccessAt.Unix())
 		ch <- prometheus.MustNewConstMetric(c.lastUpdateDesc, prometheus.GaugeValue, syncTimestamp, c.deviceLabelValues(sourceName, deviceSN)...)
 		ch <- prometheus.MustNewConstMetric(c.lastSourceSyncDesc, prometheus.GaugeValue, syncTimestamp, sourceName)
+	}
+	if !status.LastPollSuccessAt.IsZero() {
+		ch <- prometheus.MustNewConstMetric(c.lastPollSuccessDesc, prometheus.GaugeValue, float64(status.LastPollSuccessAt.Unix()), c.sourceLabelValues(sourceName)...)
 	}
 
 	if snapshot == nil {
@@ -176,6 +202,10 @@ func (c *Collector) sourceLabelValues(sourceName string) []string {
 		return nil
 	}
 	return []string{sourceName}
+}
+
+func (c *Collector) pollCountLabelValues(sourceName string, result string) []string {
+	return append(c.sourceLabelValues(sourceName), result)
 }
 
 func (c *Collector) deviceLabelValues(sourceName, deviceSN string) []string {

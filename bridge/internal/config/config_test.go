@@ -139,6 +139,97 @@ func TestFromCLIDirectSecretValueTakesPrecedenceOverFile(t *testing.T) {
 	}
 }
 
+func TestFromCLIIndependentFailoverMetricFlagsKeepLegacyDefaults(t *testing.T) {
+	baseArgs := []string{
+		"--source-priority", "jinko,solarman",
+		"--jinko-device-id", "100",
+		"--jinko-site-id", "200",
+		"--jinko-bearer-token", "token",
+		"--solarman-app-id", "app-id",
+		"--solarman-app-secret", "secret",
+		"--solarman-email", "solar@example.test",
+		"--solarman-password-sha256", "sha",
+	}
+
+	tests := []struct {
+		name                string
+		args                []string
+		wantDropSourceLabel bool
+		wantProjectFailover bool
+		wantCanonical       bool
+	}{
+		{
+			name:                "default legacy false",
+			wantDropSourceLabel: false,
+			wantProjectFailover: false,
+			wantCanonical:       false,
+		},
+		{
+			name:                "legacy drop source label keeps coupled defaults",
+			args:                []string{"--metrics-drop-source-label"},
+			wantDropSourceLabel: true,
+			wantProjectFailover: true,
+			wantCanonical:       true,
+		},
+		{
+			name:                "explicit flags can enable behavior independently",
+			args:                []string{"--source-project-failover-metrics", "--solarman-canonical-jinko-metrics"},
+			wantDropSourceLabel: false,
+			wantProjectFailover: true,
+			wantCanonical:       true,
+		},
+		{
+			name:                "explicit flags override legacy true",
+			args:                []string{"--metrics-drop-source-label", "--source-project-failover-metrics=false", "--solarman-canonical-jinko-metrics=false"},
+			wantDropSourceLabel: true,
+			wantProjectFailover: false,
+			wantCanonical:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := mustConfigFromArgs(t, append(baseArgs, tt.args...)...)
+
+			if cfg.DropSourceLabel != tt.wantDropSourceLabel {
+				t.Fatalf("DropSourceLabel = %v, want %v", cfg.DropSourceLabel, tt.wantDropSourceLabel)
+			}
+			if cfg.ProjectFailoverMetrics != tt.wantProjectFailover {
+				t.Fatalf("ProjectFailoverMetrics = %v, want %v", cfg.ProjectFailoverMetrics, tt.wantProjectFailover)
+			}
+			if cfg.Solarman.CanonicalJinkoMetrics != tt.wantCanonical {
+				t.Fatalf("Solarman.CanonicalJinkoMetrics = %v, want %v", cfg.Solarman.CanonicalJinkoMetrics, tt.wantCanonical)
+			}
+		})
+	}
+}
+
+func TestFromCLIShellyGridLoadConfig(t *testing.T) {
+	cfg := mustConfigFromArgs(t,
+		"--source", "jinko",
+		"--jinko-device-id", "100",
+		"--jinko-site-id", "200",
+		"--jinko-bearer-token", "token",
+		"--shelly-grid-load-enabled",
+		"--shelly-grid-load-url", "http://192.168.120.50",
+		"--shelly-grid-load-em-id", "1",
+		"--shelly-grid-load-timeout", "3s",
+	)
+
+	if !cfg.ShellyGridLoad.Enabled {
+		t.Fatal("ShellyGridLoad.Enabled = false, want true")
+	}
+	if cfg.ShellyGridLoad.BaseURL != "http://192.168.120.50" {
+		t.Fatalf("ShellyGridLoad.BaseURL = %q", cfg.ShellyGridLoad.BaseURL)
+	}
+	if cfg.ShellyGridLoad.EMID != 1 {
+		t.Fatalf("ShellyGridLoad.EMID = %d, want 1", cfg.ShellyGridLoad.EMID)
+	}
+	if cfg.ShellyGridLoad.Timeout != 3*time.Second {
+		t.Fatalf("ShellyGridLoad.Timeout = %s, want 3s", cfg.ShellyGridLoad.Timeout)
+	}
+}
+
 func TestFromCLISecretFileReadError(t *testing.T) {
 	err := runConfigFromArgs(
 		t,
@@ -178,6 +269,16 @@ func TestFromCLIRejectsInvalidServerConfig(t *testing.T) {
 			name:    "empty metric prefix",
 			args:    []string{"--metric-prefix", "___"},
 			wantErr: "metric-prefix is required",
+		},
+		{
+			name:    "shelly enabled without url",
+			args:    []string{"--shelly-grid-load-enabled"},
+			wantErr: "shelly-grid-load-url is required",
+		},
+		{
+			name:    "bad shelly timeout",
+			args:    []string{"--shelly-grid-load-enabled", "--shelly-grid-load-url", "http://shelly.test", "--shelly-grid-load-timeout", "0s"},
+			wantErr: "shelly-grid-load-timeout must be > 0",
 		},
 	}
 

@@ -105,15 +105,57 @@ func TestCollectorExportsBuildInfoAndPollSuccess(t *testing.T) {
 	if got := pollSuccess.GetMetric()[0].GetGauge().GetValue(); got != 1 {
 		t.Fatalf("poll_success value = %v, want 1", got)
 	}
+
+	pollsTotal := metricFamily(t, families, "solar_polls_total")
+	if got := counterValueForLabels(t, pollsTotal, map[string]string{"source": "jinko", "result": "success"}); got != 1 {
+		t.Fatalf("polls_total success = %v, want 1", got)
+	}
+	if got := counterValueForLabels(t, pollsTotal, map[string]string{"source": "jinko", "result": "error"}); got != 0 {
+		t.Fatalf("polls_total error = %v, want 0", got)
+	}
+
+	lastPollSuccess := metricFamily(t, families, "solar_last_poll_success_timestamp_seconds")
+	if got := len(lastPollSuccess.GetMetric()); got != 1 {
+		t.Fatalf("last_poll_success metric count = %d, want 1", got)
+	}
+	lastPollSuccessLabels := metricLabels(lastPollSuccess.GetMetric()[0])
+	if lastPollSuccessLabels["source"] != "jinko" {
+		t.Fatalf("last_poll_success source label = %q, want jinko", lastPollSuccessLabels["source"])
+	}
+	if got := lastPollSuccess.GetMetric()[0].GetGauge().GetValue(); got <= 0 {
+		t.Fatalf("last_poll_success value = %v, want positive timestamp", got)
+	}
 }
 
 func TestCollectorDropSourceLabelDropsPollSuccessSourceLabel(t *testing.T) {
 	state := poller.NewState("jinko")
+	snapshot := &model.Snapshot{
+		Source:      "jinko",
+		DeviceSN:    "ABC123",
+		CollectedAt: time.Unix(1775145150, 0).UTC(),
+		Metrics:     []model.Metric{{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 123}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := poller.NewRunner(staticSource{snapshot: snapshot}, time.Hour, state, nil, config.AlertConfig{})
+	go runner.Run(ctx)
+	waitForSnapshot(t, state)
+
 	families := gatherCollector(t, NewCollector("solar", state, true))
 
 	pollSuccess := metricFamily(t, families, "solar_poll_success")
 	if got := metricLabelNames(pollSuccess.GetMetric()[0]); len(got) != 0 {
 		t.Fatalf("poll_success labels = %v, want none when source label is dropped", got)
+	}
+
+	pollsTotal := metricFamily(t, families, "solar_polls_total")
+	if got := metricLabelNames(pollsTotal.GetMetric()[0]); len(got) != 1 || got[0] != "result" {
+		t.Fatalf("polls_total labels = %v, want only result when source label is dropped", got)
+	}
+
+	lastPollSuccess := metricFamily(t, families, "solar_last_poll_success_timestamp_seconds")
+	if got := metricLabelNames(lastPollSuccess.GetMetric()[0]); len(got) != 0 {
+		t.Fatalf("last_poll_success labels = %v, want none when source label is dropped", got)
 	}
 }
 
@@ -180,4 +222,23 @@ func metricLabelNames(metric *dto.Metric) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func counterValueForLabels(t *testing.T, family *dto.MetricFamily, labels map[string]string) float64 {
+	t.Helper()
+	for _, metric := range family.GetMetric() {
+		labelsByName := metricLabels(metric)
+		matches := true
+		for name, want := range labels {
+			if labelsByName[name] != want {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return metric.GetCounter().GetValue()
+		}
+	}
+	t.Fatalf("metric family %q has no metric with labels %#v", family.GetName(), labels)
+	return 0
 }

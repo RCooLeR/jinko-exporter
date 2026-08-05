@@ -66,6 +66,20 @@ func TestFetchRetriesServerErrors(t *testing.T) {
 	}
 }
 
+func TestFetchRejectsMetriclessSuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":false,"msg":"token expired"}`))
+	}))
+	defer server.Close()
+
+	client := New(testJinkoConfig(server.URL), nil)
+	_, err := client.Fetch(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "contained no metrics") {
+		t.Fatalf("Fetch() error = %v, want metricless response error", err)
+	}
+}
+
 func TestReadResponseBodyRejectsOversizedBody(t *testing.T) {
 	body := strings.NewReader(strings.Repeat("x", maxHTTPResponseBodyBytes+1))
 	if _, err := readResponseBody(body); err == nil {

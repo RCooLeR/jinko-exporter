@@ -35,7 +35,7 @@ The bridge is the Go service in this repository. It reads solar telemetry from o
 | --- | --- |
 | `/metrics` | Prometheus scrape endpoint. Configurable with `EXPORTER_METRICS_PATH`. |
 | `/healthz` | Process health. Returns `200 OK` when the HTTP server is running. |
-| `/readyz` | Readiness. Returns `200 OK` only after the first successful poll. |
+| `/readyz` | Readiness. Returns `200 OK` after a recent successful poll, and `503` before the first poll or after sustained poll failures. |
 
 ## Data Flow
 

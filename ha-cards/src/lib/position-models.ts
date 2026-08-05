@@ -7,6 +7,7 @@ export interface PositionBoxModel {
   heightPercent?: number;
   fontScale?: number;
   fontSizePx?: number;
+  minFontSizePx?: number;
   xOffsetPx?: number;
   yOffsetPx?: number;
   textAlign?: "left" | "center" | "right";
@@ -49,84 +50,84 @@ export const DETAILED_CARD_POSITIONS: ResponsiveCardPositionModels = {
     },
     ups_load: {
       rows: {
-        voltage: { topPercent: 12.7 },
-        current: {},
-        power: { topPercent: 21.8 },
-        energy_today: {}
+        voltage: { leftPercent: 30.4, topPercent: 12.7, widthPercent: 10.8 },
+        current: { leftPercent: 30.4, topPercent: 16.8, widthPercent: 10.8 },
+        power: { leftPercent: 30.4, topPercent: 21.7, widthPercent: 10.8 },
+        energy_today: { leftPercent: 30.4, widthPercent: 10.8 }
       }
     },
     pv1: {
       rows: {
-        voltage: { leftPercent: 55.4, topPercent: 12.4 },
-        current: { leftPercent: 55.4, topPercent: 17 },
-        power: { leftPercent: 55.4, topPercent: 21.5 },
-        energy_today: { leftPercent: 55.4, topPercent: 26 }
+        voltage: { leftPercent: 58, topPercent: 12.4, widthPercent: 6.5 },
+        current: { leftPercent: 58, topPercent: 17, widthPercent: 6.5 },
+        power: { leftPercent: 58, topPercent: 21.5, widthPercent: 6.5 },
+        energy_today: { leftPercent: 58, topPercent: 26, widthPercent: 6.5 }
       }
     },
     pv2: {
       rows: {
-        voltage: { leftPercent: 71.5, topPercent: 12.4 },
-        current: { leftPercent: 71.5, topPercent: 17 },
-        power: { leftPercent: 71.5, topPercent: 21.5 },
-        energy_today: { leftPercent: 71.5, topPercent: 26 }
+        voltage: { leftPercent: 73.2, topPercent: 12.4, widthPercent: 6.5 },
+        current: { leftPercent: 73.2, topPercent: 17, widthPercent: 6.5 },
+        power: { leftPercent: 73.2, topPercent: 21.5, widthPercent: 6.5 },
+        energy_today: { leftPercent: 73.2, topPercent: 26, widthPercent: 6.5 }
       }
     },
     grid: {
       rows: {
-        voltage: { leftPercent: 91 },
-        current: { leftPercent: 91 },
-        power: { leftPercent: 91 },
-        energy_today: { leftPercent: 91, topPercent: 27.5 }
+        voltage: { leftPercent: 87.4, topPercent: 12.4, widthPercent: 8.8 },
+        current: { leftPercent: 87.4, topPercent: 17, widthPercent: 8.8 },
+        power: { leftPercent: 87.4, topPercent: 21.5, widthPercent: 8.8 },
+        energy_today: { leftPercent: 87.4, topPercent: 27.5, widthPercent: 8.8 }
       }
     },
     battery: {
       rows: {
-        voltage: { topPercent: 54 },
-        current: { topPercent: 58.1 },
-        power: { topPercent: 62.5 }
+        voltage: { leftPercent: 28.2, topPercent: 54, widthPercent: 6.4 },
+        current: { leftPercent: 28.2, topPercent: 58.1, widthPercent: 6.4 },
+        power: { leftPercent: 28.2, topPercent: 62.5, widthPercent: 6.4 }
       },
       extras: {
-        soc: { leftPercent: 29.5, topPercent: 72.4, fontScale: 0.8 },
-        energy_today: { topPercent: 84.8 }
+        soc: { leftPercent: 28.1, topPercent: 72.2, fontScale: 0.8 },
+        energy_today: { leftPercent: 28.2, topPercent: 84.8, widthPercent: 6.4 }
       }
     },
     inverter: {
       rows: {
-        voltage: { leftPercent: 56.3, topPercent: 46.2 },
-        current: { leftPercent: 56.3, topPercent: 51 },
-        power: { leftPercent: 56.3, topPercent: 55.5 },
-        energy_today: { leftPercent: 56.3, topPercent: 61.5 }
+        voltage: { leftPercent: 53.4, topPercent: 46.2, widthPercent: 7.9 },
+        current: { leftPercent: 53.4, topPercent: 51, widthPercent: 7.9 },
+        power: { leftPercent: 54.6, topPercent: 55.5, widthPercent: 6.7 },
+        energy_today: { leftPercent: 55.8, topPercent: 61.5, widthPercent: 7.2 }
       },
       extras: {
-        temp: { leftPercent: 66, topPercent: 52.8, fontScale: 0.8 },
-        status: { leftPercent: 65, topPercent: 61.7, widthPercent: 9 }
+        temp: { leftPercent: 65.1, topPercent: 56.5, fontScale: 0.8 },
+        status: { fontScale: 0.5, textAlign: "center", justifyContent: "center" }
       }
     },
     generator: {
       rows: {
-        voltage: { leftPercent: 63, topPercent: 78.4 },
-        current: { leftPercent: 63, topPercent: 82.4 },
-        power: { leftPercent: 63 },
-        energy_today: { leftPercent: 63, topPercent: 91.4 }
+        voltage: { leftPercent: 66, topPercent: 78.4, widthPercent: 8.5 },
+        current: { leftPercent: 66, topPercent: 82.4, widthPercent: 8.5 },
+        power: { leftPercent: 66, widthPercent: 8.5 },
+        energy_today: { leftPercent: 66, topPercent: 91.4, widthPercent: 8.5 }
       }
     },
     parallel_grid_load: {
       rows: {
-        voltage: { leftPercent: 90.5, topPercent: 71 },
-        current: { leftPercent: 90.5, topPercent: 76 },
-        power: { leftPercent: 90.5, topPercent: 80.2 },
-        energy_today: { leftPercent: 90.5, topPercent: 85.6 }
+        voltage: { leftPercent: 87.4, topPercent: 71, widthPercent: 8.8 },
+        current: { leftPercent: 87.4, topPercent: 76, widthPercent: 8.8 },
+        power: { leftPercent: 87.4, topPercent: 80.2, widthPercent: 8.8 },
+        energy_today: { leftPercent: 87.4, topPercent: 85.6, widthPercent: 8.8 }
       }
     }
   },
   mobile: {
     logo: {},
-    daily_production: { value: { leftPercent: 16, topPercent: 14 } },
-    daily_generator: { value: { leftPercent: 48, topPercent: 14 } },
-    daily_import: { value: { leftPercent: 82, topPercent: 14 } },
-    daily_export: { value: { leftPercent: 16, topPercent: 22.5 } },
-    daily_consumption: { value: { leftPercent: 48, topPercent: 22.5 } },
-    daily_costs: { value: { leftPercent: 48, topPercent: 22.5 } },
+    daily_production: { value: {} },
+    daily_generator: { value: {} },
+    daily_import: { value: {} },
+    daily_export: { value: {} },
+    daily_consumption: { value: {} },
+    daily_costs: { value: {} },
     ups_load: {
       rows: {
         voltage: {},
@@ -179,7 +180,7 @@ export const DETAILED_CARD_POSITIONS: ResponsiveCardPositionModels = {
       },
       extras: {
         temp: {},
-        status: {}
+        status: { yOffsetPx: 12, minFontSizePx: 6, textAlign: "center", justifyContent: "center" }
       }
     },
     generator: {
@@ -212,7 +213,7 @@ export const MINI_CARD_POSITIONS: ResponsiveCardPositionModels = {
       value: { leftPercent: 32.5, topPercent: 80.5, widthPercent: 5, fontScale: 0.81, textAlign: "center", justifyContent: "center" }
     },
     combined_pv: {
-      value: { leftPercent: 68.5, topPercent: 16, widthPercent: 9, textAlign: "center", justifyContent: "center" }
+      value: { leftPercent: 68.5, topPercent: 16, widthPercent: 9, fontScale: 0.72, textAlign: "center", justifyContent: "center" }
     },
     grid_node: {
       value: { leftPercent: 47, topPercent: 44, widthPercent: 10, textAlign: "center", justifyContent: "center" }
@@ -252,7 +253,7 @@ export const MINI_CARD_POSITIONS: ResponsiveCardPositionModels = {
       value: { leftPercent: 64.5, topPercent: 40, widthPercent: 26, fontSizePx: 22.68, textAlign: "center", justifyContent: "center" }
     },
     combined_pv: {
-      value: { leftPercent: 45, topPercent: 52.5, widthPercent: 16, textAlign: "center", justifyContent: "center" }
+      value: { leftPercent: 45, topPercent: 52.5, widthPercent: 16, fontScale: 0.68, textAlign: "center", justifyContent: "center" }
     },
     grid_node: {
       value: { leftPercent: 11.5, topPercent: 66.5, widthPercent: 11, fontSizePx: 25.2, textAlign: "center", justifyContent: "center" }

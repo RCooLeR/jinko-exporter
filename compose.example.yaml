@@ -40,6 +40,11 @@ services:
       # SOLARMAN_PASSWORD_FILE: "/run/secrets/solarman_password"
       # SOLARMAN_DEVICE_SN: "<DEVICE_SN>"
       # SOLARMAN_YEARLY_REQUEST_LIMIT: "200000"
+
+      # Optional: enrich inverter data with real grid-side load from Shelly Pro 3EM.
+      # SHELLY_GRID_LOAD_ENABLED: "true"
+      # SHELLY_GRID_LOAD_URL: "http://192.168.120.50"
+      # SHELLY_GRID_LOAD_EM_ID: "0"
     secrets:
       - jinko_bearer_token
       # - jinko_cookie

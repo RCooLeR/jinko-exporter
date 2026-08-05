@@ -178,8 +178,31 @@ Example:
 | `group=grid`, `key=PG_Pt1`, `name=Total Grid Power` | `grid_pg_pt1` | `sensor.jinko_inverter_synthetic_inv_001_total_grid_power` |
 | `group=battery`, `key=B_left_cap1`, `name=SoC` | `battery_b_left_cap1` | `sensor.jinko_inverter_SYNTHETIC_INV_001_soc` |
 | `group=electric`, `key=S_P_T`, `name=Total Solar Power` | `electric_s_p_t` | `sensor.jinko_inverter_SYNTHETIC_INV_001_total_solar_power` |
+| `group=grid_load`, `key=total_power`, `name=Grid Load Total Power` | `grid_load_total_power` | `sensor.jinko_inverter_SYNTHETIC_INV_001_grid_load_total_power` |
 
 Home Assistant owns the final entity ID. If an entity with the same slug already exists, Home Assistant may append a suffix such as `_2`.
+
+### Shelly Grid Load Sensors
+
+When `SHELLY_GRID_LOAD_ENABLED=true`, the bridge appends Shelly Pro 3EM metrics under the `grid_load` group. These entities are useful for hybrid inverter installations where the inverter only measures backup/UPS load and does not expose grid-side load.
+
+Primary card-facing sensors:
+
+| Discovery name | State key | Unit |
+| --- | --- | --- |
+| Grid Load Total Power | `grid_load_total_power` | `W` |
+| Grid Load Total Current | `grid_load_total_current` | `A` |
+| Grid Load L1 Voltage | `grid_load_l1_voltage` | `V` |
+| Grid Load L2 Voltage | `grid_load_l2_voltage` | `V` |
+| Grid Load L3 Voltage | `grid_load_l3_voltage` | `V` |
+| Grid Load L1 Current | `grid_load_l1_current` | `A` |
+| Grid Load L2 Current | `grid_load_l2_current` | `A` |
+| Grid Load L3 Current | `grid_load_l3_current` | `A` |
+| Grid Load L1 Power | `grid_load_l1_power` | `W` |
+| Grid Load L2 Power | `grid_load_l2_power` | `W` |
+| Grid Load L3 Power | `grid_load_l3_power` | `W` |
+
+Shelly `EMData` totals are exposed as kWh energy sensors after converting the Shelly Wh counters.
 
 ### Alarm/Fault Binary Sensors
 

@@ -42,6 +42,11 @@ export const buildEnergyViewModel = (valueFor: EnergyValueGetter, options: Energ
     current: v(`grid_l${phase}_current` as EntityKey),
     power: v(`grid_l${phase}_power` as EntityKey)
   }));
+  const measuredGridLoadPhases = [1, 2, 3].map((phase) => ({
+    voltage: v(`grid_load_l${phase}_voltage` as EntityKey),
+    current: v(`grid_load_l${phase}_current` as EntityKey),
+    power: v(`grid_load_l${phase}_power` as EntityKey)
+  }));
   const loadPhases = [1, 2, 3].map((phase) => ({
     voltage: v(`home_l${phase}_voltage` as EntityKey),
     power: v(`home_l${phase}_power` as EntityKey)
@@ -64,11 +69,15 @@ export const buildEnergyViewModel = (valueFor: EnergyValueGetter, options: Energ
   const loadPhasePower = sum(loadPhases.map((phase) => phase.power));
   const homeTotalPower = first(v("home_total_power"), loadPhasePower);
   const upsTotalPower = v("ups_total_power");
-  const gridLoadPower =
+  const calculatedGridLoadPower =
     isFiniteNumber(homeTotalPower) && isFiniteNumber(upsTotalPower) ? Math.max(homeTotalPower - upsTotalPower, 0) : null;
-  const gridLoadPhasePower = splitTotalPower(gridLoadPower);
+  const gridLoadPhasePower = measuredGridLoadPhases.some((phase) => isFiniteNumber(phase.power))
+    ? measuredGridLoadPhases.map((phase) => phase.power)
+    : splitTotalPower(calculatedGridLoadPower);
+  const gridLoadPower = first(v("grid_load_total_power"), sum(gridLoadPhasePower), calculatedGridLoadPower);
   const gridLoadPhases = gridPhases.map((phase, index) => ({
-    voltage: phase.voltage,
+    voltage: first(measuredGridLoadPhases[index]?.voltage ?? null, phase.voltage),
+    current: measuredGridLoadPhases[index]?.current ?? null,
     power: gridLoadPhasePower[index] ?? null
   }));
   const generatorTotalPower = first(v("generator_total_power"), sum(generatorPhases.map((phase) => phase.power)));
@@ -133,8 +142,8 @@ export const buildEnergyViewModel = (valueFor: EnergyValueGetter, options: Energ
     "grid.power.unit": powerParts(gridTotalPower).unit,
     "grid.status": isFiniteNumber(gridTotalPower) && gridTotalPower < 0 ? "Експорт в мережу" : "Імпорт з мережі",
 
-    "grid_load.phases": phaseVoltage(gridPhases.map((phase) => phase.voltage), gridAverageVoltage),
-    "grid_load.current": phaseCurrent(phaseCurrentsFromPower(gridLoadPhases), null),
+    "grid_load.phases": phaseVoltage(gridLoadPhases.map((phase) => phase.voltage), gridAverageVoltage),
+    "grid_load.current": phaseCurrent(gridLoadPhases.map((phase) => phase.current), first(v("grid_load_total_current"), null)),
     "grid_load.power.value": powerParts(gridLoadPower).value,
     "grid_load.power.unit": powerParts(gridLoadPower).unit,
     "grid_load.phase_power": phasePower(gridLoadPhasePower),

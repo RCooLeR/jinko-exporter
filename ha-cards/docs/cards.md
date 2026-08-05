@@ -21,6 +21,7 @@ battery_negative_is_charging: true
 show_entity_map: false
 entities:
   grid_total_power: sensor.jinko_inverter_synthetic_inv_001_total_grid_power
+  grid_load_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_grid_load_total_power
   home_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_total_consumption_power
   ups_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_ups_load_power
   battery_soc: sensor.jinko_inverter_SYNTHETIC_INV_001_soc
@@ -57,6 +58,7 @@ show_entity_map: false
 entities:
   pv_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_total_solar_power
   grid_total_power: sensor.jinko_inverter_synthetic_inv_001_total_grid_power
+  grid_load_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_grid_load_total_power
   home_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_total_consumption_power
   battery_soc: sensor.jinko_inverter_SYNTHETIC_INV_001_soc
 ```
@@ -78,6 +80,7 @@ The detailed card uses these internal groups:
 | --- | --- |
 | PV1/PV2 | voltage, current, power |
 | Grid | phase voltages, phase currents, phase powers, total grid power, frequency, import/export energy |
+| Grid-side load | Shelly `grid_load_*` power/current/voltage when available; derived load fallback otherwise |
 | UPS/load | load phase voltages, estimated currents, phase powers, UPS load power |
 | Battery | voltage, current, power, SOC, charge/discharge energy |
 | Inverter | output phase voltages/currents/powers, total output power, frequency, DC temperature |

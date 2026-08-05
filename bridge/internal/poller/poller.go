@@ -16,13 +16,27 @@ import (
 type State struct {
 	mu sync.RWMutex
 
-	sourceName       string
-	snapshot         *model.Snapshot
-	lastPollDuration time.Duration
-	lastError        string
-	lastSuccessAt    time.Time
-	up               bool
-	errorCount       uint64
+	sourceName        string
+	snapshot          *model.Snapshot
+	lastPollDuration  time.Duration
+	lastError         string
+	lastSuccessAt     time.Time
+	lastPollSuccessAt time.Time
+	up                bool
+	successCount      uint64
+	errorCount        uint64
+}
+
+type Status struct {
+	SourceName          string
+	Snapshot            *model.Snapshot
+	LastPollDuration    time.Duration
+	LastError           string
+	LastSourceSuccessAt time.Time
+	LastPollSuccessAt   time.Time
+	Up                  bool
+	SuccessCount        uint64
+	ErrorCount          uint64
 }
 
 func NewState(sourceName string) *State {
@@ -35,10 +49,32 @@ func (s *State) HasSnapshot() bool {
 	return s.snapshot != nil
 }
 
-func (s *State) Snapshot() (*model.Snapshot, time.Duration, string, time.Time, bool, uint64) {
+func (s *State) Status() Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.snapshot, s.lastPollDuration, s.lastError, s.lastSuccessAt, s.up, s.errorCount
+	return Status{
+		SourceName:          s.sourceName,
+		Snapshot:            s.snapshot,
+		LastPollDuration:    s.lastPollDuration,
+		LastError:           s.lastError,
+		LastSourceSuccessAt: s.lastSuccessAt,
+		LastPollSuccessAt:   s.lastPollSuccessAt,
+		Up:                  s.up,
+		SuccessCount:        s.successCount,
+		ErrorCount:          s.errorCount,
+	}
+}
+
+func (s *State) Ready(maxAge time.Duration) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.snapshot == nil || s.lastPollSuccessAt.IsZero() {
+		return false
+	}
+	if maxAge <= 0 {
+		return true
+	}
+	return time.Since(s.lastPollSuccessAt) <= maxAge
 }
 
 type Runner struct {
@@ -101,8 +137,8 @@ func (r *Runner) runNoSuccessfulPollMonitor(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, _, lastError, lastSuccessAt, _, _ := r.state.Snapshot()
-				alert.EvaluateNoSuccessfulPoll(ctx, r.alerts, r.alertCfg, r.src.Name(), r.startedAt, lastSuccessAt, lastError)
+				status := r.state.Status()
+				alert.EvaluateNoSuccessfulPoll(ctx, r.alerts, r.alertCfg, r.src.Name(), r.startedAt, status.LastPollSuccessAt, status.LastError)
 			}
 		}
 	}()
@@ -138,8 +174,10 @@ func (r *Runner) pollOnce(ctx context.Context) {
 	r.state.snapshot = snapshot
 	r.state.lastPollDuration = duration
 	r.state.lastSuccessAt = snapshot.CollectedAt
+	r.state.lastPollSuccessAt = time.Now()
 	r.state.lastError = ""
 	r.state.up = true
+	r.state.successCount++
 	r.state.mu.Unlock()
 
 	alert.EvaluateSnapshot(ctx, r.alerts, r.alertCfg, snapshot)
@@ -155,7 +193,7 @@ func (r *Runner) pollOnce(ctx context.Context) {
 }
 
 func (r *Runner) recordFailure(ctx context.Context, err error, duration time.Duration) {
-	var lastSuccessAt time.Time
+	var lastPollSuccessAt time.Time
 	var lastError string
 
 	r.state.mu.Lock()
@@ -164,7 +202,7 @@ func (r *Runner) recordFailure(ctx context.Context, err error, duration time.Dur
 	r.state.errorCount++
 	r.state.lastError = err.Error()
 	errorCount := r.state.errorCount
-	lastSuccessAt = r.state.lastSuccessAt
+	lastPollSuccessAt = r.state.lastPollSuccessAt
 	lastError = r.state.lastError
 	r.state.mu.Unlock()
 
@@ -177,5 +215,5 @@ func (r *Runner) recordFailure(ctx context.Context, err error, duration time.Dur
 			log.Warn().Err(observerErr).Str("source", r.src.Name()).Msg("poll observer failed")
 		}
 	}
-	alert.EvaluateNoSuccessfulPoll(ctx, r.alerts, r.alertCfg, r.src.Name(), r.startedAt, lastSuccessAt, lastError)
+	alert.EvaluateNoSuccessfulPoll(ctx, r.alerts, r.alertCfg, r.src.Name(), r.startedAt, lastPollSuccessAt, lastError)
 }

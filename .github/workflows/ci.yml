@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  STATICCHECK_VERSION: v0.7.0
+  GOVULNCHECK_VERSION: v1.3.0
+
 jobs:
   bridge:
     runs-on: ubuntu-latest
@@ -37,14 +41,30 @@ jobs:
       - name: Staticcheck
         working-directory: bridge
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@latest
+          go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}
           staticcheck ./...
 
       - name: Govulncheck
         working-directory: bridge
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
           govulncheck ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build bridge image
+        run: |
+          docker build \
+            --build-arg VERSION=ci \
+            --build-arg COMMIT=${GITHUB_SHA} \
+            --build-arg DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            -f bridge/Dockerfile \
+            -t jinko-exporter:ci \
+            bridge
 
   ha-cards:
     runs-on: ubuntu-latest
@@ -66,6 +86,10 @@ jobs:
       - name: Test
         working-directory: ha-cards
         run: npm test
+
+      - name: Typecheck
+        working-directory: ha-cards
+        run: npm run typecheck
 
       - name: Build
         working-directory: ha-cards

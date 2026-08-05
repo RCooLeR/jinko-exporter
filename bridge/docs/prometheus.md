@@ -55,7 +55,9 @@ environment:
 | `<prefix>_build_info` | Gauge | `version`, `commit`, `date` | Always `1`; exporter build metadata. |
 | `<prefix>_up` | Gauge | `source`, `device_sn` | `1` when the latest poll succeeded, `0` otherwise. |
 | `<prefix>_poll_success` | Gauge | `source` | `1` when the latest source poll succeeded, `0` otherwise. |
-| `<prefix>_last_update_timestamp_seconds` | Gauge | `source`, `device_sn` | Unix timestamp of the latest successful poll. |
+| `<prefix>_polls_total` | Counter | `source`, `result` | Total polls by result. Result is `success` or `error`. |
+| `<prefix>_last_update_timestamp_seconds` | Gauge | `source`, `device_sn` | Upstream data collection timestamp from the current snapshot. |
+| `<prefix>_last_poll_success_timestamp_seconds` | Gauge | `source` | Unix timestamp when the exporter last completed a successful poll. |
 | `<prefix>_last_source_sync_timestamp_seconds` | Gauge | `source` | Unix timestamp of latest successful poll by source. Keeps `source` even when source labels are otherwise dropped. |
 | `<prefix>_poll_duration_seconds` | Gauge | `source` | Duration of the latest poll in seconds. |
 | `<prefix>_request_errors_total` | Counter | `source` | Total failed polls since process start. |
@@ -67,7 +69,10 @@ environment:
 solar_build_info{version="dev",commit="unknown",date="unknown"} 1
 solar_up{source="jinko",device_sn="SYNTHETIC_INV_001"} 1
 solar_poll_success{source="jinko"} 1
+solar_polls_total{source="jinko",result="success"} 1
+solar_polls_total{source="jinko",result="error"} 0
 solar_last_update_timestamp_seconds{source="jinko",device_sn="SYNTHETIC_INV_001"} 1778068800
+solar_last_poll_success_timestamp_seconds{source="jinko"} 1778068801
 solar_poll_duration_seconds{source="jinko"} 0.842
 solar_request_errors_total{source="jinko"} 0
 solar_metric{source="jinko",device_sn="SYNTHETIC_INV_001",group="grid",key="PG_Pt1",name="Total Grid Power",unit="W"} 1234
@@ -88,12 +93,16 @@ This changes most metrics to remove `source`:
 ```text
 solar_up{device_sn="SYNTHETIC_INV_001"} 1
 solar_poll_success 1
+solar_polls_total{result="success"} 1
+solar_last_poll_success_timestamp_seconds 1778068801
 solar_metric{device_sn="SYNTHETIC_INV_001",group="grid",key="PG_Pt1",name="Total Grid Power",unit="W"} 1234
 ```
 
 `solar_last_source_sync_timestamp_seconds{source=...}` keeps `source` so failover visibility is not lost. `solar_poll_success` follows the source-label setting because it reports the active exporter view rather than a per-source sync timestamp.
 
 When source labels are dropped, duplicate source-specific metric label sets are collapsed inside one collection pass. This is useful for failover dashboards, but it can hide source-specific differences if two sources report the same logical metric differently.
+
+Priority failover can also project fallback metrics onto the primary source surface with `EXPORTER_SOURCE_PROJECT_FAILOVER_METRICS=true`. When unset, that option defaults to `EXPORTER_METRICS_DROP_SOURCE_LABEL` for compatibility with older configurations.
 
 ## Query Examples
 
@@ -127,10 +136,22 @@ Poll failure rate over 15 minutes:
 increase(solar_request_errors_total[15m])
 ```
 
-No successful update in more than 10 minutes:
+Poll success rate over 15 minutes:
 
 ```promql
-time() - solar_last_update_timestamp_seconds > 600
+sum by (result) (increase(solar_polls_total[15m]))
+```
+
+No successful bridge poll in more than 10 minutes:
+
+```promql
+time() - solar_last_poll_success_timestamp_seconds > 600
+```
+
+Upstream data has not refreshed in more than 1 hour:
+
+```promql
+time() - solar_last_update_timestamp_seconds > 3600
 ```
 
 ## Grafana Notes
