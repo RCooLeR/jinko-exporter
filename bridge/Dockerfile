@@ -1,8 +1,8 @@
 # --- Stage 1: Build the Go binary ---
 FROM golang:1.26.4-alpine AS builder
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG DATE=unknown
