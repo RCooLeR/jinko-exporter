@@ -38,7 +38,15 @@ func TestParseDetailResponseFixture(t *testing.T) {
 	assertMetric(t, metrics["S_P_T"], "electric", "Total Solar Power", "W", 540)
 	assertMetric(t, metrics["PG_Pt1"], "grid", "Total Grid Power", "W", 13)
 	assertMetric(t, metrics["B_left_cap1"], "battery", "SoC", "%", 100)
-	assertMetric(t, metrics["BMST"], "bms", "BMS Temperature", "\u2103", 13)
+	assertMetric(t, metrics["BMST"], "bms", "BMS Temperature", "C", 13)
+}
+
+func TestCanonicalizeMetricNormalizesCelsiusSymbol(t *testing.T) {
+	metric, ok := CanonicalizeMetric(model.Metric{Key: "B_T1", Value: 28})
+	if !ok {
+		t.Fatal("CanonicalizeMetric(B_T1) = not found")
+	}
+	assertMetric(t, metric, "temperature", "Temperature- Battery", "C", 28)
 }
 
 func TestParseDetailResponseSkipsMalformedAndFallsBackPerField(t *testing.T) {
@@ -88,6 +96,16 @@ func TestParseNumberHandlesCommonSeparators(t *testing.T) {
 		if !ok || got != want {
 			t.Fatalf("parseNumber(%q) = %v, %v; want %v, true", input, got, ok, want)
 		}
+	}
+}
+
+func TestParseNumberRejectsNonFiniteValues(t *testing.T) {
+	for _, input := range []string{"NaN", "+Inf", "-Inf", "Inf", "Infinity"} {
+		t.Run(input, func(t *testing.T) {
+			if got, ok := parseNumber(input); ok {
+				t.Fatalf("parseNumber(%q) = %v, true; want rejected non-finite value", input, got)
+			}
+		})
 	}
 }
 

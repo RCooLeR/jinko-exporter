@@ -31,10 +31,18 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 10 * time.Second
+	httpWriteTimeout      = 30 * time.Second
+	httpIdleTimeout       = 60 * time.Second
+	httpMaxHeaderBytes    = 1 << 20
+)
+
 func Run(args []string) int {
 	app := &cli.App{
 		Name:  "jinko-exporter",
-		Usage: "Poll solar data from Jinko detail API, Solarman OpenAPI, or a future Modbus source and expose Prometheus metrics",
+		Usage: "Poll solar data from Jinko detail API, Solarman OpenAPI, or the locked read-only Modbus profile and expose Prometheus metrics",
 		Flags: config.Flags(),
 		Before: func(ctx *cli.Context) error {
 			setupLogger(ctx.String("log-level"))
@@ -126,19 +134,23 @@ func runServe(parent context.Context, cfg config.Config) error {
 	state := poller.NewState(src.Name())
 
 	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	var maintenanceDone <-chan struct{}
+	var runnerDone <-chan struct{}
+	var mqttPublisher *hamqtt.Publisher
+	defer func() {
+		var closePublisher func()
+		if mqttPublisher != nil {
+			closePublisher = mqttPublisher.Close
+		}
+		stopServeWorkers(cancel, maintenanceDone, runnerDone, closePublisher)
+	}()
 
 	var observers []poller.Observer
-	var mqttPublisher *hamqtt.Publisher
 	if cfg.MQTT.Enabled {
 		mqttPublisher, err = hamqtt.NewPublisher(cfg.MQTT)
 		if err != nil {
 			return err
 		}
-		if err := mqttPublisher.Start(); err != nil {
-			return err
-		}
-		defer mqttPublisher.Close()
 		observers = append(observers, mqttPublisher)
 	}
 
@@ -165,13 +177,26 @@ func runServe(parent context.Context, cfg config.Config) error {
 		http.Error(w, "not ready or stale", http.StatusServiceUnavailable)
 	})
 
-	server := &http.Server{
-		Addr:              cfg.ListenAddress,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+	server := newHTTPServer(cfg.ListenAddress, mux)
+	listener, err := net.Listen("tcp", cfg.ListenAddress)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.ListenAddress, err)
+	}
+	defer func() { _ = listener.Close() }()
+	if mqttPublisher != nil {
+		if err := mqttPublisher.Start(); err != nil {
+			return err
+		}
 	}
 
-	go runner.Run(ctx)
+	maintenanceDone = startBackgroundMaintenance(ctx, src)
+
+	runnerStopped := make(chan struct{})
+	runnerDone = runnerStopped
+	go func() {
+		defer close(runnerStopped)
+		runner.Run(ctx)
+	}()
 
 	go func() {
 		<-ctx.Done()
@@ -190,10 +215,49 @@ func runServe(parent context.Context, cfg config.Config) error {
 		Bool("mqtt_enabled", cfg.MQTT.Enabled).
 		Msg("starting exporter")
 
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
+		MaxHeaderBytes:    httpMaxHeaderBytes,
+	}
+}
+
+func stopServeWorkers(cancel context.CancelFunc, maintenanceDone, runnerDone <-chan struct{}, closePublisher func()) {
+	cancel()
+	if maintenanceDone != nil {
+		<-maintenanceDone
+	}
+	if runnerDone != nil {
+		<-runnerDone
+	}
+	if closePublisher != nil {
+		closePublisher()
+	}
+}
+
+func startBackgroundMaintenance(ctx context.Context, src source.Source) <-chan struct{} {
+	done := make(chan struct{})
+	maintainer, ok := src.(source.BackgroundMaintainer)
+	if !ok {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		maintainer.RunBackground(ctx)
+	}()
+	return done
 }
 
 func runFetch(ctx context.Context, cfg config.Config) error {
@@ -285,7 +349,7 @@ func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manag
 	case "solarman":
 		return solarman.New(cfg.Solarman, alerts), nil
 	case "modbus":
-		return modbus.New(cfg.Modbus), nil
+		return modbus.New(cfg.Modbus)
 	default:
 		return nil, fmt.Errorf("unsupported source %q", sourceName)
 	}

@@ -7,8 +7,10 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -30,6 +32,11 @@ const yearlyRequestWindow = 365 * 24 * time.Hour
 const maxHTTPResponseBodyBytes = 2 * 1024 * 1024
 const transientRequestAttempts = 2
 const transientRetryBackoff = 100 * time.Millisecond
+
+// Solarman normally returns a short-lived access token. A deliberately broad
+// one-year ceiling accepts realistic deployments while rejecting corrupt or
+// hostile values long before duration/time arithmetic becomes ambiguous.
+const maxTokenLifetimeSeconds = int64((365 * 24 * time.Hour) / time.Second)
 
 type Client struct {
 	cfg    config.SolarmanConfig
@@ -53,6 +60,31 @@ type tokenResponse struct {
 	ExpiresAt    time.Time
 }
 
+// tokenFailureError deliberately exposes only structured, non-secret context.
+// In particular, its string representation must never include an upstream token
+// response or the credentials sent to the token endpoint.
+type tokenFailureError struct {
+	status   int
+	category string
+	cause    error
+}
+
+func (e *tokenFailureError) Error() string {
+	status := "unavailable"
+	if e.status > 0 {
+		status = strconv.Itoa(e.status)
+	}
+	return fmt.Sprintf("solarman token request failed: stage=token status=%s category=%s", status, e.category)
+}
+
+func (e *tokenFailureError) Unwrap() error {
+	return e.cause
+}
+
+func newTokenFailure(status int, category string, cause error) error {
+	return &tokenFailureError{status: status, category: category, cause: cause}
+}
+
 type station struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
@@ -73,6 +105,12 @@ func New(cfg config.SolarmanConfig, alerts *alert.Manager) *Client {
 		hc: &http.Client{
 			Timeout:   cfg.Timeout,
 			Transport: transport,
+			// Every Solarman request carries either account credentials or an
+			// access token. Treat redirects as responses so net/http never replays
+			// those credentials to a different endpoint.
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 		alerts: alerts,
 	}
@@ -87,6 +125,9 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	if err != nil {
 		c.notifyFailure(ctx, "device-discovery", "", err, nil)
 		return nil, err
+	}
+	if strings.TrimSpace(deviceSN) == "" {
+		return nil, fmt.Errorf("solarman device serial is empty")
 	}
 
 	body := map[string]any{"deviceSn": deviceSN}
@@ -136,6 +177,11 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		}
 		metrics = append(metrics, metric)
 	}
+	if len(metrics) == 0 {
+		err := fmt.Errorf("solarman currentData response contained no numeric metrics")
+		c.notifyFailure(ctx, "currentData-empty", deviceSN, err, nil)
+		return nil, err
+	}
 
 	return &model.Snapshot{
 		Source:      c.Name(),
@@ -159,10 +205,21 @@ func (c *Client) metricFromPoint(key, name, unit string, value float64) (model.M
 		Unit:  unit,
 		Value: value,
 	}
-	if !c.cfg.CanonicalJinkoMetrics {
-		return metric, true
+	// A known logical metric must have one stable label set regardless of
+	// whether it came from Jinko, Solarman, or the local Modbus reader. This is
+	// especially important when Prometheus's source label is disabled: a
+	// source-specific group, name, or unit would otherwise create a second time
+	// series for the same key after failover.
+	if canonical, ok := jinko.CanonicalizeMetric(metric); ok {
+		return canonical, true
 	}
-	return jinko.CanonicalizeMetric(metric)
+
+	// Keep Solarman-only points in compatibility mode. The legacy strict flag
+	// still limits the surface to metrics present in the shared Jinko dictionary.
+	if c.cfg.CanonicalJinkoMetrics {
+		return model.Metric{}, false
+	}
+	return metric, true
 }
 
 func (c *Client) resolveDeviceSN(ctx context.Context) (string, error) {
@@ -212,14 +269,18 @@ func (c *Client) resolveDeviceSN(ctx context.Context) (string, error) {
 	if len(devices) == 0 {
 		return "", fmt.Errorf("solarman station %d has no devices", stationID)
 	}
+	deviceSN := strings.TrimSpace(devices[0].DeviceSN)
+	if deviceSN == "" {
+		return "", fmt.Errorf("solarman station %d returned an empty device serial", stationID)
+	}
 
 	c.mu.Lock()
-	c.discoveredDevSN = devices[0].DeviceSN
+	c.discoveredDevSN = deviceSN
 	c.discoveredAt = time.Now()
 	c.mu.Unlock()
 
-	log.Info().Str("source", c.Name()).Str("device_sn", devices[0].DeviceSN).Msg("discovered Solarman device serial number")
-	return devices[0].DeviceSN, nil
+	log.Info().Str("source", c.Name()).Str("device_sn", deviceSN).Msg("discovered Solarman device serial number")
+	return deviceSN, nil
 }
 
 func (c *Client) listStations(ctx context.Context) ([]station, error) {
@@ -281,6 +342,8 @@ func (c *Client) ensureToken(ctx context.Context) error {
 func (c *Client) obtainToken(ctx context.Context) error {
 	passHex, err := c.passwordSHA256Hex()
 	if err != nil {
+		err = newTokenFailure(0, "credentials", err)
+		c.notifyFailure(ctx, "token", "", err, nil)
 		return err
 	}
 
@@ -291,26 +354,46 @@ func (c *Client) obtainToken(ctx context.Context) error {
 	}
 	raw, status, err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/account/%s/token", c.cfg.APIVersion), true, false, body)
 	if err != nil {
+		category := "transport"
+		switch {
+		case errors.Is(err, context.Canceled):
+			category = "canceled"
+		case errors.Is(err, context.DeadlineExceeded):
+			category = "timeout"
+		}
+		err = newTokenFailure(0, category, err)
 		c.notifyFailure(ctx, "token", "", err, nil)
 		return err
 	}
 	if status != http.StatusOK {
-		err := fmt.Errorf("solarman token request failed: status=%d body=%s", status, strings.TrimSpace(string(raw)))
-		c.notifyFailure(ctx, "token", "", err, raw)
+		err := newTokenFailure(status, "http-status", nil)
+		c.notifyFailure(ctx, "token", "", err, nil)
 		return err
 	}
 
 	var token tokenResponse
 	if err := json.Unmarshal(raw, &token); err != nil {
-		c.notifyFailure(ctx, "token-decode", "", err, raw)
-		return fmt.Errorf("decode solarman token response: %w", err)
-	}
-	if !token.Success || token.AccessToken == "" {
-		err := fmt.Errorf("solarman token error: %s", token.Msg)
-		c.notifyFailure(ctx, "token-api-error", "", err, raw)
+		err = newTokenFailure(status, "decode", err)
+		c.notifyFailure(ctx, "token-decode", "", err, nil)
 		return err
 	}
-	token.ExpiresAt = time.Now().Add(time.Duration(token.ExpiresIn-5) * time.Second)
+	if !token.Success {
+		err := newTokenFailure(status, "api-rejected", nil)
+		c.notifyFailure(ctx, "token-api-error", "", err, nil)
+		return err
+	}
+	if strings.TrimSpace(token.AccessToken) == "" {
+		err := newTokenFailure(status, "missing-access-token", nil)
+		c.notifyFailure(ctx, "token-api-error", "", err, nil)
+		return err
+	}
+	expiresAt, err := tokenExpiry(time.Now(), token.ExpiresIn)
+	if err != nil {
+		err = newTokenFailure(status, "invalid-expires-in", err)
+		c.notifyFailure(ctx, "token-api-error", "", err, nil)
+		return err
+	}
+	token.ExpiresAt = expiresAt
 
 	c.mu.Lock()
 	c.token = token
@@ -318,6 +401,21 @@ func (c *Client) obtainToken(ctx context.Context) error {
 
 	log.Info().Str("source", c.Name()).Time("expires_at", token.ExpiresAt).Msg("obtained Solarman access token")
 	return nil
+}
+
+func tokenExpiry(now time.Time, expiresInSeconds int64) (time.Time, error) {
+	if expiresInSeconds <= 0 || expiresInSeconds > maxTokenLifetimeSeconds {
+		return time.Time{}, fmt.Errorf("expires_in must be between 1 and %d seconds", maxTokenLifetimeSeconds)
+	}
+
+	lifetime := time.Duration(expiresInSeconds) * time.Second
+	refreshSkew := 5 * time.Second
+	if lifetime <= refreshSkew {
+		// Even unusually short valid lifetimes remain usable for part of their
+		// advertised window instead of being stored as already expired.
+		refreshSkew = lifetime / 2
+	}
+	return now.Add(lifetime - refreshSkew), nil
 }
 
 func (c *Client) passwordSHA256Hex() (string, error) {
@@ -447,7 +545,7 @@ func (c *Client) doJSONAuthRetry(ctx context.Context, method, path string, withA
 
 	log.Warn().Str("source", c.Name()).Str("path", path).Msg("received 401 from Solarman API, refreshing token and retrying once")
 	if err := c.obtainToken(ctx); err != nil {
-		c.notifyFailure(ctx, "token-refresh-after-401", "", err, raw)
+		c.notifyFailure(ctx, "token-refresh-after-401", "", err, nil)
 		return raw, status, fmt.Errorf("solarman token refresh after 401 failed: %w", err)
 	}
 	return c.doJSONTransientRetry(ctx, method, path, withAppLang, true, body)
@@ -508,6 +606,12 @@ func (c *Client) notifyFailure(ctx context.Context, step string, deviceSN string
 		return
 	}
 
+	var tokenErr *tokenFailureError
+	if errors.As(err, &tokenErr) {
+		c.notifyTokenFailure(ctx, step, tokenErr)
+		return
+	}
+
 	body := strings.TrimSpace(string(raw))
 	if len(body) > 2000 {
 		body = body[:2000] + "...(truncated)"
@@ -526,6 +630,22 @@ func (c *Client) notifyFailure(ctx context.Context, step string, deviceSN string
 	if body != "" {
 		message += "\nResponse Body: " + body
 	}
+
+	c.alerts.Notify(ctx, alert.Event{
+		Key:     "solarman_" + sanitizeAlertKey(step),
+		Subject: subject,
+		Body:    message,
+	})
+}
+
+func (c *Client) notifyTokenFailure(ctx context.Context, step string, err *tokenFailureError) {
+	subject := fmt.Sprintf("Solarman authentication failure: %s", step)
+	message := fmt.Sprintf(
+		"A Solarman authentication request failed.\n\nSource: %s\nStep: %s\nError: %s",
+		c.Name(),
+		step,
+		err.Error(),
+	)
 
 	c.alerts.Notify(ctx, alert.Event{
 		Key:     "solarman_" + sanitizeAlertKey(step),
@@ -636,25 +756,34 @@ func firstString(entry map[string]any, keys ...string) string {
 }
 
 func toFloat(value any) (float64, bool) {
+	finite := func(candidate float64) (float64, bool) {
+		return candidate, !math.IsNaN(candidate) && !math.IsInf(candidate, 0)
+	}
 	switch typed := value.(type) {
 	case float64:
-		return typed, true
+		return finite(typed)
 	case float32:
-		return float64(typed), true
+		return finite(float64(typed))
 	case int:
 		return float64(typed), true
 	case int64:
 		return float64(typed), true
 	case json.Number:
 		v, err := typed.Float64()
-		return v, err == nil
+		if err != nil {
+			return 0, false
+		}
+		return finite(v)
 	case string:
 		typed = strings.TrimSpace(typed)
 		if typed == "" {
 			return 0, false
 		}
 		v, err := strconv.ParseFloat(typed, 64)
-		return v, err == nil
+		if err != nil {
+			return 0, false
+		}
+		return finite(v)
 	default:
 		return 0, false
 	}

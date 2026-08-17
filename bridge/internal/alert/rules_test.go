@@ -121,6 +121,36 @@ func TestEvaluateSnapshotBatterySOCRecoveryUsesHysteresis(t *testing.T) {
 	}
 }
 
+func TestEvaluateSnapshotBatterySOCHighThresholdCanRecoverAtFullCharge(t *testing.T) {
+	notifier := &recordingNotifier{}
+	manager := NewManager(notifier, time.Hour)
+	cfg := config.AlertConfig{
+		BatterySOCLowThreshold: 98,
+		NotifyRecovery:         true,
+	}
+
+	EvaluateSnapshot(context.Background(), manager, cfg, testSnapshot(
+		model.Metric{Group: "battery", Key: "B_left_cap1", Name: "SoC", Unit: "%", Value: 98},
+	))
+	EvaluateSnapshot(context.Background(), manager, cfg, testSnapshot(
+		model.Metric{Group: "battery", Key: "B_left_cap1", Name: "SoC", Unit: "%", Value: 99},
+	))
+	if got := len(notifier.events); got != 1 {
+		t.Fatalf("alert count below capped recovery threshold = %d, want 1", got)
+	}
+
+	EvaluateSnapshot(context.Background(), manager, cfg, testSnapshot(
+		model.Metric{Group: "battery", Key: "B_left_cap1", Name: "SoC", Unit: "%", Value: 100},
+	))
+	if got := len(notifier.events); got != 2 {
+		t.Fatalf("alert count at full-charge recovery = %d, want 2", got)
+	}
+	if !strings.Contains(notifier.events[1].subject, "Battery SOC recovered") ||
+		!strings.Contains(notifier.events[1].body, "Recovery Threshold: 100.00 %") {
+		t.Fatalf("recovery event = %#v, want capped 100%% recovery", notifier.events[1])
+	}
+}
+
 func TestEvaluateSnapshotHighTemperatureRecoveryUsesHysteresis(t *testing.T) {
 	notifier := &recordingNotifier{}
 	manager := NewManager(notifier, time.Hour)
@@ -190,8 +220,96 @@ func TestEvaluateSnapshotAlarmMetricRecovery(t *testing.T) {
 	if got := len(notifier.events); got != 2 {
 		t.Fatalf("alert count = %d, want alarm alert and recovery", got)
 	}
-	if !strings.Contains(notifier.events[1].subject, "alarm metrics recovered") {
+	if !strings.Contains(notifier.events[1].subject, "warning/alarm/fault metrics recovered") {
 		t.Fatalf("recovery subject = %q, want alarm recovery", notifier.events[1].subject)
+	}
+}
+
+func TestEvaluateSnapshotAlarmRecoveryIsIsolatedBySource(t *testing.T) {
+	notifier := &recordingNotifier{}
+	manager := NewManager(notifier, time.Hour)
+	cfg := config.AlertConfig{NotifyRecovery: true}
+
+	modbusActive := testSnapshot(
+		model.Metric{Group: "alert", Key: "DEYE_MODBUS_R553_WARNING_WORD_1_RAW", Name: "Deye warning word", Value: 1},
+	)
+	modbusActive.Source = "modbus"
+	EvaluateSnapshot(context.Background(), manager, cfg, modbusActive)
+
+	jinkoClear := testSnapshot(
+		model.Metric{Group: "alert", Key: "L_B_F_F", Name: "Lithium battery fault flag", Value: 0},
+	)
+	jinkoClear.Source = "jinko"
+	EvaluateSnapshot(context.Background(), manager, cfg, jinkoClear)
+	if got := len(notifier.events); got != 1 {
+		t.Fatalf("cross-source clear delivered %d events, want only the original Modbus alert", got)
+	}
+
+	modbusClear := testSnapshot(
+		model.Metric{Group: "alert", Key: "DEYE_MODBUS_R553_WARNING_WORD_1_RAW", Name: "Deye warning word", Value: 0},
+	)
+	modbusClear.Source = "modbus"
+	EvaluateSnapshot(context.Background(), manager, cfg, modbusClear)
+	if got := len(notifier.events); got != 2 {
+		t.Fatalf("same-source clear delivered %d events, want alert and recovery", got)
+	}
+	if !strings.Contains(notifier.events[1].subject, "recovered") {
+		t.Fatalf("same-source recovery subject = %q", notifier.events[1].subject)
+	}
+}
+
+func TestEvaluateSnapshotModbusRawWarningFaultWordsUseOneAggregateAlert(t *testing.T) {
+	notifier := &recordingNotifier{}
+	manager := NewManager(notifier, time.Hour)
+	cfg := config.AlertConfig{NotifyRecovery: true}
+	clear := []model.Metric{
+		{Group: "alert", Key: "DEYE_MODBUS_R553_WARNING_WORD_1_RAW", Name: "Deye Inverter Warning Word 1 (Raw U16)"},
+		{Group: "alert", Key: "DEYE_MODBUS_R554_WARNING_WORD_2_RAW", Name: "Deye Inverter Warning Word 2 (Raw U16)"},
+		{Group: "alert", Key: "DEYE_MODBUS_R555_FAULT_WORD_1_RAW", Name: "Deye Inverter Fault Word 1 (Raw U16)"},
+		{Group: "alert", Key: "DEYE_MODBUS_R556_FAULT_WORD_2_RAW", Name: "Deye Inverter Fault Word 2 (Raw U16)"},
+		{Group: "alert", Key: "DEYE_MODBUS_R557_FAULT_WORD_3_RAW", Name: "Deye Inverter Fault Word 3 (Raw U16)"},
+		{Group: "alert", Key: "DEYE_MODBUS_R558_FAULT_WORD_4_RAW", Name: "Deye Inverter Fault Word 4 (Raw U16)"},
+	}
+
+	EvaluateSnapshot(context.Background(), manager, cfg, testSnapshot(clear...))
+	if len(notifier.events) != 0 {
+		t.Fatalf("all-clear raw words delivered %d events, want 0", len(notifier.events))
+	}
+
+	active := append([]model.Metric(nil), clear...)
+	active[1].Value = 0x8000
+	EvaluateSnapshot(context.Background(), manager, cfg, testSnapshot(active...))
+	if len(notifier.events) != 1 {
+		t.Fatalf("one active warning word delivered %d events, want one aggregate event", len(notifier.events))
+	}
+	for _, want := range []string{"DEYE_MODBUS_R554_WARNING_WORD_2_RAW", "32768.00"} {
+		if !strings.Contains(notifier.events[0].body, want) {
+			t.Fatalf("aggregate alert body %q does not contain %q", notifier.events[0].body, want)
+		}
+	}
+	if !strings.Contains(notifier.events[0].subject, "warning/alarm/fault metrics active") {
+		t.Fatalf("aggregate warning subject = %q", notifier.events[0].subject)
+	}
+
+	EvaluateSnapshot(context.Background(), manager, cfg, testSnapshot(clear...))
+	if len(notifier.events) != 2 || !strings.Contains(notifier.events[1].subject, "warning/alarm/fault metrics recovered") {
+		t.Fatalf("events = %#v, want one aggregate alert followed by recovery", notifier.events)
+	}
+}
+
+func TestEvaluateSnapshotModbusRunStateIsNotAnAlertMetric(t *testing.T) {
+	notifier := &recordingNotifier{}
+	manager := NewManager(notifier, 0)
+	EvaluateSnapshot(context.Background(), manager, config.AlertConfig{}, testSnapshot(
+		model.Metric{
+			Group: "status",
+			Key:   "DEYE_MODBUS_R500_RUN_STATE",
+			Name:  "Deye Inverter Run State Code",
+			Value: 4,
+		},
+	))
+	if len(notifier.events) != 0 {
+		t.Fatalf("run-state status metric delivered %d alert events, want 0", len(notifier.events))
 	}
 }
 

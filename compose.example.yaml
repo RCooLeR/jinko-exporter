@@ -3,11 +3,17 @@ services:
     image: rcooler/jinko_exporter:latest
     container_name: jinko_bridge
     restart: unless-stopped
+    # The bridge may finish one already-started, bounded OAuth token rotation
+    # before exiting so a consumed refresh token is never abandoned mid-write.
+    stop_grace_period: 40s
     ports:
       - "9876:9876"
     read_only: true
     tmpfs:
       - /tmp
+    # Token refresh state needs a dedicated writable mount when enabled:
+    # volumes:
+    #   - ./state:/var/lib/jinko-bridge
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -21,6 +27,10 @@ services:
       JINKO_DEVICE_ID: "100000001"
       JINKO_SITE_ID: "200000001"
       JINKO_BEARER_TOKEN_FILE: "/run/secrets/jinko_bearer_token"
+      # Automatic refresh can use the initial bearer above together with:
+      # JINKO_REFRESH_TOKEN_FILE: "/run/secrets/jinko_refresh_token"
+      # JINKO_TOKEN_STATE_FILE: "/var/lib/jinko-bridge/jinko-token-state.json"
+      # (also uncomment the dedicated writable state volume above)
       # JINKO_COOKIE_FILE: "/run/secrets/jinko_cookie"
 
       # MQTT_ENABLED: "true"
@@ -31,9 +41,17 @@ services:
       # MQTT_DISCOVERY_PREFIX: "homeassistant"
       # MQTT_RETAIN: "true"
 
-      # To enable Solarman failover, set EXPORTER_SOURCE_PRIORITY to
-      # "jinko,solarman" and provide the Solarman credentials below.
-      # EXPORTER_SOURCE_PRIORITY: "jinko,solarman"
+      # Recommended local-first failover after a supervised Modbus-only fetch:
+      # EXPORTER_SOURCE_PRIORITY: "modbus,jinko,solarman"
+      # EXPORTER_METRICS_DROP_SOURCE_LABEL: "true"
+      # The setting above also enables primary-surface projection by default.
+      # Known Solarman points are always normalized through the same canonical
+      # key/group/name/unit dictionary used by Jinko and Modbus, preventing
+      # source switches from creating duplicate ordinary Grafana series.
+      # All three source configurations are required. Jinko token rotation in
+      # serve remains active even while Modbus supplies every snapshot.
+      # If MQTT is enabled, set MQTT_DEVICE_ID to one stable source-independent
+      # value so retained Home Assistant state stays on one device/topic.
       # SOLARMAN_APP_ID: "<APP_ID>"
       # SOLARMAN_APP_SECRET_FILE: "/run/secrets/solarman_app_secret"
       # SOLARMAN_EMAIL: "<ACCOUNT_EMAIL>"
@@ -41,12 +59,24 @@ services:
       # SOLARMAN_DEVICE_SN: "<DEVICE_SN>"
       # SOLARMAN_YEARLY_REQUEST_LIMIT: "200000"
 
+      # Locked local source. Use `docker compose run --rm --no-deps
+      # jinko_bridge fetch` in Modbus-only mode once before enabling either the
+      # long-running service or the local-first priority chain.
+      # EXPORTER_SOURCE: "modbus"
+      # MODBUS_HOST: "192.168.50.25"
+      # MODBUS_PORT: "8899"
+      # MODBUS_LOGGER_SERIAL: "<LOGGER_SERIAL>"
+      # MODBUS_DEVICE_SN: "<SAME_INVERTER_SERIAL_AS_CLOUD>"
+      # MODBUS_UNIT_ID: "1"
+      # MODBUS_TIMEOUT: "5s"
+
       # Optional: enrich inverter data with real grid-side load from Shelly Pro 3EM.
       # SHELLY_GRID_LOAD_ENABLED: "true"
-      # SHELLY_GRID_LOAD_URL: "http://192.168.120.50"
+      # SHELLY_GRID_LOAD_URL: "http://192.0.2.50"
       # SHELLY_GRID_LOAD_EM_ID: "0"
     secrets:
       - jinko_bearer_token
+      # - jinko_refresh_token
       # - jinko_cookie
       # - mqtt_password
       # - solarman_app_secret
@@ -55,6 +85,8 @@ services:
 secrets:
   jinko_bearer_token:
     file: ./secrets/jinko_bearer_token
+  # jinko_refresh_token:
+  #   file: ./secrets/jinko_refresh_token
   # jinko_cookie:
   #   file: ./secrets/jinko_cookie
   # mqtt_password:

@@ -156,33 +156,19 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 
-	if !c.dropSourceLabel {
-		for _, metric := range snapshot.Metrics {
-			if !isFinite(metric.Value) {
-				continue
-			}
-			ch <- prometheus.MustNewConstMetric(
-				c.valueDesc,
-				prometheus.GaugeValue,
-				metric.Value,
-				sourceName,
-				deviceSN,
-				metric.Group,
-				metric.Key,
-				metric.Name,
-				metric.Unit,
-			)
-		}
-		return
-	}
-
-	// Label dropping can collapse source-specific metrics into the same Prometheus series.
+	// A malformed or projected snapshot can contain the same logical point more
+	// than once. Prometheus rejects an entire scrape when a collector emits two
+	// samples with identical labels, so keep the first sample in snapshot order.
+	// This applies even when the source label is retained.
 	seenValueLabels := make(map[string]struct{}, len(snapshot.Metrics))
 	for _, metric := range snapshot.Metrics {
 		if !isFinite(metric.Value) {
 			continue
 		}
-		labelValues := []string{deviceSN, metric.Group, metric.Key, metric.Name, metric.Unit}
+		labelValues := []string{sourceName, deviceSN, metric.Group, metric.Key, metric.Name, metric.Unit}
+		if c.dropSourceLabel {
+			labelValues = labelValues[1:]
+		}
 		labelSignature := labelsSignature(labelValues)
 		if _, ok := seenValueLabels[labelSignature]; ok {
 			continue

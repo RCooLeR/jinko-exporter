@@ -52,3 +52,25 @@ func TestEnrichedKeepsPrimarySnapshotWhenExtraFails(t *testing.T) {
 		t.Fatalf("snapshot = %#v, want primary snapshot", snapshot)
 	}
 }
+
+func TestEnrichedFlattensAndDeduplicatesBackgroundMaintainers(t *testing.T) {
+	shared := newBackgroundStub("jinko")
+	extra := newBackgroundStub("shelly_grid_load")
+	priority := NewPriority([]Source{shared}, false)
+	enriched := NewEnriched(priority, shared, extra)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		enriched.RunBackground(ctx)
+		close(done)
+	}()
+
+	waitStarted(t, shared.started)
+	waitStarted(t, extra.started)
+	if shared.backgroundCalls.Load() != 1 || extra.backgroundCalls.Load() != 1 {
+		t.Fatalf("background calls shared/extra=%d/%d, want 1/1", shared.backgroundCalls.Load(), extra.backgroundCalls.Load())
+	}
+	cancel()
+	waitStarted(t, done)
+}

@@ -74,12 +74,12 @@ func evaluateAlarmMetrics(ctx context.Context, manager *Manager, cfg config.Aler
 	}
 	if len(triggered) == 0 {
 		if foundAlertMetric {
-			activeKey := "metric_alarm_" + alertIdentity(snapshot)
+			activeKey := alarmMetricActiveKey(snapshot)
 			manager.Resolve(ctx, activeKey, Event{
 				Key:     activeKey + "_recovered",
-				Subject: fmt.Sprintf("Inverter alarm metrics recovered for %s", alertIdentity(snapshot)),
+				Subject: fmt.Sprintf("Inverter warning/alarm/fault metrics recovered for %s", alertIdentity(snapshot)),
 				Body: fmt.Sprintf(
-					"All available inverter alarm and fault metrics have returned to zero.\n\nSource: %s\nDevice: %s\nCollected At: %s",
+					"All available inverter warning, alarm, and fault metrics have returned to zero.\n\nSource: %s\nDevice: %s\nCollected At: %s",
 					snapshot.Source,
 					alertIdentity(snapshot),
 					snapshot.CollectedAt.Format("2006-01-02T15:04:05Z07:00"),
@@ -95,18 +95,26 @@ func evaluateAlarmMetrics(ctx context.Context, manager *Manager, cfg config.Aler
 		lines = append(lines, formatMetricLine(metric))
 	}
 
-	activeKey := "metric_alarm_" + alertIdentity(snapshot)
+	activeKey := alarmMetricActiveKey(snapshot)
 	manager.NotifyActive(ctx, Event{
 		Key:     activeKey,
-		Subject: fmt.Sprintf("Inverter alarm metrics active for %s", alertIdentity(snapshot)),
+		Subject: fmt.Sprintf("Inverter warning/alarm/fault metrics active for %s", alertIdentity(snapshot)),
 		Body: fmt.Sprintf(
-			"One or more inverter alarm or fault metrics are non-zero.\n\nSource: %s\nDevice: %s\nCollected At: %s\n\nTriggered Metrics:\n%s",
+			"One or more inverter warning, alarm, or fault metrics are non-zero.\n\nSource: %s\nDevice: %s\nCollected At: %s\n\nTriggered Metrics:\n%s",
 			snapshot.Source,
 			alertIdentity(snapshot),
 			snapshot.CollectedAt.Format("2006-01-02T15:04:05Z07:00"),
 			strings.Join(lines, "\n"),
 		),
 	})
+}
+
+func alarmMetricActiveKey(snapshot *model.Snapshot) string {
+	sourceName := strings.ToLower(strings.TrimSpace(snapshot.Source))
+	if sourceName == "" {
+		sourceName = "unknown-source"
+	}
+	return "metric_alarm_" + sourceName + "_" + alertIdentity(snapshot)
 }
 
 func evaluateGridDown(ctx context.Context, manager *Manager, cfg config.AlertConfig, snapshot *model.Snapshot, index map[string]model.Metric) {
@@ -200,7 +208,9 @@ func evaluateBatterySOC(ctx context.Context, manager *Manager, cfg config.AlertC
 	if len(present) == 0 {
 		return
 	}
-	recoveryThreshold := threshold + batterySOCRecoveryHysteresis
+	// SOC cannot exceed 100%. Cap the hysteresis boundary so high configured
+	// thresholds still have a reachable recovery state.
+	recoveryThreshold := min(threshold+batterySOCRecoveryHysteresis, 100.0)
 	for _, metric := range present {
 		if metric.Value < recoveryThreshold {
 			return

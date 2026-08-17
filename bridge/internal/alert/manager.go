@@ -26,6 +26,7 @@ type Manager struct {
 	mu       sync.Mutex
 	lastSent map[string]time.Time
 	active   map[string]struct{}
+	inFlight map[string]struct{}
 }
 
 func NewManager(notifier Notifier, cooldown time.Duration) *Manager {
@@ -34,12 +35,21 @@ func NewManager(notifier Notifier, cooldown time.Duration) *Manager {
 		cooldown: cooldown,
 		lastSent: make(map[string]time.Time),
 		active:   make(map[string]struct{}),
+		inFlight: make(map[string]struct{}),
 	}
 }
 
 func (m *Manager) Notify(ctx context.Context, event Event) {
+	_ = m.NotifyDelivered(ctx, event)
+}
+
+// NotifyDelivered reports whether this call delivered the event. Delivery is
+// reserved atomically per key so concurrent poll/background paths cannot both
+// pass the cooldown check and send duplicates. A failed delivery releases the
+// reservation without advancing the cooldown, allowing a later retry.
+func (m *Manager) NotifyDelivered(ctx context.Context, event Event) bool {
 	if m == nil || m.notifier == nil {
-		return
+		return false
 	}
 	if event.Key == "" {
 		event.Key = event.Subject
@@ -49,18 +59,20 @@ func (m *Manager) Notify(ctx context.Context, event Event) {
 		cooldown = m.cooldown
 	}
 
-	if !m.shouldSend(event.Key, cooldown) {
+	if !m.reserveSend(event.Key, cooldown) {
 		log.Info().Str("alert_key", event.Key).Dur("cooldown", cooldown).Msg("skipping alert due to cooldown")
-		return
+		return false
 	}
 
 	if err := m.notifier.Notify(ctx, event.Subject, event.Body); err != nil {
+		m.finishSend(event.Key, false)
 		log.Error().Err(err).Str("alert_key", event.Key).Msg("failed to deliver alert")
-		return
+		return false
 	}
 
-	m.markSent(event.Key)
+	m.finishSend(event.Key, true)
 	log.Info().Str("alert_key", event.Key).Msg("alert delivered")
+	return true
 }
 
 func (m *Manager) NotifyActive(ctx context.Context, event Event) {
@@ -87,25 +99,37 @@ func (m *Manager) Resolve(ctx context.Context, activeKey string, recovery Event,
 	if recovery.Key == "" {
 		recovery.Key = activeKey + "_recovered"
 	}
-	m.Notify(ctx, recovery)
-}
-
-func (m *Manager) shouldSend(key string, cooldown time.Duration) bool {
-	if cooldown <= 0 {
-		return true
+	if !m.NotifyDelivered(ctx, recovery) {
+		// Keep the transition retryable. A later clear snapshot can attempt the
+		// recovery notification again, while a concurrently reactivated key is
+		// preserved by the idempotent active set.
+		m.markActive(activeKey)
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	lastSent, ok := m.lastSent[key]
-	return !ok || time.Since(lastSent) >= cooldown
 }
 
-func (m *Manager) markSent(key string) {
+func (m *Manager) reserveSend(key string, cooldown time.Duration) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.lastSent[key] = time.Now()
+
+	if _, ok := m.inFlight[key]; ok {
+		return false
+	}
+	if cooldown > 0 {
+		if lastSent, ok := m.lastSent[key]; ok && time.Since(lastSent) < cooldown {
+			return false
+		}
+	}
+	m.inFlight[key] = struct{}{}
+	return true
+}
+
+func (m *Manager) finishSend(key string, delivered bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.inFlight, key)
+	if delivered {
+		m.lastSent[key] = time.Now()
+	}
 }
 
 func (m *Manager) markActive(key string) {

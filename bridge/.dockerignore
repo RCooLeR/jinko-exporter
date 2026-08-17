@@ -1,5 +1,13 @@
 .git
 .idea
 tmp
+.tmp-*
+.env
+.env.*
+*.local
 *.exe
+*.test
 *.log
+coverage.out
+cover.out
+*.coverprofile

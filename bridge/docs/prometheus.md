@@ -81,7 +81,7 @@ solar_metric{source="jinko",device_sn="SYNTHETIC_INV_001",group="battery",key="B
 
 ## Dropping The Source Label
 
-Set:
+For a source-independent `modbus,jinko,solarman` deployment, set:
 
 ```yaml
 environment:
@@ -102,7 +102,11 @@ solar_metric{device_sn="SYNTHETIC_INV_001",group="grid",key="PG_Pt1",name="Total
 
 When source labels are dropped, duplicate source-specific metric label sets are collapsed inside one collection pass. This is useful for failover dashboards, but it can hide source-specific differences if two sources report the same logical metric differently.
 
-Priority failover can also project fallback metrics onto the primary source surface with `EXPORTER_SOURCE_PROJECT_FAILOVER_METRICS=true`. When unset, that option defaults to `EXPORTER_METRICS_DROP_SOURCE_LABEL` for compatibility with older configurations.
+Priority failover can also project fallback metrics onto the primary source surface with `EXPORTER_SOURCE_PROJECT_FAILOVER_METRICS=true`. When unset, that option defaults to `EXPORTER_METRICS_DROP_SOURCE_LABEL`; `SOLARMAN_CANONICAL_JINKO_METRICS` inherits the same default. Recognized Solarman points are always canonicalized. The legacy-named Solarman option instead filters unknown Solarman-only points when true. Thus the recommended `EXPORTER_METRICS_DROP_SOURCE_LABEL=true` setting enables projection, selects the strict shared-dictionary Solarman surface, and removes the active source from ordinary series unless either dependent option is explicitly overridden.
+
+Jinko, recognized Solarman points, and Modbus use identical key/group/name/unit labels for `DP1`, `DP2`, `DV1`, `DC1`, `DV2`, `DC2`, `S_P_T`, `INV_O_P_L1`, `INV_O_P_L2`, `INV_O_P_L3`, `INV_O_P_T`, `B_T1`, `BMST`, `BMS_SOC`, and `AC`. After the primary surface has been learned, projection matches a fallback by canonical key and overwrites its ordinary metric labels with the learned primary labels, so these shared series do not churn during failover. Combined with dropping `source`, this prevents Grafana queries from rendering parallel source-specific lines for the same logical metric. Source-local warning/alarm/fault metrics bypass projection and keep their own keys and domains; the source-local register-551 power-switch key likewise has no cloud alias to collide with. `last_source_sync_timestamp_seconds{source=...}` remains available to identify source health even when ordinary source labels are dropped.
+
+`device_sn` intentionally remains on telemetry. In a mixed priority chain, `MODBUS_DEVICE_SN` is therefore required and must be the same inverter serial returned by Jinko/Solarman. Once the primary surface has been learned, projection rejects a fallback with a different non-empty serial and tries the next source instead of mixing another inverter into the same logical series. `MQTT_DEVICE_ID` stabilizes Home Assistant topics only; it does not replace the Prometheus `device_sn` label.
 
 ## Query Examples
 
@@ -110,6 +114,18 @@ Current solar production:
 
 ```promql
 solar_metric{group="electric",key="S_P_T"}
+```
+
+PV string power, voltage, and current:
+
+```promql
+solar_metric{group="electric",key=~"DP1|DP2|DV1|DV2|DC1|DC2"}
+```
+
+Total inverter output power:
+
+```promql
+solar_metric{group="electric",key="INV_O_P_T"}
 ```
 
 Battery state of charge:

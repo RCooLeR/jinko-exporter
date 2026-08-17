@@ -63,6 +63,77 @@ func TestCollectorSkipsInvalidMetricValues(t *testing.T) {
 	}
 }
 
+func TestCollectorDeduplicatesIdenticalMetricLabels(t *testing.T) {
+	for _, dropSourceLabel := range []bool{false, true} {
+		t.Run("drop_source_label="+map[bool]string{false: "false", true: "true"}[dropSourceLabel], func(t *testing.T) {
+			state := poller.NewState("jinko")
+			snapshot := &model.Snapshot{
+				Source:      "jinko",
+				DeviceSN:    "ABC123",
+				CollectedAt: time.Unix(1775145150, 0).UTC(),
+				Metrics: []model.Metric{
+					{Group: "electric", Key: "DUP", Name: "Duplicate", Unit: "W", Value: 123},
+					{Group: "electric", Key: "DUP", Name: "Duplicate", Unit: "W", Value: 456},
+					{Group: "electric", Key: "OTHER", Name: "Other", Unit: "W", Value: 789},
+				},
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runner := poller.NewRunner(staticSource{snapshot: snapshot}, time.Hour, state, nil, config.AlertConfig{})
+			go runner.Run(ctx)
+			waitForSnapshot(t, state)
+
+			family := metricFamily(t, gatherCollector(t, NewCollector("solar", state, dropSourceLabel)), "solar_metric")
+			if got := len(family.GetMetric()); got != 2 {
+				t.Fatalf("solar_metric count = %d, want 2 unique label sets", got)
+			}
+			for _, metric := range family.GetMetric() {
+				if metricLabels(metric)["key"] == "DUP" && metric.GetGauge().GetValue() != 123 {
+					t.Fatalf("deduplicated value = %v, want first value 123", metric.GetGauge().GetValue())
+				}
+			}
+		})
+	}
+}
+
+func TestCollectorPreservesCanonicalOutputPowerLabels(t *testing.T) {
+	state := poller.NewState("modbus")
+	snapshot := &model.Snapshot{
+		Source:      "modbus",
+		DeviceSN:    "SYNTHETIC_INV_001",
+		CollectedAt: time.Unix(1775145150, 0).UTC(),
+		Metrics: []model.Metric{
+			{Group: "electric", Key: "INV_O_P_T", Name: "Total Inverter Output Power", Unit: "W", Value: 2854},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := poller.NewRunner(staticSource{snapshot: snapshot}, time.Hour, state, nil, config.AlertConfig{})
+	go runner.Run(ctx)
+	waitForSnapshot(t, state)
+
+	families := gatherCollector(t, NewCollector("solar", state, false))
+	family := metricFamily(t, families, "solar_metric")
+	if len(family.GetMetric()) != 1 {
+		t.Fatalf("solar_metric count = %d, want 1", len(family.GetMetric()))
+	}
+	metric := family.GetMetric()[0]
+	wantLabels := map[string]string{
+		"source": "modbus", "device_sn": "SYNTHETIC_INV_001", "group": "electric",
+		"key": "INV_O_P_T", "name": "Total Inverter Output Power", "unit": "W",
+	}
+	for key, want := range wantLabels {
+		if got := metricLabels(metric)[key]; got != want {
+			t.Fatalf("label %s = %q, want %q", key, got, want)
+		}
+	}
+	if got := metric.GetGauge().GetValue(); got != 2854 {
+		t.Fatalf("output power = %v, want 2854", got)
+	}
+}
+
 func TestCollectorExportsBuildInfoAndPollSuccess(t *testing.T) {
 	state := poller.NewState("jinko")
 	snapshot := &model.Snapshot{

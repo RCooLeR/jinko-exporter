@@ -19,12 +19,18 @@ type Priority struct {
 
 type metricSurface struct {
 	deviceSN string
+	parentSN string
+	deviceID string
+	siteID   string
 	metrics  map[string]model.Metric
 }
 
 func NewPriority(sources []Source, projectFallbackMetrics bool) *Priority {
 	names := make([]string, 0, len(sources))
 	for _, src := range sources {
+		if isNilInterface(src) {
+			continue
+		}
 		names = append(names, src.Name())
 	}
 	return &Priority{
@@ -38,25 +44,51 @@ func (p *Priority) Name() string {
 	return p.name
 }
 
+func (p *Priority) RunBackground(ctx context.Context) {
+	runBackgroundMaintainers(ctx, p.backgroundMaintainers())
+}
+
+func (p *Priority) backgroundMaintainers() []BackgroundMaintainer {
+	return collectBackgroundMaintainers(p.sources)
+}
+
 func (p *Priority) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	errs := make([]error, 0, len(p.sources))
 	for idx, src := range p.sources {
+		if isNilInterface(src) {
+			errs = append(errs, errors.New("nil priority source"))
+			continue
+		}
 		snapshot, err := src.Fetch(ctx)
-		if err == nil {
+		if err == nil && snapshot != nil {
 			if p.projectFallbackMetrics {
 				if idx == 0 {
 					p.rememberPrimarySurface(snapshot)
+				} else if p.fallbackDeviceConflictsWithPrimary(snapshot) {
+					err = errors.New("fallback snapshot device serial does not match the learned primary device serial")
 				} else {
 					snapshot = p.projectToPrimarySurface(snapshot)
+					if p.primarySurface != nil && !hasOrdinaryTelemetry(snapshot) {
+						err = errors.New("projected fallback snapshot has no telemetry metrics compatible with the primary surface")
+					}
 				}
 			}
-			if len(errs) > 0 {
-				log.Warn().
-					Str("source", src.Name()).
-					Int("failed_sources", len(errs)).
-					Msg("priority source fetch succeeded after earlier source failures")
+			if err != nil {
+				// Continue to the next source. Source-local alert words alone are
+				// preserved when telemetry overlaps, but cannot make an otherwise
+				// incompatible fallback count as a successful telemetry poll.
+			} else {
+				if len(errs) > 0 {
+					log.Warn().
+						Str("source", src.Name()).
+						Int("failed_sources", len(errs)).
+						Msg("priority source fetch succeeded after earlier source failures")
+				}
+				return snapshot, nil
 			}
-			return snapshot, nil
+		}
+		if err == nil {
+			err = errors.New("source returned a nil snapshot without an error")
 		}
 
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -70,7 +102,20 @@ func (p *Priority) Fetch(ctx context.Context) (*model.Snapshot, error) {
 			Msg("priority source fetch failed, trying next source")
 	}
 
-	return nil, fmt.Errorf("all priority sources failed (%s): %w", p.name, errors.Join(errs...))
+	joined := errors.Join(errs...)
+	if joined == nil {
+		joined = errors.New("no priority sources configured")
+	}
+	return nil, fmt.Errorf("all priority sources failed (%s): %w", p.name, joined)
+}
+
+func (p *Priority) fallbackDeviceConflictsWithPrimary(snapshot *model.Snapshot) bool {
+	if snapshot == nil || p.primarySurface == nil {
+		return false
+	}
+	primaryDeviceSN := strings.TrimSpace(p.primarySurface.deviceSN)
+	fallbackDeviceSN := strings.TrimSpace(snapshot.DeviceSN)
+	return primaryDeviceSN != "" && fallbackDeviceSN != "" && fallbackDeviceSN != primaryDeviceSN
 }
 
 func (p *Priority) rememberPrimarySurface(snapshot *model.Snapshot) {
@@ -80,6 +125,9 @@ func (p *Priority) rememberPrimarySurface(snapshot *model.Snapshot) {
 
 	surface := &metricSurface{
 		deviceSN: strings.TrimSpace(snapshot.DeviceSN),
+		parentSN: strings.TrimSpace(snapshot.ParentSN),
+		deviceID: strings.TrimSpace(snapshot.DeviceID),
+		siteID:   strings.TrimSpace(snapshot.SiteID),
 		metrics:  make(map[string]model.Metric, len(snapshot.Metrics)),
 	}
 	for _, metric := range snapshot.Metrics {
@@ -100,8 +148,20 @@ func (p *Priority) projectToPrimarySurface(snapshot *model.Snapshot) *model.Snap
 	}
 
 	projected := *snapshot
-	if p.primarySurface.deviceSN != "" {
-		projected.DeviceSN = p.primarySurface.deviceSN
+	fallbackDeviceSN := strings.TrimSpace(projected.DeviceSN)
+	sameDevice := fallbackDeviceSN != "" &&
+		p.primarySurface.deviceSN != "" &&
+		fallbackDeviceSN == p.primarySurface.deviceSN
+	if sameDevice {
+		if strings.TrimSpace(projected.ParentSN) == "" && p.primarySurface.parentSN != "" {
+			projected.ParentSN = p.primarySurface.parentSN
+		}
+		if strings.TrimSpace(projected.DeviceID) == "" && p.primarySurface.deviceID != "" {
+			projected.DeviceID = p.primarySurface.deviceID
+		}
+		if strings.TrimSpace(projected.SiteID) == "" && p.primarySurface.siteID != "" {
+			projected.SiteID = p.primarySurface.siteID
+		}
 	}
 
 	metrics := make([]model.Metric, 0, len(snapshot.Metrics))
@@ -109,6 +169,18 @@ func (p *Priority) projectToPrimarySurface(snapshot *model.Snapshot) *model.Snap
 	for _, metric := range snapshot.Metrics {
 		key := strings.TrimSpace(metric.Key)
 		if key == "" {
+			continue
+		}
+		// Alert metrics are source-domain data, not interchangeable telemetry.
+		// Preserve the fallback source's own warning/alarm/fault surface so an
+		// active cloud fault cannot disappear merely because the primary Modbus
+		// surface uses different Deye-specific raw warning words.
+		if isSourceAlertMetric(metric) {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			metrics = append(metrics, metric)
 			continue
 		}
 		primaryMetric, ok := p.primarySurface.metrics[key]
@@ -128,4 +200,22 @@ func (p *Priority) projectToPrimarySurface(snapshot *model.Snapshot) *model.Snap
 	}
 	projected.Metrics = metrics
 	return &projected
+}
+
+func isSourceAlertMetric(metric model.Metric) bool {
+	text := strings.ToLower(metric.Group + " " + metric.Key + " " + metric.Name)
+	return strings.TrimSpace(strings.ToLower(metric.Group)) == "alert" ||
+		strings.Contains(text, "alarm") || strings.Contains(text, "fault")
+}
+
+func hasOrdinaryTelemetry(snapshot *model.Snapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+	for _, metric := range snapshot.Metrics {
+		if strings.TrimSpace(metric.Key) != "" && !isSourceAlertMetric(metric) {
+			return true
+		}
+	}
+	return false
 }

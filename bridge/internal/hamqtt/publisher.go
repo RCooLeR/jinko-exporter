@@ -1,6 +1,7 @@
 package hamqtt
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -23,7 +24,10 @@ const (
 	connectRetryInterval = 5 * time.Second
 )
 
-var errClientNotConnected = errors.New("MQTT client is not connected")
+var (
+	errClientNotConnected = errors.New("MQTT client is not connected")
+	errPublisherClosed    = errors.New("MQTT publisher is closed")
+)
 
 type Publisher struct {
 	cfg               config.MQTTConfig
@@ -32,7 +36,18 @@ type Publisher struct {
 	discoveryPrefix   string
 	availabilityTopic string
 
+	lifecycleMu      sync.Mutex
+	connectAttemptMu sync.Mutex
+	connectCancel    context.CancelFunc
+	connectDone      chan struct{}
+	// beforeConnectAttempt is an optional deterministic test barrier. It must
+	// only be configured before Start.
+	beforeConnectAttempt func()
+
 	mu                 sync.Mutex
+	started            bool
+	closing            bool
+	closed             bool
 	discoveryPayloads  map[string]string
 	discoveredMetrics  map[string]metricEntity
 	discoveryShapeSig  string
@@ -50,30 +65,32 @@ type metricEntity struct {
 
 type statePayload struct {
 	Source              string              `json:"source"`
-	DeviceSN            string              `json:"device_sn,omitempty"`
-	ParentSN            string              `json:"parent_sn,omitempty"`
-	DeviceID            string              `json:"device_id,omitempty"`
-	SiteID              string              `json:"site_id,omitempty"`
+	DeviceSN            string              `json:"device_sn"`
+	ParentSN            string              `json:"parent_sn"`
+	DeviceID            string              `json:"device_id"`
+	SiteID              string              `json:"site_id"`
 	CollectedAt         string              `json:"collected_at"`
 	PublishedAt         string              `json:"published_at"`
 	Up                  bool                `json:"up"`
 	Metrics             map[string]*float64 `json:"metrics"`
 	MetricCount         int                 `json:"metric_count"`
 	AlertMetrics        map[string]float64  `json:"alert_metrics"`
+	AlertDomain         string              `json:"alert_domain"`
 	AlertCount          int                 `json:"alert_count"`
+	AlertsKnown         bool                `json:"alerts_known"`
 	AlertsActive        bool                `json:"alerts_active"`
 	PollDurationSeconds float64             `json:"poll_duration_seconds"`
 	Meta                map[string]string   `json:"meta,omitempty"`
 }
 
 func NewPublisher(cfg config.MQTTConfig) (*Publisher, error) {
-	topicPrefix := cleanTopicPrefix(cfg.TopicPrefix)
-	discoveryPrefix := cleanTopicPrefix(cfg.DiscoveryPrefix)
-	if topicPrefix == "" {
-		return nil, fmt.Errorf("mqtt topic prefix is required")
+	topicPrefix, err := config.NormalizeMQTTTopicPrefix(cfg.TopicPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("mqtt topic prefix: %w", err)
 	}
-	if discoveryPrefix == "" {
-		return nil, fmt.Errorf("mqtt discovery prefix is required")
+	discoveryPrefix, err := config.NormalizeMQTTTopicPrefix(cfg.DiscoveryPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("mqtt discovery prefix: %w", err)
 	}
 
 	p := &Publisher{
@@ -90,8 +107,11 @@ func NewPublisher(cfg config.MQTTConfig) (*Publisher, error) {
 	opts.SetClientID(strings.TrimSpace(cfg.ClientID))
 	opts.SetCleanSession(true)
 	opts.SetAutoReconnect(true)
-	opts.SetConnectRetry(true)
-	opts.SetConnectRetryInterval(connectRetryInterval)
+	// Track initial connection retries ourselves. Paho's ConnectRetry keeps its
+	// Connect token pending in an internal retry goroutine, which cannot be
+	// joined by Publisher.Close. AutoReconnect still handles connection loss
+	// after the first successful connection.
+	opts.SetConnectRetry(false)
 	opts.SetConnectTimeout(cfg.Timeout)
 	opts.SetWriteTimeout(cfg.Timeout)
 	opts.SetPingTimeout(cfg.Timeout)
@@ -117,15 +137,30 @@ func NewPublisher(cfg config.MQTTConfig) (*Publisher, error) {
 }
 
 func (p *Publisher) Start() error {
-	go func() {
-		if err := p.wait(p.client.Connect()); err != nil {
-			log.Warn().
-				Err(err).
-				Str("broker", p.cfg.Broker).
-				Dur("retry_interval", connectRetryInterval).
-				Msg("MQTT broker unavailable; publisher will retry in background")
-		}
-	}()
+	if p == nil || p.client == nil {
+		return errPublisherClosed
+	}
+
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+
+	p.mu.Lock()
+	if p.closing || p.closed {
+		p.mu.Unlock()
+		return errPublisherClosed
+	}
+	if p.started {
+		p.mu.Unlock()
+		return nil
+	}
+	p.started = true
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	p.connectCancel = cancel
+	p.connectDone = done
+	p.mu.Unlock()
+
+	go p.connectUntilReady(ctx, done)
 	log.Info().
 		Str("broker", p.cfg.Broker).
 		Str("topic_prefix", p.topicPrefix).
@@ -138,12 +173,87 @@ func (p *Publisher) Close() {
 	if p == nil || p.client == nil {
 		return
 	}
+
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+
+	p.mu.Lock()
+	if p.closing || p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.closing = true
+	p.lastAvailability = availabilityOffline
 	if p.client.IsConnectionOpen() {
 		if err := p.publishString(p.availabilityTopic, availabilityOffline, p.cfg.Retain); err != nil {
 			log.Warn().Err(err).Msg("failed to publish MQTT offline availability during shutdown")
 		}
 	}
+	cancel := p.connectCancel
+	done := p.connectDone
+	p.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	// Disconnect even while the initial connection is in progress so a late
+	// successful connection cannot outlive the publisher.
+	p.connectAttemptMu.Lock()
 	p.client.Disconnect(250)
+	p.connectAttemptMu.Unlock()
+	if done != nil {
+		<-done
+	}
+
+	p.mu.Lock()
+	p.closed = true
+	p.mu.Unlock()
+}
+
+func (p *Publisher) connectUntilReady(ctx context.Context, done chan<- struct{}) {
+	defer close(done)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		if p.beforeConnectAttempt != nil {
+			p.beforeConnectAttempt()
+		}
+		p.connectAttemptMu.Lock()
+		if ctx.Err() != nil {
+			p.connectAttemptMu.Unlock()
+			return
+		}
+		token := p.client.Connect()
+		p.connectAttemptMu.Unlock()
+		token.Wait()
+		if ctx.Err() != nil {
+			return
+		}
+		if err := token.Error(); err == nil {
+			return
+		} else {
+			log.Warn().
+				Err(err).
+				Str("broker", p.cfg.Broker).
+				Dur("retry_interval", connectRetryInterval).
+				Msg("MQTT broker unavailable; publisher will retry in background")
+		}
+
+		retry := time.NewTimer(connectRetryInterval)
+		select {
+		case <-ctx.Done():
+			if !retry.Stop() {
+				<-retry.C
+			}
+			return
+		case <-retry.C:
+		}
+	}
 }
 
 func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Duration) error {
@@ -153,6 +263,9 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closing || p.closed {
+		return nil
+	}
 
 	device := p.device(snapshot)
 	stateTopic := p.stateTopic(device.ID)
@@ -180,7 +293,7 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 	p.lastAvailability = availabilityOnline
 
 	for _, msg := range discoveryMessages {
-		if p.discoveryPayloads[msg.topic] == msg.payload {
+		if previous, published := p.discoveryPayloads[msg.topic]; published && previous == msg.payload {
 			continue
 		}
 		if err := p.publishString(msg.topic, msg.payload, true); err != nil {
@@ -212,8 +325,11 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 
 func (p *Publisher) OnPollFailure(sourceName string, err error, duration time.Duration, errorCount uint64) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closing || p.closed {
+		return nil
+	}
 	p.lastAvailability = availabilityOffline
-	p.mu.Unlock()
 
 	log.Warn().
 		Err(err).
@@ -230,6 +346,18 @@ func (p *Publisher) OnPollFailure(sourceName string, err error, duration time.Du
 func (p *Publisher) onConnect(_ mqtt.Client) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closing || p.closed {
+		// A connection can complete concurrently with Close. Never replay cached
+		// state or publish online once shutdown has started. If the socket is
+		// momentarily open, replace retained availability with offline before the
+		// disconnect finishes.
+		if p.client.IsConnectionOpen() {
+			if err := p.publishString(p.availabilityTopic, availabilityOffline, p.cfg.Retain); err != nil {
+				log.Warn().Err(err).Str("broker", p.cfg.Broker).Msg("failed to preserve MQTT offline availability during shutdown")
+			}
+		}
+		return
+	}
 
 	// Home Assistant may miss retained discovery/state writes during broker
 	// restarts, so replay the cached shape and state on every reconnect.
@@ -331,7 +459,7 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 			continue
 		}
 		payload := p.baseDiscoveryPayload(device, "Meta "+key, device.ID+"_meta_"+stateKey, stateTopic)
-		payload["value_template"] = "{{ value_json.meta." + stateKey + " }}"
+		payload["value_template"] = "{{ value_json.get('meta', {}).get('" + stateKey + "') }}"
 		payload["entity_category"] = "diagnostic"
 		payload["icon"] = "mdi:information"
 		if err := add("sensor", "meta_"+stateKey, payload); err != nil {
@@ -349,13 +477,35 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 		return nil, err
 	}
 
-	alertPayload := p.baseDiscoveryPayload(device, "Alarm Or Fault Active", device.ID+"_alarm_or_fault_active", stateTopic)
-	alertPayload["value_template"] = "{{ 'ON' if value_json.alerts_active else 'OFF' }}"
-	alertPayload["payload_on"] = "ON"
-	alertPayload["payload_off"] = "OFF"
-	alertPayload["device_class"] = "problem"
-	if err := add("binary_sensor", "alarm_or_fault_active", alertPayload); err != nil {
-		return nil, err
+	// Remove the legacy cross-source aggregate. It could turn OFF when a
+	// different source reported a clear but semantically distinct alert domain.
+	legacyObjectID := sanitizeID(device.ID + "_alarm_or_fault_active")
+	messages = append(messages, discoveryMessage{
+		topic:   fmt.Sprintf("%s/binary_sensor/%s/config", p.discoveryPrefix, legacyObjectID),
+		payload: "",
+	})
+
+	alertDomain := sanitizeID(snapshot.Source)
+	if alertDomain == "" {
+		alertDomain = "unknown_source"
+	}
+	hasAlertMetrics := false
+	for _, metric := range snapshot.Metrics {
+		if isAlertMetric(metric) {
+			hasAlertMetrics = true
+			break
+		}
+	}
+	if hasAlertMetrics {
+		objectSuffix := alertDomain + "_warning_alarm_fault_active"
+		alertPayload := p.baseDiscoveryPayload(device, "Warning/Alarm/Fault Active ("+snapshot.Source+")", device.ID+"_"+objectSuffix, stateTopic)
+		alertPayload["value_template"] = "{{ 'ON' if value_json.alert_domain == '" + alertDomain + "' and value_json.alerts_known and value_json.alerts_active else 'OFF' if value_json.alert_domain == '" + alertDomain + "' and value_json.alerts_known else none }}"
+		alertPayload["payload_on"] = "ON"
+		alertPayload["payload_off"] = "OFF"
+		alertPayload["device_class"] = "problem"
+		if err := add("binary_sensor", objectSuffix, alertPayload); err != nil {
+			return nil, err
+		}
 	}
 
 	for _, metric := range snapshot.Metrics {
@@ -393,7 +543,7 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 
 		if isAlertMetric(metric) {
 			binaryPayload := p.baseDiscoveryPayload(device, metricName(metric)+" Active", device.ID+"_"+stateKey+"_active", stateTopic)
-			binaryPayload["value_template"] = "{{ 'ON' if value_json.alert_metrics." + stateKey + "|default(0)|float != 0 else 'OFF' }}"
+			binaryPayload["value_template"] = "{{ 'ON' if '" + stateKey + "' in value_json.alert_metrics and value_json.alert_metrics." + stateKey + "|float != 0 else 'OFF' if '" + stateKey + "' in value_json.alert_metrics else none }}"
 			binaryPayload["payload_on"] = "ON"
 			binaryPayload["payload_off"] = "OFF"
 			binaryPayload["device_class"] = "problem"
@@ -442,14 +592,14 @@ func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Du
 		if !math.IsNaN(metric.Value) && !math.IsInf(metric.Value, 0) {
 			value := metric.Value
 			metrics[stateKey] = &value
+			if isAlertMetric(metric) {
+				alertMetrics[stateKey] = value
+				if value != 0 {
+					alertCount++
+				}
+			}
 		} else if _, ok := metrics[stateKey]; !ok {
 			metrics[stateKey] = nil
-		}
-		if isAlertMetric(metric) {
-			alertMetrics[stateKey] = metric.Value
-			if metric.Value != 0 {
-				alertCount++
-			}
 		}
 	}
 
@@ -465,7 +615,9 @@ func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Du
 		Metrics:             metrics,
 		MetricCount:         len(snapshot.Metrics),
 		AlertMetrics:        alertMetrics,
+		AlertDomain:         firstNonEmpty(sanitizeID(snapshot.Source), "unknown_source"),
 		AlertCount:          alertCount,
+		AlertsKnown:         len(alertMetrics) > 0,
 		AlertsActive:        alertCount > 0,
 		PollDurationSeconds: duration.Seconds(),
 		Meta:                normalizedMeta(snapshot.Meta),
@@ -536,6 +688,9 @@ func (p *Publisher) discoverySignature(snapshot *model.Snapshot, device deviceIn
 	b.WriteByte('|')
 	b.WriteString(stateTopic)
 	b.WriteByte('|')
+	b.WriteString("source:")
+	b.WriteString(strings.TrimSpace(snapshot.Source))
+	b.WriteByte('|')
 	for _, metric := range snapshot.Metrics {
 		stateKey := metricStateKey(metric)
 		if stateKey == "" {
@@ -550,7 +705,12 @@ func (p *Publisher) discoverySignature(snapshot *model.Snapshot, device deviceIn
 		b.WriteString(metric.Group)
 		b.WriteByte('|')
 	}
+	metaKeys := make([]string, 0, len(snapshot.Meta))
 	for key := range snapshot.Meta {
+		metaKeys = append(metaKeys, key)
+	}
+	sort.Strings(metaKeys)
+	for _, key := range metaKeys {
 		stateKey := sanitizeID(key)
 		if stateKey == "" {
 			continue
@@ -575,14 +735,14 @@ type diagnosticEntity struct {
 var diagnosticEntities = []diagnosticEntity{
 	{StateKey: "source", Name: "Data Source", ValueTemplate: "{{ value_json.source }}", Icon: "mdi:database-import"},
 	{StateKey: "device_sn", Name: "Device Serial", ValueTemplate: "{{ value_json.device_sn }}", Icon: "mdi:identifier"},
-	{StateKey: "parent_sn", Name: "Parent Serial", ValueTemplate: "{{ value_json.parent_sn }}", Icon: "mdi:identifier"},
-	{StateKey: "device_id", Name: "Device ID", ValueTemplate: "{{ value_json.device_id }}", Icon: "mdi:identifier"},
-	{StateKey: "site_id", Name: "Site ID", ValueTemplate: "{{ value_json.site_id }}", Icon: "mdi:home-lightning-bolt"},
+	{StateKey: "parent_sn", Name: "Parent Serial", ValueTemplate: "{{ value_json.get('parent_sn', '') }}", Icon: "mdi:identifier"},
+	{StateKey: "device_id", Name: "Device ID", ValueTemplate: "{{ value_json.get('device_id', '') }}", Icon: "mdi:identifier"},
+	{StateKey: "site_id", Name: "Site ID", ValueTemplate: "{{ value_json.get('site_id', '') }}", Icon: "mdi:home-lightning-bolt"},
 	{StateKey: "collected_at", Name: "Collected At", ValueTemplate: "{{ value_json.collected_at }}", DeviceClass: "timestamp"},
 	{StateKey: "published_at", Name: "Published At", ValueTemplate: "{{ value_json.published_at }}", DeviceClass: "timestamp"},
 	{StateKey: "poll_duration", Name: "Poll Duration", ValueTemplate: "{{ value_json.poll_duration_seconds }}", DeviceClass: "duration", StateClass: "measurement", Unit: "s"},
 	{StateKey: "metric_count", Name: "Metric Count", ValueTemplate: "{{ value_json.metric_count }}", StateClass: "measurement", Icon: "mdi:counter"},
-	{StateKey: "alert_count", Name: "Active Alarm Or Fault Count", ValueTemplate: "{{ value_json.alert_count }}", StateClass: "measurement", Icon: "mdi:alert-circle"},
+	{StateKey: "alert_count", Name: "Current Source Active Warning/Alarm/Fault Count", ValueTemplate: "{{ value_json.alert_count if value_json.alerts_known else none }}", StateClass: "measurement", Icon: "mdi:alert-circle"},
 }
 
 type metricMeta struct {
@@ -689,18 +849,6 @@ func normalizeHAUnit(unit string) string {
 	default:
 		return unit
 	}
-}
-
-func cleanTopicPrefix(value string) string {
-	parts := strings.Split(strings.Trim(strings.TrimSpace(value), "/"), "/")
-	cleaned := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			cleaned = append(cleaned, part)
-		}
-	}
-	return strings.Join(cleaned, "/")
 }
 
 func normalizedMeta(meta map[string]string) map[string]string {

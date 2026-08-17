@@ -3,6 +3,7 @@ package jinko
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -94,7 +95,7 @@ func normalizeGroup(tag string, name string) string {
 func normalizeUnit(unit string) string {
 	unit = strings.TrimSpace(unit)
 	switch unit {
-	case "в„ѓ":
+	case "\u2103":
 		return "C"
 	default:
 		return unit
@@ -117,7 +118,7 @@ func parseNumber(raw string) (float64, bool) {
 	}
 	raw = normalizeNumberSeparators(raw)
 	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
 		return 0, false
 	}
 	return value, true

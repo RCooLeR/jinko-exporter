@@ -20,6 +20,17 @@ func (e *Enriched) Name() string {
 	return e.primary.Name()
 }
 
+func (e *Enriched) RunBackground(ctx context.Context) {
+	runBackgroundMaintainers(ctx, e.backgroundMaintainers())
+}
+
+func (e *Enriched) backgroundMaintainers() []BackgroundMaintainer {
+	sources := make([]Source, 0, 1+len(e.extras))
+	sources = append(sources, e.primary)
+	sources = append(sources, e.extras...)
+	return collectBackgroundMaintainers(sources)
+}
+
 func (e *Enriched) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	snapshot, err := e.primary.Fetch(ctx)
 	if err != nil {
@@ -39,7 +50,7 @@ func (e *Enriched) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	}
 
 	for _, extra := range e.extras {
-		if extra == nil {
+		if isNilInterface(extra) {
 			continue
 		}
 		extraSnapshot, err := extra.Fetch(ctx)
