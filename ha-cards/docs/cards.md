@@ -21,10 +21,10 @@ battery_negative_is_charging: true
 show_entity_map: false
 entities:
   grid_total_power: sensor.jinko_inverter_synthetic_inv_001_total_grid_power
-  grid_load_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_grid_load_total_power
-  home_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_total_consumption_power
-  ups_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_ups_load_power
-  battery_soc: sensor.jinko_inverter_SYNTHETIC_INV_001_soc
+  grid_load_total_power: sensor.jinko_inverter_synthetic_inv_001_grid_load_total_power
+  home_total_power: sensor.jinko_inverter_synthetic_inv_001_total_consumption_power
+  ups_total_power: sensor.jinko_inverter_synthetic_inv_001_ups_load_power
+  battery_soc: sensor.jinko_inverter_synthetic_inv_001_soc
 ```
 
 Options:
@@ -56,11 +56,11 @@ type: custom:jks-mini
 title: JKS Mini
 show_entity_map: false
 entities:
-  pv_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_total_solar_power
+  pv_total_power: sensor.jinko_inverter_synthetic_inv_001_total_solar_power
   grid_total_power: sensor.jinko_inverter_synthetic_inv_001_total_grid_power
-  grid_load_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_grid_load_total_power
-  home_total_power: sensor.jinko_inverter_SYNTHETIC_INV_001_total_consumption_power
-  battery_soc: sensor.jinko_inverter_SYNTHETIC_INV_001_soc
+  grid_load_total_power: sensor.jinko_inverter_synthetic_inv_001_grid_load_total_power
+  home_total_power: sensor.jinko_inverter_synthetic_inv_001_total_consumption_power
+  battery_soc: sensor.jinko_inverter_synthetic_inv_001_soc
 ```
 
 Options:
