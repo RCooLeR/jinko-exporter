@@ -10,6 +10,7 @@ permissions:
   contents: read
 
 env:
+  ACTIONLINT_VERSION: v1.7.12
   STATICCHECK_VERSION: v0.7.0
   GOVULNCHECK_VERSION: v1.3.0
 
@@ -18,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: bridge/go.mod
           cache-dependency-path: bridge/go.sum
@@ -29,6 +30,15 @@ jobs:
       - name: Check formatting
         working-directory: bridge
         run: test -z "$(gofmt -l .)"
+
+      - name: Check module files
+        working-directory: bridge
+        run: go mod tidy -diff
+
+      - name: Lint workflows
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}
+          actionlint
 
       - name: Vet
         working-directory: bridge
@@ -54,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Build bridge image
         run: |
@@ -70,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -94,3 +104,35 @@ jobs:
       - name: Build
         working-directory: ha-cards
         run: npm run build
+
+  release-config:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+
+      - name: Check GoReleaser configuration
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build full GoReleaser snapshot
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean

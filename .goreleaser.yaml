@@ -35,6 +35,7 @@ archives:
       - README.md
       - LICENSE
       - NOTICE
+      - compose.example.yaml
       - bridge/docs/*.md
       - ha-cards/README.md
       - ha-cards/docs/*.md
@@ -56,7 +57,7 @@ dockers_v2:
       - "{{ if not .Prerelease }}latest{{ end }}"
     labels:
       org.opencontainers.image.title: jinko-exporter
-      org.opencontainers.image.description: Prometheus exporter for Jinko and Solarman solar data sources
+      org.opencontainers.image.description: Read-only Prometheus and Home Assistant bridge for Jinko, Solarman, and locked local Modbus telemetry
       org.opencontainers.image.source: "{{ .GitURL }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.version: "{{ .Version }}"
