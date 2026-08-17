@@ -1,0 +1,138 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  ACTIONLINT_VERSION: v1.7.12
+  STATICCHECK_VERSION: v0.7.0
+  GOVULNCHECK_VERSION: v1.3.0
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+
+      - name: Check formatting
+        working-directory: bridge
+        run: test -z "$(gofmt -l .)"
+
+      - name: Check module files
+        working-directory: bridge
+        run: go mod tidy -diff
+
+      - name: Lint workflows
+        run: |
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+          actionlint
+
+      - name: Vet
+        working-directory: bridge
+        run: go vet ./...
+
+      - name: Test
+        working-directory: bridge
+        run: go test ./... -race -cover
+
+      - name: Staticcheck
+        working-directory: bridge
+        run: |
+          go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
+          staticcheck ./...
+
+      - name: Govulncheck
+        working-directory: bridge
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          govulncheck ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build bridge image
+        run: |
+          docker build \
+            --build-arg VERSION=ci \
+            --build-arg "COMMIT=${GITHUB_SHA}" \
+            --build-arg "DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -f bridge/Dockerfile \
+            -t jinko-exporter:ci \
+            bridge
+
+  ha-cards:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ha-cards/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ha-cards
+        run: npm ci
+
+      - name: Test
+        working-directory: ha-cards
+        run: npm test
+
+      - name: Typecheck
+        working-directory: ha-cards
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: ha-cards
+        run: npm run build
+
+  release-config:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: bridge/go.mod
+          cache-dependency-path: bridge/go.sum
+
+      - name: Check GoReleaser configuration
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build full GoReleaser snapshot
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean

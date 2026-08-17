@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/source"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/source/jinko"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/source/modbus"
+	"github.com/RCooLeR/jinko-exporter/bridge/internal/source/shelly"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/source/solarman"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -27,17 +31,21 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 10 * time.Second
+	httpWriteTimeout      = 30 * time.Second
+	httpIdleTimeout       = 60 * time.Second
+	httpMaxHeaderBytes    = 1 << 20
+)
+
 func Run(args []string) int {
 	app := &cli.App{
 		Name:  "jinko-exporter",
-		Usage: "Poll solar data from Jinko detail API, Solarman OpenAPI, or a future Modbus source and expose Prometheus metrics",
+		Usage: "Poll solar data from Jinko detail API, Solarman OpenAPI, or the locked read-only Modbus profile and expose Prometheus metrics",
 		Flags: config.Flags(),
 		Before: func(ctx *cli.Context) error {
-			cfg, err := config.FromCLI(ctx)
-			if err != nil {
-				return err
-			}
-			setupLogger(cfg.LogLevel)
+			setupLogger(ctx.String("log-level"))
 			return nil
 		},
 		Commands: []*cli.Command{
@@ -61,6 +69,25 @@ func Run(args []string) int {
 						return err
 					}
 					return runFetch(ctx.Context, cfg)
+				},
+			},
+			{
+				Name:  "healthcheck",
+				Usage: "Check the exporter HTTP health endpoint",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "url", Usage: "Health endpoint URL; defaults to EXPORTER_LISTEN with /healthz", EnvVars: []string{"EXPORTER_HEALTHCHECK_URL"}},
+					&cli.DurationFlag{Name: "timeout", Value: 5 * time.Second, Usage: "Healthcheck timeout", EnvVars: []string{"EXPORTER_HEALTHCHECK_TIMEOUT"}},
+				},
+				Action: func(ctx *cli.Context) error {
+					endpoint := ctx.String("url")
+					if endpoint == "" {
+						var err error
+						endpoint, err = defaultHealthcheckURL(ctx.String("listen"))
+						if err != nil {
+							return err
+						}
+					}
+					return runHealthcheck(ctx.Context, endpoint, ctx.Duration("timeout"))
 				},
 			},
 		},
@@ -107,19 +134,23 @@ func runServe(parent context.Context, cfg config.Config) error {
 	state := poller.NewState(src.Name())
 
 	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	var maintenanceDone <-chan struct{}
+	var runnerDone <-chan struct{}
+	var mqttPublisher *hamqtt.Publisher
+	defer func() {
+		var closePublisher func()
+		if mqttPublisher != nil {
+			closePublisher = mqttPublisher.Close
+		}
+		stopServeWorkers(cancel, maintenanceDone, runnerDone, closePublisher)
+	}()
 
 	var observers []poller.Observer
-	var mqttPublisher *hamqtt.Publisher
 	if cfg.MQTT.Enabled {
 		mqttPublisher, err = hamqtt.NewPublisher(cfg.MQTT)
 		if err != nil {
 			return err
 		}
-		if err := mqttPublisher.Start(); err != nil {
-			return err
-		}
-		defer mqttPublisher.Close()
 		observers = append(observers, mqttPublisher)
 	}
 
@@ -138,21 +169,34 @@ func runServe(parent context.Context, cfg config.Config) error {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if state.HasSnapshot() {
+		if state.Ready(3 * cfg.PollInterval) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ready\n"))
 			return
 		}
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
+		http.Error(w, "not ready or stale", http.StatusServiceUnavailable)
 	})
 
-	server := &http.Server{
-		Addr:              cfg.ListenAddress,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+	server := newHTTPServer(cfg.ListenAddress, mux)
+	listener, err := net.Listen("tcp", cfg.ListenAddress)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.ListenAddress, err)
+	}
+	defer func() { _ = listener.Close() }()
+	if mqttPublisher != nil {
+		if err := mqttPublisher.Start(); err != nil {
+			return err
+		}
 	}
 
-	go runner.Run(ctx)
+	maintenanceDone = startBackgroundMaintenance(ctx, src)
+
+	runnerStopped := make(chan struct{})
+	runnerDone = runnerStopped
+	go func() {
+		defer close(runnerStopped)
+		runner.Run(ctx)
+	}()
 
 	go func() {
 		<-ctx.Done()
@@ -171,10 +215,49 @@ func runServe(parent context.Context, cfg config.Config) error {
 		Bool("mqtt_enabled", cfg.MQTT.Enabled).
 		Msg("starting exporter")
 
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
+		MaxHeaderBytes:    httpMaxHeaderBytes,
+	}
+}
+
+func stopServeWorkers(cancel context.CancelFunc, maintenanceDone, runnerDone <-chan struct{}, closePublisher func()) {
+	cancel()
+	if maintenanceDone != nil {
+		<-maintenanceDone
+	}
+	if runnerDone != nil {
+		<-runnerDone
+	}
+	if closePublisher != nil {
+		closePublisher()
+	}
+}
+
+func startBackgroundMaintenance(ctx context.Context, src source.Source) <-chan struct{} {
+	done := make(chan struct{})
+	maintainer, ok := src.(source.BackgroundMaintainer)
+	if !ok {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		maintainer.RunBackground(ctx)
+	}()
+	return done
 }
 
 func runFetch(ctx context.Context, cfg config.Config) error {
@@ -198,6 +281,52 @@ func runFetch(ctx context.Context, cfg config.Config) error {
 	return enc.Encode(snapshot)
 }
 
+func defaultHealthcheckURL(listenAddress string) (string, error) {
+	host, port, err := net.SplitHostPort(listenAddress)
+	if err != nil {
+		return "", fmt.Errorf("build healthcheck URL from listen address: %w", err)
+	}
+	if port == "" {
+		return "", fmt.Errorf("build healthcheck URL from listen address: port is required")
+	}
+
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+
+	u := url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(host, port),
+		Path:   "/healthz",
+	}
+	return u.String(), nil
+}
+
+func runHealthcheck(parent context.Context, endpoint string, timeout time.Duration) error {
+	if timeout <= 0 {
+		return fmt.Errorf("healthcheck timeout must be > 0")
+	}
+
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("healthcheck failed: status=%d", resp.StatusCode)
+	}
+	return nil
+}
+
 func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error) {
 	sources := make([]source.Source, 0, len(cfg.SourcePriority))
 	for _, sourceName := range cfg.SourcePriority {
@@ -208,9 +337,9 @@ func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error
 		sources = append(sources, src)
 	}
 	if len(sources) == 1 {
-		return sources[0], nil
+		return enrichSource(sources[0], cfg)
 	}
-	return source.NewPriority(sources, cfg.DropSourceLabel), nil
+	return enrichSource(source.NewPriority(sources, cfg.ProjectFailoverMetrics), cfg)
 }
 
 func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manager) (source.Source, error) {
@@ -220,10 +349,21 @@ func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manag
 	case "solarman":
 		return solarman.New(cfg.Solarman, alerts), nil
 	case "modbus":
-		return modbus.New(cfg.Modbus), nil
+		return modbus.New(cfg.Modbus)
 	default:
 		return nil, fmt.Errorf("unsupported source %q", sourceName)
 	}
+}
+
+func enrichSource(src source.Source, cfg config.Config) (source.Source, error) {
+	if !cfg.ShellyGridLoad.Enabled {
+		return src, nil
+	}
+	gridLoad, err := shelly.NewGridLoadClient(cfg.ShellyGridLoad)
+	if err != nil {
+		return nil, err
+	}
+	return source.NewEnriched(src, gridLoad), nil
 }
 
 func buildAlerts(cfg config.Config) (*alert.Manager, error) {

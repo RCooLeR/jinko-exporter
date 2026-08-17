@@ -134,7 +134,7 @@ The bridge creates one Home Assistant device with these entity groups.
 | Published At | `published_at` | diagnostic timestamp |
 | Poll Duration | `poll_duration_seconds` | diagnostic duration |
 | Metric Count | `metric_count` | diagnostic |
-| Active Alarm Or Fault Count | `alert_count` | diagnostic |
+| Current Source Active Warning/Alarm/Fault Count | `alert_count` (number of non-zero alert metrics/raw words in the current source, not set bits; unknown when that source exposes no alert metrics) | diagnostic |
 
 Metadata fields in `snapshot.meta` also become diagnostic sensors named:
 
@@ -147,7 +147,18 @@ Meta <metadata_key>
 | Discovery name | Meaning | Device class |
 | --- | --- | --- |
 | Poll Up | Latest successful poll status | `connectivity` |
-| Alarm Or Fault Active | At least one alarm/fault metric is non-zero | `problem` |
+| Warning/Alarm/Fault Active (`<source>`) | At least one alert, alarm, warning-word, or fault metric from that source is non-zero | `problem` |
+
+Alert binary sensors are missing-safe during source failover. When the current
+snapshot does not contain a previously discovered alert metric, its binary
+sensor becomes unknown rather than incorrectly reporting `OFF`. Aggregate
+problem sensors are source-scoped as well: the Modbus aggregate, for example,
+becomes unknown while Jinko or Solarman supplies the snapshot and can return
+to `OFF` only after a complete Modbus snapshot reports its own alert words as
+clear. The bridge publishes a retained empty discovery payload for the older
+cross-source `alarm_or_fault_active` entity so Home Assistant removes that
+unsafe aggregate. Inspect the `Data Source` diagnostic sensor alongside alert
+entities.
 
 ### Metric Sensors
 
@@ -176,14 +187,60 @@ Example:
 | Metric | State key | Likely entity ID |
 | --- | --- | --- |
 | `group=grid`, `key=PG_Pt1`, `name=Total Grid Power` | `grid_pg_pt1` | `sensor.jinko_inverter_synthetic_inv_001_total_grid_power` |
-| `group=battery`, `key=B_left_cap1`, `name=SoC` | `battery_b_left_cap1` | `sensor.jinko_inverter_SYNTHETIC_INV_001_soc` |
-| `group=electric`, `key=S_P_T`, `name=Total Solar Power` | `electric_s_p_t` | `sensor.jinko_inverter_SYNTHETIC_INV_001_total_solar_power` |
+| `group=battery`, `key=B_left_cap1`, `name=SoC` | `battery_b_left_cap1` | `sensor.jinko_inverter_synthetic_inv_001_soc` |
+| `group=electric`, `key=S_P_T`, `name=Total Solar Power` | `electric_s_p_t` | `sensor.jinko_inverter_synthetic_inv_001_total_solar_power` |
+| `group=grid_load`, `key=total_power`, `name=Grid Load Total Power` | `grid_load_total_power` | `sensor.jinko_inverter_synthetic_inv_001_grid_load_total_power` |
 
 Home Assistant owns the final entity ID. If an entity with the same slug already exists, Home Assistant may append a suffix such as `_2`.
 
-### Alarm/Fault Binary Sensors
+The two-MPPT PV entities use the same discovery names and state keys for local Modbus, Jinko, and recognized Solarman points, which are always canonicalized through the shared dictionary:
 
-If a metric is an alarm or fault metric, the bridge creates an additional binary sensor.
+| Discovery name | Canonical key | State key | Unit |
+| --- | --- | --- | --- |
+| DC Power PV1 | `DP1` | `electric_dp1` | `W` |
+| DC Power PV2 | `DP2` | `electric_dp2` | `W` |
+| DC Voltage PV1 | `DV1` | `electric_dv1` | `V` |
+| DC Current PV1 | `DC1` | `electric_dc1` | `A` |
+| DC Voltage PV2 | `DV2` | `electric_dv2` | `V` |
+| DC Current PV2 | `DC2` | `electric_dc2` | `A` |
+| Total Solar Power | `S_P_T` | `electric_s_p_t` | `W` |
+
+The staged output-power entities use the same canonical discovery surface across Modbus and cloud fallback:
+
+| Discovery name | Canonical key | State key | Unit |
+| --- | --- | --- | --- |
+| Inverter Output Power L1 | `INV_O_P_L1` | `electric_inv_o_p_l1` | `W` |
+| Inverter Output Power L2 | `INV_O_P_L2` | `electric_inv_o_p_l2` | `W` |
+| Inverter Output Power L3 | `INV_O_P_L3` | `electric_inv_o_p_l3` | `W` |
+| Total Inverter Output Power | `INV_O_P_T` | `electric_inv_o_p_t` | `W` |
+
+The core local Modbus snapshot now contains 80 metrics before optional enrichment, including canonical `consumption/LPP_A..C`, `bms/BMS_SOC`, `bms/BMST`, raw relay mask `status/AC`, eleven `generator` state keys, and the four output-power keys above. The source-local `DEYE_MODBUS_R551_POWER_SWITCH_STATE` is a separate diagnostic entity and does not impersonate a cloud status key. The generator entities are backed by three live-verified all-zero register blocks: any nonzero generator word rejects Modbus and allows priority fallback instead of publishing an unverified decode. Output active power is likewise fail-closed outside its conservative signed domain: a high word other than `0x0000`/`0xFFFF`, a joined value outside `-32767..32767 W`, or an exact signed phase/total mismatch rejects Modbus rather than publishing a misleading entity. In a mixed priority deployment, keep one explicit `MQTT_DEVICE_ID`; with fallback projection enabled, these entities and the PV entities above retain the primary surface's key, group, name, and unit across source changes. The legacy-named `SOLARMAN_CANONICAL_JINKO_METRICS=true` setting additionally filters unknown Solarman-only points; it is not required to canonicalize recognized points. Previously discovered ordinary metrics that are absent from a fallback are published as `null` rather than retaining a stale value. Alert entities remain source-scoped as described above and are never projected into another source's warning/fault domain.
+
+### Shelly Grid Load Sensors
+
+When `SHELLY_GRID_LOAD_ENABLED=true`, the bridge appends Shelly Pro 3EM metrics under the `grid_load` group. These entities are useful for hybrid inverter installations where the inverter only measures backup/UPS load and does not expose grid-side load.
+
+Primary card-facing sensors:
+
+| Discovery name | State key | Unit |
+| --- | --- | --- |
+| Grid Load Total Power | `grid_load_total_power` | `W` |
+| Grid Load Total Current | `grid_load_total_current` | `A` |
+| Grid Load L1 Voltage | `grid_load_l1_voltage` | `V` |
+| Grid Load L2 Voltage | `grid_load_l2_voltage` | `V` |
+| Grid Load L3 Voltage | `grid_load_l3_voltage` | `V` |
+| Grid Load L1 Current | `grid_load_l1_current` | `A` |
+| Grid Load L2 Current | `grid_load_l2_current` | `A` |
+| Grid Load L3 Current | `grid_load_l3_current` | `A` |
+| Grid Load L1 Power | `grid_load_l1_power` | `W` |
+| Grid Load L2 Power | `grid_load_l2_power` | `W` |
+| Grid Load L3 Power | `grid_load_l3_power` | `W` |
+
+Shelly `EMData` totals are exposed as kWh energy sensors after converting the Shelly Wh counters.
+
+### Warning/Alarm/Fault Binary Sensors
+
+If a metric is a warning, alarm, or fault metric, the bridge creates an additional binary sensor.
 
 The metric is treated as an alert metric when:
 
@@ -209,6 +266,26 @@ Example:
 | --- | --- | --- |
 | Lithium battery alarm flag | Lithium battery alarm flag Active | `problem` |
 | Lithium battery fault flag | Lithium battery fault flag Active | `problem` |
+
+The Modbus source additionally creates one unitless numeric
+diagnostic sensor and one diagnostic `problem` binary sensor for each raw
+warning/fault word. A binary sensor is `ON` exactly when its corresponding raw
+U16 word is non-zero. While Modbus is the current source, `alert_count` counts
+non-zero words rather than individual set bits, and its Modbus aggregate is
+true when any of the six words is non-zero.
+
+| Register | Numeric state key | Binary sensor state key |
+| --- | --- | --- |
+| `553` | `alert_deye_modbus_r553_warning_word_1_raw` | `alert_deye_modbus_r553_warning_word_1_raw_active` |
+| `554` | `alert_deye_modbus_r554_warning_word_2_raw` | `alert_deye_modbus_r554_warning_word_2_raw_active` |
+| `555` | `alert_deye_modbus_r555_fault_word_1_raw` | `alert_deye_modbus_r555_fault_word_1_raw_active` |
+| `556` | `alert_deye_modbus_r556_fault_word_2_raw` | `alert_deye_modbus_r556_fault_word_2_raw_active` |
+| `557` | `alert_deye_modbus_r557_fault_word_3_raw` | `alert_deye_modbus_r557_fault_word_3_raw_active` |
+| `558` | `alert_deye_modbus_r558_fault_word_4_raw` | `alert_deye_modbus_r558_fault_word_4_raw_active` |
+
+These are source-specific inverter words. They are deliberately separate from
+the Jinko lithium-battery alert entities and have no decoded bit names or
+automatic control action.
 
 ## Device Classes And Units
 
@@ -244,6 +321,7 @@ Behavior:
 - On poll failure, the bridge publishes `offline`.
 - On clean shutdown, the bridge publishes `offline`.
 - The MQTT will message also uses `offline`.
+- On broker reconnect, the bridge republishes the latest retained discovery messages and state payload, then republishes the last known availability value. If the last poll failed, reconnect keeps availability `offline` until a later successful poll.
 
 If a source temporarily fails, Home Assistant marks the device entities unavailable until a later successful poll publishes `online` again.
 

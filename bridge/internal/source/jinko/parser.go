@@ -3,6 +3,7 @@ package jinko
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -43,7 +44,7 @@ func ParseDetailResponse(raw []byte) (*model.Snapshot, error) {
 	for _, cat := range payload.Categories {
 		group := normalizeGroup(cat.Tag, cat.Name)
 		for _, f := range cat.FieldList {
-			value, ok := parseNumber(firstNonEmpty(f.OrgValue, f.Value))
+			value, ok := parseFieldNumber(f)
 			if !ok {
 				continue
 			}
@@ -94,11 +95,20 @@ func normalizeGroup(tag string, name string) string {
 func normalizeUnit(unit string) string {
 	unit = strings.TrimSpace(unit)
 	switch unit {
-	case "в„ѓ":
+	case "\u2103":
 		return "C"
 	default:
 		return unit
 	}
+}
+
+func parseFieldNumber(f field) (float64, bool) {
+	for _, candidate := range []string{f.OrgValue, f.Value} {
+		if value, ok := parseNumber(candidate); ok {
+			return value, true
+		}
+	}
+	return 0, false
 }
 
 func parseNumber(raw string) (float64, bool) {
@@ -106,12 +116,32 @@ func parseNumber(raw string) (float64, bool) {
 	if raw == "" {
 		return 0, false
 	}
-	raw = strings.ReplaceAll(raw, ",", "")
+	raw = normalizeNumberSeparators(raw)
 	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
 		return 0, false
 	}
 	return value, true
+}
+
+func normalizeNumberSeparators(raw string) string {
+	raw = strings.ReplaceAll(raw, " ", "")
+	if !strings.Contains(raw, ",") {
+		return raw
+	}
+	if strings.Contains(raw, ".") {
+		return strings.ReplaceAll(raw, ",", "")
+	}
+
+	parts := strings.Split(raw, ",")
+	if len(parts) == 2 {
+		whole, fraction := parts[0], parts[1]
+		if len(fraction) == 3 && len(whole) > 0 {
+			return whole + fraction
+		}
+		return whole + "." + fraction
+	}
+	return strings.ReplaceAll(raw, ",", "")
 }
 
 func SanitizeKey(input string) string {

@@ -1,12 +1,14 @@
+export const isFiniteNumber = (value: number | null | undefined): value is number => Number.isFinite(value);
+
 export const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
 export const sum = (values: Array<number | null | undefined>): number | null => {
-  const filtered = values.filter((value): value is number => Number.isFinite(value));
+  const filtered = values.filter(isFiniteNumber);
   return filtered.length ? filtered.reduce((acc, value) => acc + value, 0) : null;
 };
 
 export const average = (values: Array<number | null | undefined>): number | null => {
-  const filtered = values.filter((value): value is number => Number.isFinite(value) && value !== 0);
+  const filtered = values.filter((value): value is number => isFiniteNumber(value) && value !== 0);
   return filtered.length ? filtered.reduce((acc, value) => acc + value, 0) / filtered.length : null;
 };
 
@@ -20,7 +22,7 @@ export const formatNumber = (value: number, digits = 1): string => {
 };
 
 export const formatPower = (value: number | null | undefined, signed = false): string => {
-  if (!Number.isFinite(value)) return "--";
+  if (!isFiniteNumber(value)) return "--";
   const sign = signed && value > 0 ? "+" : "";
   const abs = Math.abs(value);
   if (abs >= 1000) return `${sign}${value < 0 ? "-" : ""}${formatNumber(abs / 1000, abs >= 10000 ? 1 : 2)} kW`;
@@ -28,20 +30,20 @@ export const formatPower = (value: number | null | undefined, signed = false): s
 };
 
 export const formatVoltage = (value: number | null | undefined): string =>
-  Number.isFinite(value) ? `${formatNumber(value, value >= 100 ? 1 : 2)} V` : "--";
+  isFiniteNumber(value) ? `${formatNumber(value, value >= 100 ? 1 : 2)} V` : "--";
 
 export const formatCurrent = (value: number | null | undefined): string => {
-  if (!Number.isFinite(value)) return "--";
+  if (!isFiniteNumber(value)) return "--";
   const abs = Math.abs(value);
   if (abs < 1) return `${formatNumber(abs * 1000, abs < 0.1 ? 0 : 1)} mA`;
   return `${formatNumber(abs, abs >= 10 ? 1 : 2)} A`;
 };
 
 export const formatEnergy = (value: number | null | undefined): string =>
-  Number.isFinite(value) ? `${formatNumber(value, value >= 10 ? 1 : 2)} kWh` : "--";
+  isFiniteNumber(value) ? `${formatNumber(value, value >= 10 ? 1 : 2)} kWh` : "--";
 
 export const formatPercent = (value: number | null | undefined): string =>
-  Number.isFinite(value) ? `${formatNumber(value, value >= 10 ? 0 : 1)}%` : "--";
+  isFiniteNumber(value) ? `${formatNumber(value, value >= 10 ? 0 : 1)}%` : "--";
 
 export const formatTemperature = (value: number | null | undefined): string =>
-  Number.isFinite(value) ? `${formatNumber(value, 0)} C` : "--";
+  isFiniteNumber(value) ? `${formatNumber(value, 0)} C` : "--";

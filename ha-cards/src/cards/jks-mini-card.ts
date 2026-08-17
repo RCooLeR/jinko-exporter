@@ -1,7 +1,7 @@
 import desktopLayout from "../../assets/overview/desktop_layout_spec.json";
 import mobileLayout from "../../assets/overview/mobile_layout_spec.json";
 import { setClassNameIfChanged, setHiddenIfChanged, setStyleIfChanged, setTextContentIfChanged } from "../lib/dom";
-import { clamp, first, formatEnergy, formatNumber, formatPercent, formatPower, formatTemperature, sum } from "../lib/format";
+import { clamp, first, formatEnergy, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber, sum } from "../lib/format";
 import { ENTITY_KEYS, resolveEntities, valueFor, type EntityKey, type EntityOverrides, type ResolvedEntityMap } from "../lib/entity-model";
 import { MINI_CARD_POSITIONS, type PositionBoxModel, type PositionMode } from "../lib/position-models";
 import type { HomeAssistant, LovelaceCardConfig } from "../types/home-assistant";
@@ -54,7 +54,7 @@ interface MiniLayerDefinition {
 const DESKTOP_LAYOUT = desktopLayout as LayoutSpec;
 const MOBILE_LAYOUT = mobileLayout as LayoutSpec;
 const MOBILE_BREAKPOINT = 420;
-const MINI_CARD_FONT_REDUCTION = 0.64;
+const MINI_CARD_FONT_REDUCTION = 0.74;
 const MINI_CARD_MOBILE_REFERENCE_WIDTH = 360;
 const MINI_CARD_DESKTOP_REFERENCE_WIDTH = 520;
 const MINI_LAYER_POWER_EPSILON = 1;
@@ -175,7 +175,13 @@ class JksMiniCard extends HTMLElement {
       this._attemptedEntityKeys.clear();
     }
 
-    const keys = force ? ENTITY_KEYS : ENTITY_KEYS.filter((key) => !this._attemptedEntityKeys.has(key));
+    const keys = force
+      ? ENTITY_KEYS
+      : ENTITY_KEYS.filter((key) => {
+          if (!this._attemptedEntityKeys.has(key)) return true;
+          const entityId = this._resolved[key];
+          return !entityId || !this._hass?.states[entityId];
+        });
     if (!keys.length) return;
 
     this._resolved = {
@@ -314,8 +320,16 @@ class JksMiniCard extends HTMLElement {
 
   private _syncLayers(): void {
     const pvTotalPower = first(this._value("pv_total_power"), sum([this._value("pv1_power"), this._value("pv2_power")]));
-    const gridTotalPower = this._value("grid_total_power");
-    const homeTotalPower = this._value("home_total_power");
+    const gridTotalPower = first(
+      this._value("grid_total_power"),
+      sum([this._value("grid_l1_power"), this._value("grid_l2_power"), this._value("grid_l3_power")])
+    );
+    const homeTotalPower = first(
+      this._value("grid_load_total_power"),
+      sum([this._value("grid_load_l1_power"), this._value("grid_load_l2_power"), this._value("grid_load_l3_power")]),
+      this._value("home_total_power"),
+      sum([this._value("home_l1_power"), this._value("home_l2_power"), this._value("home_l3_power")])
+    );
     const batteryPower = this._value("battery_power");
     const generatorTotalPower = first(
       this._value("generator_total_power"),
@@ -429,7 +443,7 @@ class JksMiniCard extends HTMLElement {
         consumption_card: "29.5 kWh",
         costs_card: this._formatCosts(8.1, 3.4),
         battery_soc_card: "68%",
-        combined_pv: "4.0 kW",
+        combined_pv: "5.67 kW",
         grid_node: "+1.3 kW",
         inverter_node: "1.9 kW",
         inverter_temp: "46 C",
@@ -439,9 +453,17 @@ class JksMiniCard extends HTMLElement {
       };
     }
 
-    const gridTotalPower = this._value("grid_total_power");
+    const gridTotalPower = first(
+      this._value("grid_total_power"),
+      sum([this._value("grid_l1_power"), this._value("grid_l2_power"), this._value("grid_l3_power")])
+    );
     const pvTotalPower = first(this._value("pv_total_power"), sum([this._value("pv1_power"), this._value("pv2_power")]));
-    const homeTotalPower = this._value("home_total_power");
+    const homeTotalPower = first(
+      this._value("grid_load_total_power"),
+      sum([this._value("grid_load_l1_power"), this._value("grid_load_l2_power"), this._value("grid_load_l3_power")]),
+      this._value("home_total_power"),
+      sum([this._value("home_l1_power"), this._value("home_l2_power"), this._value("home_l3_power")])
+    );
     const pvDailyEnergy = this._value("pv_daily_energy");
     const gridBuyToday = this._value("grid_buy_today");
     const gridSellToday = this._value("grid_sell_today");
@@ -469,7 +491,7 @@ class JksMiniCard extends HTMLElement {
   }
 
   private _formatCosts(buyToday: number | null, sellToday: number | null): string {
-    if (!Number.isFinite(buyToday) && !Number.isFinite(sellToday)) {
+    if (!isFiniteNumber(buyToday) && !isFiniteNumber(sellToday)) {
       return "--";
     }
 
@@ -499,8 +521,13 @@ class JksMiniCard extends HTMLElement {
     const widthPct = options.widthPercent ?? (width / layout.image.width) * 100;
     const heightPct = options.heightPercent ?? (height / layout.image.height) * 100;
     const baseFontSize = options.fontSizePx ?? clamp(height * 0.56 * (options.fontScale ?? 1), 11, 30);
-    const targetFontSize = Math.round(baseFontSize * MINI_CARD_FONT_REDUCTION * 10) / 10;
     const referenceWidth = this._isMobile ? MINI_CARD_MOBILE_REFERENCE_WIDTH : MINI_CARD_DESKTOP_REFERENCE_WIDTH;
+    const sourceWidth = (widthPct / 100) * layout.image.width;
+    const referenceBoxWidth = (sourceWidth / layout.image.width) * referenceWidth;
+    const fittingFontSize = text.trim().length
+      ? (referenceBoxWidth * 0.96) / Math.max(text.trim().length * 0.58, 1)
+      : baseFontSize;
+    const targetFontSize = Math.round(Math.min(baseFontSize * MINI_CARD_FONT_REDUCTION, fittingFontSize) * 10) / 10;
     const responsiveFont = `clamp(${Math.max(10, Math.round(targetFontSize * 0.82 * 10) / 10)}px, ${(
       (targetFontSize / referenceWidth) *
       100
@@ -622,7 +649,7 @@ class JksMiniCard extends HTMLElement {
   }
 
   private _isMeaningfulPower(value: number | null | undefined): value is number {
-    return Number.isFinite(value) && Math.abs(value) > MINI_LAYER_POWER_EPSILON;
+    return isFiniteNumber(value) && Math.abs(value) > MINI_LAYER_POWER_EPSILON;
   }
 }
 

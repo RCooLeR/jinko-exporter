@@ -1,9 +1,11 @@
 package prom
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
+	"github.com/RCooLeR/jinko-exporter/bridge/internal/buildinfo"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/poller"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -12,12 +14,16 @@ type Collector struct {
 	state           *poller.State
 	dropSourceLabel bool
 
-	upDesc             *prometheus.Desc
-	lastUpdateDesc     *prometheus.Desc
-	lastSourceSyncDesc *prometheus.Desc
-	pollDurationDesc   *prometheus.Desc
-	errorCountDesc     *prometheus.Desc
-	valueDesc          *prometheus.Desc
+	upDesc              *prometheus.Desc
+	buildInfoDesc       *prometheus.Desc
+	pollSuccessDesc     *prometheus.Desc
+	pollCountDesc       *prometheus.Desc
+	lastUpdateDesc      *prometheus.Desc
+	lastPollSuccessDesc *prometheus.Desc
+	lastSourceSyncDesc  *prometheus.Desc
+	pollDurationDesc    *prometheus.Desc
+	errorCountDesc      *prometheus.Desc
+	valueDesc           *prometheus.Desc
 }
 
 func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Collector {
@@ -30,6 +36,7 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Col
 		deviceLabels = []string{"device_sn"}
 		valueLabels = []string{"device_sn", "group", "key", "name", "unit"}
 	}
+	pollCountLabels := append(append([]string{}, sourceLabels...), "result")
 
 	return &Collector{
 		state:           state,
@@ -40,10 +47,34 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Col
 			deviceLabels,
 			nil,
 		),
+		buildInfoDesc: prometheus.NewDesc(
+			prefix+"_build_info",
+			"Build information for the exporter.",
+			[]string{"version", "commit", "date"},
+			nil,
+		),
+		pollSuccessDesc: prometheus.NewDesc(
+			prefix+"_poll_success",
+			"1 if the last source poll succeeded, 0 otherwise.",
+			sourceLabels,
+			nil,
+		),
+		pollCountDesc: prometheus.NewDesc(
+			prefix+"_polls_total",
+			"Total number of polls by result.",
+			pollCountLabels,
+			nil,
+		),
 		lastUpdateDesc: prometheus.NewDesc(
 			prefix+"_last_update_timestamp_seconds",
 			"Unix timestamp of the last successful upstream update.",
 			deviceLabels,
+			nil,
+		),
+		lastPollSuccessDesc: prometheus.NewDesc(
+			prefix+"_last_poll_success_timestamp_seconds",
+			"Unix timestamp when the exporter last completed a successful poll.",
+			sourceLabels,
 			nil,
 		),
 		lastSourceSyncDesc: prometheus.NewDesc(
@@ -75,7 +106,11 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Col
 
 func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.upDesc
+	ch <- c.buildInfoDesc
+	ch <- c.pollSuccessDesc
+	ch <- c.pollCountDesc
 	ch <- c.lastUpdateDesc
+	ch <- c.lastPollSuccessDesc
 	ch <- c.lastSourceSyncDesc
 	ch <- c.pollDurationDesc
 	ch <- c.errorCountDesc
@@ -83,8 +118,12 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
-	snapshot, lastDuration, _, lastSuccessAt, up, errorCount := c.state.Snapshot()
-	sourceName := "unknown"
+	status := c.state.Status()
+	snapshot := status.Snapshot
+	sourceName := strings.TrimSpace(status.SourceName)
+	if sourceName == "" {
+		sourceName = "unknown"
+	}
 	deviceSN := "unknown"
 	if snapshot != nil {
 		sourceName = snapshot.Source
@@ -94,43 +133,42 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	upValue := 0.0
-	if up {
+	if status.Up {
 		upValue = 1
 	}
+	ch <- prometheus.MustNewConstMetric(c.buildInfoDesc, prometheus.GaugeValue, 1, buildinfo.Version, buildinfo.Commit, buildinfo.Date)
 	ch <- prometheus.MustNewConstMetric(c.upDesc, prometheus.GaugeValue, upValue, c.deviceLabelValues(sourceName, deviceSN)...)
-	ch <- prometheus.MustNewConstMetric(c.pollDurationDesc, prometheus.GaugeValue, lastDuration.Seconds(), c.sourceLabelValues(sourceName)...)
-	ch <- prometheus.MustNewConstMetric(c.errorCountDesc, prometheus.CounterValue, float64(errorCount), c.sourceLabelValues(sourceName)...)
-	if !lastSuccessAt.IsZero() {
-		syncTimestamp := float64(lastSuccessAt.Unix())
+	ch <- prometheus.MustNewConstMetric(c.pollSuccessDesc, prometheus.GaugeValue, upValue, c.sourceLabelValues(sourceName)...)
+	ch <- prometheus.MustNewConstMetric(c.pollCountDesc, prometheus.CounterValue, float64(status.SuccessCount), c.pollCountLabelValues(sourceName, "success")...)
+	ch <- prometheus.MustNewConstMetric(c.pollCountDesc, prometheus.CounterValue, float64(status.ErrorCount), c.pollCountLabelValues(sourceName, "error")...)
+	ch <- prometheus.MustNewConstMetric(c.pollDurationDesc, prometheus.GaugeValue, status.LastPollDuration.Seconds(), c.sourceLabelValues(sourceName)...)
+	ch <- prometheus.MustNewConstMetric(c.errorCountDesc, prometheus.CounterValue, float64(status.ErrorCount), c.sourceLabelValues(sourceName)...)
+	if !status.LastSourceSuccessAt.IsZero() {
+		syncTimestamp := float64(status.LastSourceSuccessAt.Unix())
 		ch <- prometheus.MustNewConstMetric(c.lastUpdateDesc, prometheus.GaugeValue, syncTimestamp, c.deviceLabelValues(sourceName, deviceSN)...)
 		ch <- prometheus.MustNewConstMetric(c.lastSourceSyncDesc, prometheus.GaugeValue, syncTimestamp, sourceName)
+	}
+	if !status.LastPollSuccessAt.IsZero() {
+		ch <- prometheus.MustNewConstMetric(c.lastPollSuccessDesc, prometheus.GaugeValue, float64(status.LastPollSuccessAt.Unix()), c.sourceLabelValues(sourceName)...)
 	}
 
 	if snapshot == nil {
 		return
 	}
 
-	if !c.dropSourceLabel {
-		for _, metric := range snapshot.Metrics {
-			ch <- prometheus.MustNewConstMetric(
-				c.valueDesc,
-				prometheus.GaugeValue,
-				metric.Value,
-				sourceName,
-				deviceSN,
-				metric.Group,
-				metric.Key,
-				metric.Name,
-				metric.Unit,
-			)
-		}
-		return
-	}
-
-	// Label dropping can collapse source-specific metrics into the same Prometheus series.
+	// A malformed or projected snapshot can contain the same logical point more
+	// than once. Prometheus rejects an entire scrape when a collector emits two
+	// samples with identical labels, so keep the first sample in snapshot order.
+	// This applies even when the source label is retained.
 	seenValueLabels := make(map[string]struct{}, len(snapshot.Metrics))
 	for _, metric := range snapshot.Metrics {
-		labelValues := []string{deviceSN, metric.Group, metric.Key, metric.Name, metric.Unit}
+		if !isFinite(metric.Value) {
+			continue
+		}
+		labelValues := []string{sourceName, deviceSN, metric.Group, metric.Key, metric.Name, metric.Unit}
+		if c.dropSourceLabel {
+			labelValues = labelValues[1:]
+		}
 		labelSignature := labelsSignature(labelValues)
 		if _, ok := seenValueLabels[labelSignature]; ok {
 			continue
@@ -141,6 +179,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
+func isFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
 func (c *Collector) sourceLabelValues(sourceName string) []string {
 	if c.dropSourceLabel {
 		return nil
@@ -148,18 +190,15 @@ func (c *Collector) sourceLabelValues(sourceName string) []string {
 	return []string{sourceName}
 }
 
+func (c *Collector) pollCountLabelValues(sourceName string, result string) []string {
+	return append(c.sourceLabelValues(sourceName), result)
+}
+
 func (c *Collector) deviceLabelValues(sourceName, deviceSN string) []string {
 	if c.dropSourceLabel {
 		return []string{deviceSN}
 	}
 	return []string{sourceName, deviceSN}
-}
-
-func (c *Collector) valueLabelValues(sourceName, deviceSN, group, key, name, unit string) []string {
-	if c.dropSourceLabel {
-		return []string{deviceSN, group, key, name, unit}
-	}
-	return []string{sourceName, deviceSN, group, key, name, unit}
 }
 
 func labelsSignature(values []string) string {

@@ -1,7 +1,7 @@
 import desktopLayout from "../../assets/main/desktop_layout_spec.json";
 import mobileLayout from "../../assets/main/mobile_layout_spec.json";
 import { setClassNameIfChanged, setHiddenIfChanged, setStyleIfChanged, setTextContentIfChanged } from "../lib/dom";
-import { average, clamp, first, formatCurrent, formatEnergy, formatNumber, formatPercent, formatPower, formatTemperature, sum } from "../lib/format";
+import { average, clamp, first, formatCurrent, formatEnergy, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber, sum } from "../lib/format";
 import { ENTITY_KEYS, resolveEntities, valueFor, type EntityKey, type EntityOverrides, type ResolvedEntityMap } from "../lib/entity-model";
 import { DETAILED_CARD_POSITIONS, type CardElementPositionModel, type PositionBoxModel, type PositionMode } from "../lib/position-models";
 import type { HomeAssistant, LovelaceCardConfig } from "../types/home-assistant";
@@ -95,6 +95,8 @@ const MOBILE_LAYOUT = mobileLayout as LayoutSpec;
 const MOBILE_BREAKPOINT = 960;
 const DETAILED_CARD_MOBILE_REFERENCE_WIDTH = 420;
 const DETAILED_CARD_DESKTOP_REFERENCE_WIDTH = 1200;
+const DETAILED_CARD_DESKTOP_METRIC_FONT_SIZE = 15;
+const DETAILED_CARD_MOBILE_METRIC_FONT_SIZE = 6.5;
 const VOLTAGE_EPSILON = 1;
 const CURRENT_EPSILON = 0.01;
 const POWER_EPSILON = 1;
@@ -226,7 +228,13 @@ class JksDetailedCard extends HTMLElement {
       this._attemptedEntityKeys.clear();
     }
 
-    const keys = force ? ENTITY_KEYS : ENTITY_KEYS.filter((key) => !this._attemptedEntityKeys.has(key));
+    const keys = force
+      ? ENTITY_KEYS
+      : ENTITY_KEYS.filter((key) => {
+          if (!this._attemptedEntityKeys.has(key)) return true;
+          const entityId = this._resolved[key];
+          return !entityId || !this._hass?.states[entityId];
+        });
     if (!keys.length) return;
 
     this._resolved = {
@@ -253,9 +261,14 @@ class JksDetailedCard extends HTMLElement {
     const homePhases = [1, 2, 3].map((phase) => {
       const voltage = this._value(`home_l${phase}_voltage` as EntityKey);
       const power = this._value(`home_l${phase}_power` as EntityKey);
-      const current = Number.isFinite(power) && Number.isFinite(voltage) && voltage !== 0 ? Math.abs(power) / voltage : null;
+      const current = isFiniteNumber(power) && isFiniteNumber(voltage) && voltage !== 0 ? Math.abs(power) / voltage : null;
       return { voltage, current, power };
     });
+    const measuredGridLoadPhases = [1, 2, 3].map((phase) => ({
+      voltage: this._value(`grid_load_l${phase}_voltage` as EntityKey),
+      current: this._value(`grid_load_l${phase}_current` as EntityKey),
+      power: this._value(`grid_load_l${phase}_power` as EntityKey)
+    }));
 
     const inverterPhases = [1, 2, 3].map((phase) => ({
       voltage: this._value(`inverter_l${phase}_voltage` as EntityKey),
@@ -266,7 +279,7 @@ class JksDetailedCard extends HTMLElement {
     const generatorPhases = [1, 2, 3].map((phase) => {
       const voltage = this._value(`generator_l${phase}_voltage` as EntityKey);
       const power = this._value(`generator_l${phase}_power` as EntityKey);
-      const current = Number.isFinite(power) && Number.isFinite(voltage) && voltage !== 0 ? Math.abs(power) / voltage : null;
+      const current = isFiniteNumber(power) && isFiniteNumber(voltage) && voltage !== 0 ? Math.abs(power) / voltage : null;
       return { voltage, current, power };
     });
 
@@ -285,19 +298,29 @@ class JksDetailedCard extends HTMLElement {
     const gridTotalCurrent = sum(gridPhases.map((phase) => Math.abs(phase.current ?? 0)));
     const homeTotalPower = first(this._value("home_total_power"), sum(homePhases.map((phase) => phase.power)));
     const homeBackupPhasePower = sum(homePhases.map((phase) => phase.power));
-    const parallelGridLoadPower =
-      Number.isFinite(homeTotalPower) && Number.isFinite(homeBackupPhasePower) ? homeTotalPower - homeBackupPhasePower : null;
-    const parallelGridLoadCurrent =
-      Number.isFinite(parallelGridLoadPower) && Number.isFinite(gridAverageVoltage) && gridAverageVoltage !== 0
+    const calculatedGridLoadPower =
+      isFiniteNumber(homeTotalPower) && isFiniteNumber(homeBackupPhasePower) ? homeTotalPower - homeBackupPhasePower : null;
+    const measuredGridLoadPhasePower = measuredGridLoadPhases.map((phase) => phase.power);
+    const measuredGridLoadPhaseCurrent = measuredGridLoadPhases.map((phase) => phase.current);
+    const measuredGridLoadPhaseVoltage = measuredGridLoadPhases.map((phase, index) => first(phase.voltage, gridPhases[index]?.voltage ?? null));
+    const parallelGridLoadPower = first(this._value("grid_load_total_power"), sum(measuredGridLoadPhasePower), calculatedGridLoadPower);
+    const parallelGridLoadCurrent = first(
+      this._value("grid_load_total_current"),
+      sum(measuredGridLoadPhaseCurrent.map((value) => Math.abs(value ?? 0))),
+      isFiniteNumber(parallelGridLoadPower) && isFiniteNumber(gridAverageVoltage) && gridAverageVoltage !== 0
         ? Math.abs(parallelGridLoadPower) / gridAverageVoltage
-        : null;
+        : null
+    );
+    const parallelGridLoadPowerPhases = measuredGridLoadPhasePower.some((value) => isFiniteNumber(value))
+      ? measuredGridLoadPhasePower
+      : null;
     const gridNetEnergyToday =
-      Number.isFinite(gridBuyToday) || Number.isFinite(gridSellToday) ? (gridBuyToday ?? 0) - (gridSellToday ?? 0) : null;
+      isFiniteNumber(gridBuyToday) || isFiniteNumber(gridSellToday) ? (gridBuyToday ?? 0) - (gridSellToday ?? 0) : null;
 
     const upsTotalPower = this._value("ups_total_power");
     const inverterAverageVoltage = average(inverterPhases.map((phase) => phase.voltage));
     const upsEstimatedCurrent =
-      Number.isFinite(upsTotalPower) && Number.isFinite(inverterAverageVoltage) && inverterAverageVoltage !== 0
+      isFiniteNumber(upsTotalPower) && isFiniteNumber(inverterAverageVoltage) && inverterAverageVoltage !== 0
         ? Math.abs(upsTotalPower) / inverterAverageVoltage
         : null;
 
@@ -308,16 +331,16 @@ class JksDetailedCard extends HTMLElement {
     const batteryPower = this._value("battery_power");
     const batteryChargeIsNegative = this._config.battery_negative_is_charging !== false;
     let batteryStatus = "Idle";
-    if (Number.isFinite(batteryPower) && Math.abs(batteryPower) >= 20) {
+    if (isFiniteNumber(batteryPower) && Math.abs(batteryPower) >= 20) {
       const charging = batteryChargeIsNegative ? batteryPower < 0 : batteryPower > 0;
       batteryStatus = charging ? "Charging" : "Discharging";
     }
 
     const inverterTotalPower = first(this._value("inverter_total_power"), sum(inverterPhases.map((phase) => phase.power)));
     const inverterStatus =
-      Number.isFinite(inverterTotalPower) && Math.abs(inverterTotalPower) >= 20
+      isFiniteNumber(inverterTotalPower) && Math.abs(inverterTotalPower) >= 20
         ? "Online"
-        : Number.isFinite(this._value("inverter_frequency"))
+        : isFiniteNumber(this._value("inverter_frequency"))
           ? "Standby"
           : "Offline";
 
@@ -354,7 +377,17 @@ class JksDetailedCard extends HTMLElement {
       this._isMeaningfulValue(inverterAverageVoltage, VOLTAGE_EPSILON) ||
       this._isMeaningfulValue(inverterFrequency, CURRENT_EPSILON) ||
       this._isMeaningfulValue(upsTotalPower, POWER_EPSILON);
-    const parallelOnline = Number.isFinite(parallelGridLoadPower) && parallelGridLoadPower > POWER_EPSILON;
+    const parallelOnline = isFiniteNumber(parallelGridLoadPower) && Math.abs(parallelGridLoadPower) > POWER_EPSILON;
+
+    const missingCritical = MISSING_MAIN_KEYS.filter((key) => {
+      if (key === "grid_total_power") {
+        return !this._resolved[key] && !this._isMeaningfulValue(gridTotalPower, POWER_EPSILON);
+      }
+      if (key === "home_total_power") {
+        return !this._resolved[key] && !this._isMeaningfulValue(homeTotalPower, POWER_EPSILON);
+      }
+      return !this._resolved[key];
+    });
 
     return {
       summary: {
@@ -429,7 +462,9 @@ class JksDetailedCard extends HTMLElement {
           power: parallelGridLoadPower,
           energyToday: this._value("home_daily_energy"),
           hideEnergyToday: true,
-          voltagePhases: gridPhases.map((phase) => phase.voltage)
+          voltagePhases: measuredGridLoadPhaseVoltage,
+          currentPhases: measuredGridLoadPhaseCurrent,
+          powerPhases: parallelGridLoadPowerPhases ?? undefined
         }
       },
       batterySoc: formatPercent(batterySoc),
@@ -446,7 +481,7 @@ class JksDetailedCard extends HTMLElement {
         ups_offline: !upsOnline,
         parallel_offline: !parallelOnline
       },
-      missing: MISSING_MAIN_KEYS.filter((key) => !this._resolved[key])
+      missing: missingCritical
     };
   }
 
@@ -472,16 +507,16 @@ class JksDetailedCard extends HTMLElement {
           powerPhases: [282, 249, 259]
         },
         pv1: {
-          voltage: 402.4,
-          current: 5.21,
-          power: 2100,
+          voltage: 422,
+          current: 16,
+          power: 5670,
           energyToday: null,
           hideEnergyToday: true
         },
         pv2: {
-          voltage: 398.7,
-          current: 4.76,
-          power: 1890,
+          voltage: 422,
+          current: 16,
+          power: 5670,
           energyToday: null,
           hideEnergyToday: true
         },
@@ -537,7 +572,7 @@ class JksDetailedCard extends HTMLElement {
   }
 
   private _formatBatteryNetEnergyToday(chargeToday: number | null, dischargeToday: number | null): string {
-    if (Number.isFinite(dischargeToday) || Number.isFinite(chargeToday)) {
+    if (isFiniteNumber(dischargeToday) || isFiniteNumber(chargeToday)) {
       const net = (dischargeToday ?? 0) - (chargeToday ?? 0);
       if (this._isNearZero(net, ENERGY_EPSILON)) {
         return "--";
@@ -548,7 +583,7 @@ class JksDetailedCard extends HTMLElement {
   }
 
   private _formatCosts(buyToday: number | null, sellToday: number | null): string {
-    if (!Number.isFinite(buyToday) && !Number.isFinite(sellToday)) {
+    if (!isFiniteNumber(buyToday) && !isFiniteNumber(sellToday)) {
       return "--";
     }
 
@@ -756,13 +791,14 @@ class JksDetailedCard extends HTMLElement {
     for (const row of element.rows) {
       const value = this._formatMetricRowValue(row.id, group);
       const shouldShow = value.trim().length > 0;
+      const isPrimaryMetric = row.id === "voltage" || row.id === "current" || row.id === "power";
       this._updateOverlayNode(
         activeKeys,
         `${element.id}:row:${row.id}`,
         layout,
         row.value_box,
         value,
-        "value value--metric",
+        isPrimaryMetric ? "value value--metric value--primary-metric" : "value value--metric",
         position.rows?.[row.id],
         shouldShow
       );
@@ -840,15 +876,12 @@ class JksDetailedCard extends HTMLElement {
     const left = options.leftPercent ?? (adjustedX / layout.canvas.width) * 100;
     const top = options.topPercent ?? (adjustedY / layout.canvas.height) * 100;
     const widthPct = options.widthPercent ?? (width / layout.canvas.width) * 100;
-    const heightPct = (height / layout.canvas.height) * 100;
-    const baseFontSize = height * 0.62;
-    const lengthScale = text.includes("/") ? 0.78 : text.length > 16 ? 0.84 : 1;
-    const targetFontSize = clamp(baseFontSize * lengthScale * (options.fontScale ?? 1), 12, 44);
-    const referenceWidth = this._isMobile ? DETAILED_CARD_MOBILE_REFERENCE_WIDTH : DETAILED_CARD_DESKTOP_REFERENCE_WIDTH;
-    const responsiveFont = `clamp(${Math.max(12, Math.round(targetFontSize * 0.84 * 10) / 10)}px, ${(
-      (targetFontSize / referenceWidth) *
-      100
-    ).toFixed(3)}cqw, ${Math.round(targetFontSize * 1.08 * 10) / 10}px)`;
+    const heightPct = options.heightPercent ?? (height / layout.canvas.height) * 100;
+    const responsiveFont = className.includes("value--primary-metric")
+      ? `${this._fixedMetricFontSize()}px`
+      : this._responsiveFontForTextBox(layout, box, text, options);
+    const textAlign = options.textAlign ?? "right";
+    const justifyContent = options.justifyContent ?? "flex-end";
 
     setClassNameIfChanged(node, className);
     setHiddenIfChanged(node, !visible);
@@ -858,6 +891,34 @@ class JksDetailedCard extends HTMLElement {
     setStyleIfChanged(node, "width", `${widthPct}%`);
     setStyleIfChanged(node, "height", `${heightPct}%`);
     setStyleIfChanged(node, "font-size", responsiveFont);
+    setStyleIfChanged(node, "text-align", textAlign);
+    setStyleIfChanged(node, "justify-content", justifyContent);
+  }
+
+  private _fixedMetricFontSize(): number {
+    return this._isMobile ? DETAILED_CARD_MOBILE_METRIC_FONT_SIZE : DETAILED_CARD_DESKTOP_METRIC_FONT_SIZE;
+  }
+
+  private _responsiveFontForTextBox(layout: LayoutSpec, box: [number, number, number, number], text: string, options: PositionBoxModel = {}): string {
+    const [, , width, height] = box;
+    const widthPct = options.widthPercent ?? (width / layout.canvas.width) * 100;
+    const baseFontSize = options.fontSizePx ?? height * 0.62;
+    const lengthScale = text.includes("/") ? 0.74 : text.length > 16 ? 0.84 : 1;
+    const referenceWidth = this._isMobile ? DETAILED_CARD_MOBILE_REFERENCE_WIDTH : DETAILED_CARD_DESKTOP_REFERENCE_WIDTH;
+    const sourceWidth = (widthPct / 100) * layout.canvas.width;
+    const referenceBoxWidth = (sourceWidth / layout.canvas.width) * referenceWidth;
+    const averageGlyphWidth = text.includes("/") ? 0.55 : 0.58;
+    const fittingFontSize = text.trim().length
+      ? (referenceBoxWidth * 0.96) / Math.max(text.trim().length * averageGlyphWidth, 1)
+      : baseFontSize;
+    const targetFloor = options.minFontSizePx ?? (this._isMobile ? 6 : 8);
+    const targetFontSize = clamp(Math.min(baseFontSize * lengthScale * (options.fontScale ?? 1), fittingFontSize), targetFloor, 44);
+    const isCompactText = text.includes("/") || text.length > 16;
+    const compactMaxScale = text.includes("/") ? (this._isMobile ? 1.18 : 1.32) : this._isMobile ? 1.08 : 1.12;
+    const maxFontSize = isCompactText ? targetFontSize * compactMaxScale : targetFontSize * 1.08;
+    const minFloor = options.minFontSizePx ?? (this._isMobile ? (isCompactText ? 6 : 7) : isCompactText ? 8 : 12);
+    const minFontSize = Math.max(minFloor, Math.round(targetFontSize * 0.84 * 10) / 10);
+    return `clamp(${minFontSize}px, ${((targetFontSize / referenceWidth) * 100).toFixed(3)}cqw, ${Math.round(maxFontSize * 10) / 10}px)`;
   }
 
   private _formatMetricRowValue(rowId: string, group: MetricGroup): string {
@@ -927,7 +988,8 @@ class JksDetailedCard extends HTMLElement {
       return "--";
     }
     const formatted = phases.map((value) => (this._isMeaningfulValue(value, epsilon) ? formatter(value as number) : "--"));
-    return `${formatted.join(" / ")} ${unit}`;
+    const separator = this._isMobile ? "/" : " / ";
+    return `${formatted.join(separator)} ${unit}`;
   }
 
   private _formatEnergyDisplay(value: number | null | undefined): string {
@@ -935,11 +997,11 @@ class JksDetailedCard extends HTMLElement {
   }
 
   private _isMeaningfulValue(value: number | null | undefined, epsilon: number): value is number {
-    return Number.isFinite(value) && !this._isNearZero(value, epsilon);
+    return isFiniteNumber(value) && !this._isNearZero(value, epsilon);
   }
 
   private _isNearZero(value: number | null | undefined, epsilon: number): boolean {
-    return !Number.isFinite(value) || Math.abs(value) < epsilon;
+    return !isFiniteNumber(value) || Math.abs(value) < epsilon;
   }
 
   private _styles(layout: LayoutSpec, background: string): string {
