@@ -37,7 +37,7 @@ jobs:
 
       - name: Lint workflows
         run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}
+          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
           actionlint
 
       - name: Vet
@@ -51,13 +51,13 @@ jobs:
       - name: Staticcheck
         working-directory: bridge
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}
+          go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
           staticcheck ./...
 
       - name: Govulncheck
         working-directory: bridge
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
           govulncheck ./...
 
   docker:
@@ -70,8 +70,8 @@ jobs:
         run: |
           docker build \
             --build-arg VERSION=ci \
-            --build-arg COMMIT=${GITHUB_SHA} \
-            --build-arg DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            --build-arg "COMMIT=${GITHUB_SHA}" \
+            --build-arg "DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -f bridge/Dockerfile \
             -t jinko-exporter:ci \
             bridge
