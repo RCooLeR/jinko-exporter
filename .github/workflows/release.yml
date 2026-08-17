@@ -67,13 +67,13 @@ jobs:
       - name: Staticcheck
         working-directory: bridge
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}
+          go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
           staticcheck ./...
 
       - name: Govulncheck
         working-directory: bridge
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
           govulncheck ./...
 
   ha-cards:
