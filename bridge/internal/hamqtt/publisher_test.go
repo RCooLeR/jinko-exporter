@@ -578,7 +578,7 @@ func TestRepeatedColdFallbackPublishesWarningSafeIdentitySchema(t *testing.T) {
 		CollectedAt: time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC),
 	}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		snapshot.CollectedAt = snapshot.CollectedAt.Add(time.Minute)
 		if err := publisher.OnPollSuccess(snapshot, time.Second); err != nil {
 			t.Fatalf("OnPollSuccess() publication %d error = %v", i+1, err)

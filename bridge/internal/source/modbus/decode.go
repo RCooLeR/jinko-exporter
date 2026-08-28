@@ -334,7 +334,7 @@ func decodeOutputScalars(values []uint16) (outputScalars, error) {
 	}
 
 	result := outputScalars{}
-	for index := 0; index < 3; index++ {
+	for index := range 3 {
 		result.voltages[index] = float64(values[index]) / 10
 		if result.voltages[index] > maximumOutputPhaseVoltageV {
 			return outputScalars{}, fmt.Errorf("output voltage L%d %.1fV exceeds %.1fV validation maximum", index+1, result.voltages[index], maximumOutputPhaseVoltageV)

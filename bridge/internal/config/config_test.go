@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func TestRedactedMasksSecrets(t *testing.T) {
@@ -1058,11 +1059,11 @@ func runConfigFromArgs(t *testing.T, args ...string) error {
 
 func runConfigApp(t *testing.T, args []string, capture func(Config)) error {
 	t.Helper()
-	app := &cli.App{
+	command := &cli.Command{
 		Name:  "test",
 		Flags: Flags(),
-		Action: func(ctx *cli.Context) error {
-			cfg, err := FromCLI(ctx)
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			cfg, err := FromCLI(cmd)
 			if err != nil {
 				return err
 			}
@@ -1072,5 +1073,5 @@ func runConfigApp(t *testing.T, args []string, capture func(Config)) error {
 			return nil
 		},
 	}
-	return app.Run(append([]string{"test"}, args...))
+	return command.Run(t.Context(), append([]string{"test"}, args...))
 }

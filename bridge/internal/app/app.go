@@ -28,7 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 const (
@@ -37,70 +37,71 @@ const (
 	httpWriteTimeout      = 30 * time.Second
 	httpIdleTimeout       = 60 * time.Second
 	httpMaxHeaderBytes    = 1 << 20
+	httpMaxHeaderValues   = 100
 )
 
 func Run(args []string) int {
-	app := &cli.App{
+	command := &cli.Command{
 		Name:  "jinko-exporter",
 		Usage: "Poll solar data from Jinko detail API, Solarman OpenAPI, or the locked read-only Modbus profile and expose Prometheus metrics",
 		Flags: config.Flags(),
-		Before: func(ctx *cli.Context) error {
-			setupLogger(ctx.String("log-level"))
-			return nil
+		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+			setupLogger(cmd.String("log-level"))
+			return ctx, nil
 		},
 		Commands: []*cli.Command{
 			{
 				Name:  "serve",
 				Usage: "Run the exporter HTTP server",
-				Action: func(ctx *cli.Context) error {
-					cfg, err := config.FromCLI(ctx)
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					cfg, err := config.FromCLI(cmd)
 					if err != nil {
 						return err
 					}
-					return runServe(ctx.Context, cfg)
+					return runServe(ctx, cfg)
 				},
 			},
 			{
 				Name:  "fetch",
 				Usage: "Fetch once and print the normalized snapshot as JSON",
-				Action: func(ctx *cli.Context) error {
-					cfg, err := config.FromCLI(ctx)
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					cfg, err := config.FromCLI(cmd)
 					if err != nil {
 						return err
 					}
-					return runFetch(ctx.Context, cfg)
+					return runFetch(ctx, cfg)
 				},
 			},
 			{
 				Name:  "healthcheck",
 				Usage: "Check the exporter HTTP health endpoint",
 				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "url", Usage: "Health endpoint URL; defaults to EXPORTER_LISTEN with /healthz", EnvVars: []string{"EXPORTER_HEALTHCHECK_URL"}},
-					&cli.DurationFlag{Name: "timeout", Value: 5 * time.Second, Usage: "Healthcheck timeout", EnvVars: []string{"EXPORTER_HEALTHCHECK_TIMEOUT"}},
+					&cli.StringFlag{Name: "url", Usage: "Health endpoint URL; defaults to EXPORTER_LISTEN with /healthz", Sources: cli.EnvVars("EXPORTER_HEALTHCHECK_URL")},
+					&cli.DurationFlag{Name: "timeout", Value: 5 * time.Second, Usage: "Healthcheck timeout", Sources: cli.EnvVars("EXPORTER_HEALTHCHECK_TIMEOUT")},
 				},
-				Action: func(ctx *cli.Context) error {
-					endpoint := ctx.String("url")
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					endpoint := cmd.String("url")
 					if endpoint == "" {
 						var err error
-						endpoint, err = defaultHealthcheckURL(ctx.String("listen"))
+						endpoint, err = defaultHealthcheckURL(cmd.String("listen"))
 						if err != nil {
 							return err
 						}
 					}
-					return runHealthcheck(ctx.Context, endpoint, ctx.Duration("timeout"))
+					return runHealthcheck(ctx, endpoint, cmd.Duration("timeout"))
 				},
 			},
 		},
-		Action: func(ctx *cli.Context) error {
-			cfg, err := config.FromCLI(ctx)
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			cfg, err := config.FromCLI(cmd)
 			if err != nil {
 				return err
 			}
-			return runServe(ctx.Context, cfg)
+			return runServe(ctx, cfg)
 		},
 	}
 
-	if err := app.Run(args); err != nil {
+	if err := command.Run(context.Background(), args); err != nil {
 		log.Error().Err(err).Msg("application failed")
 		return 1
 	}
@@ -163,7 +164,9 @@ func runServe(parent context.Context, cfg config.Config) error {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle(cfg.MetricsPath, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+	mux.Handle(cfg.MetricsPath, promhttp.HandlerFor(registry, promhttp.HandlerOpts{
+		CoalesceGather: true,
+	}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
@@ -223,13 +226,14 @@ func runServe(parent context.Context, cfg config.Config) error {
 
 func newHTTPServer(address string, handler http.Handler) *http.Server {
 	return &http.Server{
-		Addr:              address,
-		Handler:           handler,
-		ReadHeaderTimeout: httpReadHeaderTimeout,
-		ReadTimeout:       httpReadTimeout,
-		WriteTimeout:      httpWriteTimeout,
-		IdleTimeout:       httpIdleTimeout,
-		MaxHeaderBytes:    httpMaxHeaderBytes,
+		Addr:                address,
+		Handler:             handler,
+		ReadHeaderTimeout:   httpReadHeaderTimeout,
+		ReadTimeout:         httpReadTimeout,
+		WriteTimeout:        httpWriteTimeout,
+		IdleTimeout:         httpIdleTimeout,
+		MaxHeaderBytes:      httpMaxHeaderBytes,
+		MaxHeaderValueCount: httpMaxHeaderValues,
 	}
 }
 

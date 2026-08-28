@@ -606,8 +606,7 @@ func (c *Client) notifyFailure(ctx context.Context, step string, deviceSN string
 		return
 	}
 
-	var tokenErr *tokenFailureError
-	if errors.As(err, &tokenErr) {
+	if tokenErr, ok := errors.AsType[*tokenFailureError](err); ok {
 		c.notifyTokenFailure(ctx, step, tokenErr)
 		return
 	}

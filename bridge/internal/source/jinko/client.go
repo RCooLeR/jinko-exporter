@@ -74,7 +74,7 @@ type Client struct {
 type tokenState struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token,omitempty"`
-	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at,omitzero"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	// RefreshOutcomeUncertain is persisted before an OAuth refresh-token POST
 	// and cleared only with a durable valid response pair. Older state files

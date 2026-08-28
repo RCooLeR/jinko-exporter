@@ -671,14 +671,12 @@ func TestConcurrentProactiveRefreshIsSingleFlight(t *testing.T) {
 	start := make(chan struct{})
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			<-start
 			_, err := client.Fetch(t.Context())
 			errs <- err
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()
@@ -1162,7 +1160,7 @@ func TestBackgroundKeeperNeverReplaysAmbiguousRefreshAndRestartKeepsPause(t *tes
 	waitForCondition(t, func() bool {
 		return refreshCalls.Load() == 1 && client.hasUncertainRefreshOutcome()
 	})
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		client.notifyMaintenance()
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -1231,7 +1229,7 @@ func TestNonSuccessTokenResponseLeavesDurablePauseWithoutReplay(t *testing.T) {
 			if _, err := client.refresh(t.Context(), refreshRequest{reason: refreshProactive}); err == nil || !isRefreshOutcomeUncertainError(err) {
 				t.Fatalf("refresh error = %v, want typed uncertain outcome", err)
 			}
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				if _, err := client.refresh(t.Context(), refreshRequest{reason: refreshProactive}); err != nil {
 					t.Fatalf("paused refresh recheck error = %v", err)
 				}
@@ -1794,6 +1792,24 @@ func TestPersistTokenStateDurablyReplacesMarkedPair(t *testing.T) {
 	}
 	if got.AccessToken != newState.AccessToken || got.RefreshToken != newState.RefreshToken || got.RefreshOutcomeUncertain {
 		t.Fatalf("reloaded state = %#v, want replacement pair with cleared marker", got)
+	}
+}
+
+func TestPersistTokenStateOmitsZeroExpiry(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "token-state.json")
+	if err := persistTokenState(statePath, tokenState{
+		AccessToken: "access",
+		UpdatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("persistTokenState() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if strings.Contains(string(raw), `"expires_at"`) {
+		t.Fatalf("persisted state contains a zero expiry: %s", raw)
 	}
 }
 

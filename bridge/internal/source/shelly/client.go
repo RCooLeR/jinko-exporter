@@ -248,8 +248,7 @@ func (c *GridLoadClient) getRPC(ctx context.Context, method string, target any) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("fetch Shelly %s: %w", method, ctxErr)
 		}
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
 			err = urlErr.Err
 		}
 		return fmt.Errorf("fetch Shelly %s: request failed: %w", method, err)

@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"maps"
 
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/model"
 	"github.com/rs/zerolog/log"
@@ -44,9 +45,7 @@ func (e *Enriched) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	enriched.Metrics = append([]model.Metric{}, snapshot.Metrics...)
 	if len(snapshot.Meta) > 0 {
 		enriched.Meta = make(map[string]string, len(snapshot.Meta)+len(e.extras))
-		for key, value := range snapshot.Meta {
-			enriched.Meta[key] = value
-		}
+		maps.Copy(enriched.Meta, snapshot.Meta)
 	}
 
 	for _, extra := range e.extras {
@@ -66,9 +65,7 @@ func (e *Enriched) Fetch(ctx context.Context) (*model.Snapshot, error) {
 			if enriched.Meta == nil {
 				enriched.Meta = make(map[string]string, len(extraSnapshot.Meta))
 			}
-			for key, value := range extraSnapshot.Meta {
-				enriched.Meta[key] = value
-			}
+			maps.Copy(enriched.Meta, extraSnapshot.Meta)
 		}
 	}
 

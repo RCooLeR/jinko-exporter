@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -489,13 +490,7 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 	if alertDomain == "" {
 		alertDomain = "unknown_source"
 	}
-	hasAlertMetrics := false
-	for _, metric := range snapshot.Metrics {
-		if isAlertMetric(metric) {
-			hasAlertMetrics = true
-			break
-		}
-	}
+	hasAlertMetrics := slices.ContainsFunc(snapshot.Metrics, isAlertMetric)
 	if hasAlertMetrics {
 		objectSuffix := alertDomain + "_warning_alarm_fault_active"
 		alertPayload := p.baseDiscoveryPayload(device, "Warning/Alarm/Fault Active ("+snapshot.Source+")", device.ID+"_"+objectSuffix, stateTopic)

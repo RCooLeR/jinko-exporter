@@ -27,8 +27,7 @@ func TestCollectorSkipsInvalidMetricValues(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	runner := poller.NewRunner(staticSource{snapshot: snapshot}, time.Hour, state, nil, config.AlertConfig{})
 	go runner.Run(ctx)
 	waitForSnapshot(t, state)
@@ -78,8 +77,7 @@ func TestCollectorDeduplicatesIdenticalMetricLabels(t *testing.T) {
 				},
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			runner := poller.NewRunner(staticSource{snapshot: snapshot}, time.Hour, state, nil, config.AlertConfig{})
 			go runner.Run(ctx)
 			waitForSnapshot(t, state)
@@ -108,8 +106,7 @@ func TestCollectorPreservesCanonicalOutputPowerLabels(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	runner := poller.NewRunner(staticSource{snapshot: snapshot}, time.Hour, state, nil, config.AlertConfig{})
 	go runner.Run(ctx)
 	waitForSnapshot(t, state)
@@ -143,8 +140,7 @@ func TestCollectorExportsBuildInfoAndPollSuccess(t *testing.T) {
 		Metrics:     []model.Metric{{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 123}},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	runner := poller.NewRunner(staticSource{snapshot: snapshot}, time.Hour, state, nil, config.AlertConfig{})
 	go runner.Run(ctx)
 	waitForSnapshot(t, state)
@@ -206,8 +202,7 @@ func TestCollectorDropSourceLabelDropsPollSuccessSourceLabel(t *testing.T) {
 		CollectedAt: time.Unix(1775145150, 0).UTC(),
 		Metrics:     []model.Metric{{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 123}},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	runner := poller.NewRunner(staticSource{snapshot: snapshot}, time.Hour, state, nil, config.AlertConfig{})
 	go runner.Run(ctx)
 	waitForSnapshot(t, state)

@@ -77,8 +77,7 @@ func TestNoSuccessfulPollMonitorFiresWhileSourceHangs(t *testing.T) {
 		manager,
 		config.AlertConfig{NoSuccessfulPollWindow: 20 * time.Millisecond},
 	)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go runner.Run(ctx)
 

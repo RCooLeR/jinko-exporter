@@ -126,6 +126,9 @@ func TestNewHTTPServerSetsBoundedConnectionLimits(t *testing.T) {
 	if server.MaxHeaderBytes != httpMaxHeaderBytes || server.MaxHeaderBytes <= 0 {
 		t.Fatalf("server MaxHeaderBytes = %d, want %d", server.MaxHeaderBytes, httpMaxHeaderBytes)
 	}
+	if server.MaxHeaderValueCount != httpMaxHeaderValues || server.MaxHeaderValueCount <= 0 {
+		t.Fatalf("server MaxHeaderValueCount = %d, want %d", server.MaxHeaderValueCount, httpMaxHeaderValues)
+	}
 }
 
 func TestBuildSourcePreservesModbusJinkoSolarmanPriorityOrder(t *testing.T) {
