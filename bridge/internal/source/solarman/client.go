@@ -85,6 +85,61 @@ func newTokenFailure(status int, category string, cause error) error {
 	return &tokenFailureError{status: status, category: category, cause: cause}
 }
 
+// requestFailureError keeps operationally useful, closed-vocabulary context
+// while retaining the original cause for errors.Is/errors.As. Its Error method
+// must never stringify the cause: net/http errors may contain the full URL and
+// upstream responses may contain account or device data.
+type requestFailureError struct {
+	stage    string
+	status   int
+	category string
+	cause    error
+}
+
+func (e *requestFailureError) Error() string {
+	status := "unavailable"
+	if e.status > 0 {
+		status = strconv.Itoa(e.status)
+	}
+	return fmt.Sprintf("solarman request failed: stage=%s status=%s category=%s", e.stage, status, e.category)
+}
+
+func (e *requestFailureError) Unwrap() error {
+	return e.cause
+}
+
+func newRequestFailure(stage string, status int, category string, cause error) error {
+	return &requestFailureError{stage: stage, status: status, category: category, cause: cause}
+}
+
+func requestFailureCategory(fallback string, err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return fallback
+	}
+}
+
+func requestStage(path string) string {
+	switch {
+	case strings.HasSuffix(path, "/currentData"):
+		return "currentData"
+	case strings.HasSuffix(path, "/station-list"):
+		return "station-list"
+	case strings.Contains(path, "/station/") && strings.HasSuffix(path, "/list"):
+		return "station-list"
+	case strings.Contains(path, "/station/") && strings.HasSuffix(path, "/device"):
+		return "station-device-list"
+	case strings.Contains(path, "/account/") && strings.HasSuffix(path, "/token"):
+		return "token"
+	default:
+		return "unknown"
+	}
+}
+
 type station struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
@@ -123,34 +178,35 @@ func (c *Client) Name() string {
 func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	deviceSN, err := c.resolveDeviceSN(ctx)
 	if err != nil {
-		c.notifyFailure(ctx, "device-discovery", "", err, nil)
+		c.notifyFailure(ctx, "device-discovery", err)
 		return nil, err
 	}
 	if strings.TrimSpace(deviceSN) == "" {
-		return nil, fmt.Errorf("solarman device serial is empty")
+		return nil, newRequestFailure("device-discovery", 0, "empty-device-serial", nil)
 	}
 
 	body := map[string]any{"deviceSn": deviceSN}
 	raw, status, err := c.doJSONAuthRetry(ctx, http.MethodPost, fmt.Sprintf("/device/%s/currentData", c.cfg.APIVersion), true, body)
 	if err != nil {
-		c.notifyFailure(ctx, "currentData", deviceSN, err, nil)
+		c.notifyFailure(ctx, "currentData", err)
 		return nil, err
 	}
 	if status != http.StatusOK {
-		err := fmt.Errorf("solarman currentData failed: status=%d body=%s", status, strings.TrimSpace(string(raw)))
-		c.notifyFailure(ctx, "currentData", deviceSN, err, raw)
+		err := newRequestFailure("currentData", status, "http-status", nil)
+		c.notifyFailure(ctx, "currentData", err)
 		return nil, err
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		log.Error().Err(err).Str("source", c.Name()).Str("device_sn", deviceSN).Msg("failed to decode Solarman currentData response")
-		c.notifyFailure(ctx, "currentData-decode", deviceSN, err, raw)
-		return nil, fmt.Errorf("decode solarman currentData: %w", err)
+		failure := newRequestFailure("currentData", status, "decode", err)
+		log.Error().Err(failure).Str("source", c.Name()).Msg("failed to decode Solarman currentData response")
+		c.notifyFailure(ctx, "currentData-decode", failure)
+		return nil, failure
 	}
 	if success, ok := payload["success"].(bool); ok && !success {
-		err := fmt.Errorf("solarman API error: %v", payload["msg"])
-		c.notifyFailure(ctx, "currentData-api-error", deviceSN, err, raw)
+		err := newRequestFailure("currentData", status, "api-rejected", nil)
+		c.notifyFailure(ctx, "currentData-api-error", err)
 		return nil, err
 	}
 
@@ -178,8 +234,8 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		metrics = append(metrics, metric)
 	}
 	if len(metrics) == 0 {
-		err := fmt.Errorf("solarman currentData response contained no numeric metrics")
-		c.notifyFailure(ctx, "currentData-empty", deviceSN, err, nil)
+		err := newRequestFailure("currentData", status, "no-numeric-metrics", nil)
+		c.notifyFailure(ctx, "currentData-empty", err)
 		return nil, err
 	}
 
@@ -240,7 +296,6 @@ func (c *Client) resolveDeviceSN(ctx context.Context) (string, error) {
 		}
 		log.Info().
 			Str("source", c.Name()).
-			Str("device_sn", c.discoveredDevSN).
 			Time("discovered_at", c.discoveredAt).
 			Dur("refresh_interval", c.cfg.DiscoveryRefreshInterval).
 			Msg("refreshing cached Solarman device discovery")
@@ -256,10 +311,10 @@ func (c *Client) resolveDeviceSN(ctx context.Context) (string, error) {
 			return "", err
 		}
 		if len(stations) == 0 {
-			return "", fmt.Errorf("solarman device discovery found no stations")
+			return "", newRequestFailure("device-discovery", http.StatusOK, "no-stations", nil)
 		}
 		stationID = stations[0].ID
-		log.Info().Str("source", c.Name()).Int64("station_id", stationID).Str("station_name", stations[0].Name).Msg("using first Solarman station for discovery")
+		log.Info().Str("source", c.Name()).Msg("using first Solarman station for discovery")
 	}
 
 	devices, err := c.listStationDevices(ctx, stationID)
@@ -267,11 +322,11 @@ func (c *Client) resolveDeviceSN(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if len(devices) == 0 {
-		return "", fmt.Errorf("solarman station %d has no devices", stationID)
+		return "", newRequestFailure("device-discovery", http.StatusOK, "no-devices", nil)
 	}
 	deviceSN := strings.TrimSpace(devices[0].DeviceSN)
 	if deviceSN == "" {
-		return "", fmt.Errorf("solarman station %d returned an empty device serial", stationID)
+		return "", newRequestFailure("device-discovery", http.StatusOK, "empty-device-serial", nil)
 	}
 
 	c.mu.Lock()
@@ -279,27 +334,28 @@ func (c *Client) resolveDeviceSN(ctx context.Context) (string, error) {
 	c.discoveredAt = time.Now()
 	c.mu.Unlock()
 
-	log.Info().Str("source", c.Name()).Str("device_sn", deviceSN).Msg("discovered Solarman device serial number")
+	log.Info().Str("source", c.Name()).Msg("discovered Solarman device serial number")
 	return deviceSN, nil
 }
 
 func (c *Client) listStations(ctx context.Context) ([]station, error) {
 	raw, status, err := c.doJSONAuthRetry(ctx, http.MethodPost, fmt.Sprintf("/station/%s/list", c.cfg.APIVersion), false, map[string]any{})
 	if err != nil {
-		c.notifyFailure(ctx, "station-list", "", err, nil)
+		c.notifyFailure(ctx, "station-list", err)
 		return nil, err
 	}
 	if status != http.StatusOK {
-		err := fmt.Errorf("solarman station list failed: status=%d body=%s", status, strings.TrimSpace(string(raw)))
-		c.notifyFailure(ctx, "station-list", "", err, raw)
+		err := newRequestFailure("station-list", status, "http-status", nil)
+		c.notifyFailure(ctx, "station-list", err)
 		return nil, err
 	}
 	var payload struct {
 		StationList []station `json:"stationList"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		c.notifyFailure(ctx, "station-list-decode", "", err, raw)
-		return nil, err
+		failure := newRequestFailure("station-list", status, "decode", err)
+		c.notifyFailure(ctx, "station-list-decode", failure)
+		return nil, failure
 	}
 	return payload.StationList, nil
 }
@@ -307,12 +363,12 @@ func (c *Client) listStations(ctx context.Context) ([]station, error) {
 func (c *Client) listStationDevices(ctx context.Context, stationID int64) ([]device, error) {
 	raw, status, err := c.doJSONAuthRetry(ctx, http.MethodPost, fmt.Sprintf("/station/%s/device", c.cfg.APIVersion), false, map[string]any{"stationId": stationID})
 	if err != nil {
-		c.notifyFailure(ctx, "station-device-list", "", err, nil)
+		c.notifyFailure(ctx, "station-device-list", err)
 		return nil, err
 	}
 	if status != http.StatusOK {
-		err := fmt.Errorf("solarman station device list failed: status=%d body=%s", status, strings.TrimSpace(string(raw)))
-		c.notifyFailure(ctx, "station-device-list", "", err, raw)
+		err := newRequestFailure("station-device-list", status, "http-status", nil)
+		c.notifyFailure(ctx, "station-device-list", err)
 		return nil, err
 	}
 	var payload struct {
@@ -320,8 +376,9 @@ func (c *Client) listStationDevices(ctx context.Context, stationID int64) ([]dev
 		DeviceListItems []device `json:"deviceListItems"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		c.notifyFailure(ctx, "station-device-list-decode", "", err, raw)
-		return nil, err
+		failure := newRequestFailure("station-device-list", status, "decode", err)
+		c.notifyFailure(ctx, "station-device-list-decode", failure)
+		return nil, failure
 	}
 	if len(payload.DeviceListItems) > 0 {
 		return payload.DeviceListItems, nil
@@ -343,7 +400,7 @@ func (c *Client) obtainToken(ctx context.Context) error {
 	passHex, err := c.passwordSHA256Hex()
 	if err != nil {
 		err = newTokenFailure(0, "credentials", err)
-		c.notifyFailure(ctx, "token", "", err, nil)
+		c.notifyFailure(ctx, "token", err)
 		return err
 	}
 
@@ -362,35 +419,35 @@ func (c *Client) obtainToken(ctx context.Context) error {
 			category = "timeout"
 		}
 		err = newTokenFailure(0, category, err)
-		c.notifyFailure(ctx, "token", "", err, nil)
+		c.notifyFailure(ctx, "token", err)
 		return err
 	}
 	if status != http.StatusOK {
 		err := newTokenFailure(status, "http-status", nil)
-		c.notifyFailure(ctx, "token", "", err, nil)
+		c.notifyFailure(ctx, "token", err)
 		return err
 	}
 
 	var token tokenResponse
 	if err := json.Unmarshal(raw, &token); err != nil {
 		err = newTokenFailure(status, "decode", err)
-		c.notifyFailure(ctx, "token-decode", "", err, nil)
+		c.notifyFailure(ctx, "token-decode", err)
 		return err
 	}
 	if !token.Success {
 		err := newTokenFailure(status, "api-rejected", nil)
-		c.notifyFailure(ctx, "token-api-error", "", err, nil)
+		c.notifyFailure(ctx, "token-api-error", err)
 		return err
 	}
 	if strings.TrimSpace(token.AccessToken) == "" {
 		err := newTokenFailure(status, "missing-access-token", nil)
-		c.notifyFailure(ctx, "token-api-error", "", err, nil)
+		c.notifyFailure(ctx, "token-api-error", err)
 		return err
 	}
 	expiresAt, err := tokenExpiry(time.Now(), token.ExpiresIn)
 	if err != nil {
 		err = newTokenFailure(status, "invalid-expires-in", err)
-		c.notifyFailure(ctx, "token-api-error", "", err, nil)
+		c.notifyFailure(ctx, "token-api-error", err)
 		return err
 	}
 	token.ExpiresAt = expiresAt
@@ -430,18 +487,19 @@ func (c *Client) passwordSHA256Hex() (string, error) {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, withAppLang bool, withAuth bool, body any) ([]byte, int, error) {
+	stage := requestStage(path)
 	u, err := c.buildURL(path, withAppLang)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, newRequestFailure(stage, 0, "build-url", err)
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, newRequestFailure(stage, 0, "encode-request", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(payload))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, newRequestFailure(stage, 0, requestFailureCategory("build-request", err), err)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
@@ -461,8 +519,8 @@ func (c *Client) doJSON(ctx context.Context, method, path string, withAppLang bo
 
 	log.Info().
 		Str("source", c.Name()).
+		Str("stage", stage).
 		Str("method", method).
-		Str("url", u).
 		Bool("with_auth", withAuth).
 		Int("request_bytes", len(payload)).
 		Msg("sending API request")
@@ -470,20 +528,21 @@ func (c *Client) doJSON(ctx context.Context, method, path string, withAppLang bo
 	start := time.Now()
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		log.Error().Err(err).Str("source", c.Name()).Str("url", u).Msg("API request failed")
-		return nil, 0, err
+		failure := newRequestFailure(stage, 0, requestFailureCategory("transport", err), err)
+		log.Error().Err(failure).Str("source", c.Name()).Str("stage", stage).Msg("API request failed")
+		return nil, 0, failure
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := readResponseBody(resp.Body)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, newRequestFailure(stage, resp.StatusCode, requestFailureCategory("read-response", err), err)
 	}
 
 	log.Info().
 		Str("source", c.Name()).
+		Str("stage", stage).
 		Str("method", method).
-		Str("url", u).
 		Int("status", resp.StatusCode).
 		Dur("duration", time.Since(start)).
 		Int("response_bytes", len(raw)).
@@ -543,9 +602,9 @@ func (c *Client) doJSONAuthRetry(ctx context.Context, method, path string, withA
 		return raw, status, nil
 	}
 
-	log.Warn().Str("source", c.Name()).Str("path", path).Msg("received 401 from Solarman API, refreshing token and retrying once")
+	log.Warn().Str("source", c.Name()).Str("stage", requestStage(path)).Msg("received 401 from Solarman API, refreshing token and retrying once")
 	if err := c.obtainToken(ctx); err != nil {
-		c.notifyFailure(ctx, "token-refresh-after-401", "", err, nil)
+		c.notifyFailure(ctx, "token-refresh-after-401", err)
 		return raw, status, fmt.Errorf("solarman token refresh after 401 failed: %w", err)
 	}
 	return c.doJSONTransientRetry(ctx, method, path, withAppLang, true, body)
@@ -569,7 +628,7 @@ func (c *Client) doJSONTransientRetry(ctx context.Context, method, path string, 
 		log.Warn().
 			Err(err).
 			Str("source", c.Name()).
-			Str("path", path).
+			Str("stage", requestStage(path)).
 			Int("status", status).
 			Int("attempt", attempt).
 			Int("max_attempts", transientRequestAttempts).
@@ -601,8 +660,8 @@ func sleepBeforeSolarmanRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (c *Client) notifyFailure(ctx context.Context, step string, deviceSN string, err error, raw []byte) {
-	if c.alerts == nil || err == nil {
+func (c *Client) notifyFailure(ctx context.Context, step string, err error) {
+	if c.alerts == nil || err == nil || source.IsDiagnosticFetch(ctx) {
 		return
 	}
 
@@ -611,24 +670,25 @@ func (c *Client) notifyFailure(ctx context.Context, step string, deviceSN string
 		return
 	}
 
-	body := strings.TrimSpace(string(raw))
-	if len(body) > 2000 {
-		body = body[:2000] + "...(truncated)"
+	status := "unavailable"
+	category := "internal"
+	if requestErr, ok := errors.AsType[*requestFailureError](err); ok {
+		category = requestErr.category
+		if requestErr.status > 0 {
+			status = strconv.Itoa(requestErr.status)
+		}
+	} else {
+		category = requestFailureCategory(category, err)
 	}
 
 	subject := fmt.Sprintf("Solarman request failure: %s", step)
 	message := fmt.Sprintf(
-		"A Solarman request failed.\n\nSource: %s\nStep: %s\nBase URL: %s\nDevice SN: %s\nConfigured Station ID: %d\nError: %s",
+		"A Solarman request failed.\n\nSource: %s\nStep: %s\nStatus: %s\nCategory: %s\n\nNo URL, account/device identity, credential, or upstream response body is included.",
 		c.Name(),
 		step,
-		c.cfg.BaseURL,
-		valueOrFallback(deviceSN, strings.TrimSpace(c.cfg.DeviceSN), "<discovery>"),
-		c.cfg.StationID,
-		err.Error(),
+		status,
+		category,
 	)
-	if body != "" {
-		message += "\nResponse Body: " + body
-	}
 
 	c.alerts.Notify(ctx, alert.Event{
 		Key:     "solarman_" + sanitizeAlertKey(step),
@@ -656,16 +716,6 @@ func (c *Client) notifyTokenFailure(ctx context.Context, step string, err *token
 func sanitizeAlertKey(value string) string {
 	replacer := strings.NewReplacer("/", "_", " ", "_", "-", "_", ":", "_")
 	return replacer.Replace(strings.ToLower(strings.TrimSpace(value)))
-}
-
-func valueOrFallback(values ...string) string {
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func (c *Client) buildURL(path string, withAppLang bool) (string, error) {

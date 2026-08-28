@@ -43,6 +43,12 @@ const (
 	maximumOAuthExpiresInSeconds     int64 = int64((1<<63 - 1) / time.Second)
 )
 
+var jinkoRuntimeEpoch = time.Now()
+
+func jinkoRuntimeNow() time.Duration {
+	return time.Since(jinkoRuntimeEpoch)
+}
+
 type Client struct {
 	cfg                         config.JinkoConfig
 	hc                          *http.Client
@@ -61,6 +67,9 @@ type Client struct {
 	bearerTokenExp              time.Time
 	hasBearerTokenExp           bool
 	tokenUpdatedAt              time.Time
+	steadyNow                   func() time.Duration
+	backgroundRefreshNotBefore  time.Duration
+	hasBackgroundRefreshFloor   bool
 	refreshedUnknown            bool
 	unknownExpirySent           bool
 	unknownExpiryNotifyInFlight bool
@@ -130,6 +139,62 @@ func (e tokenStateDurabilityError) Error() string {
 
 func (e tokenStateDurabilityError) Unwrap() error {
 	return e.err
+}
+
+// requestFailureError exposes only closed operational context. The original
+// cause remains available to errors.Is/errors.As and retry classification, but
+// Error never stringifies it because net/http errors can contain a full URL.
+type requestFailureError struct {
+	stage    string
+	status   int
+	category string
+	cause    error
+}
+
+func (e requestFailureError) Error() string {
+	status := "unavailable"
+	if e.status > 0 {
+		status = strconv.Itoa(e.status)
+	}
+	return fmt.Sprintf("jinko request failed: stage=%s status=%s category=%s", e.stage, status, e.category)
+}
+
+func (e requestFailureError) Unwrap() error {
+	return e.cause
+}
+
+func newRequestFailure(stage string, status int, category string, cause error) error {
+	return requestFailureError{stage: stage, status: status, category: category, cause: cause}
+}
+
+func requestFailureCategory(fallback string, err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return fallback
+	}
+}
+
+// tokenStateFailureError hides configured and temporary filesystem paths while
+// retaining the OS error for errors.Is/errors.As.
+type tokenStateFailureError struct {
+	stage string
+	cause error
+}
+
+func (e tokenStateFailureError) Error() string {
+	return "jinko token state operation failed: stage=" + e.stage
+}
+
+func (e tokenStateFailureError) Unwrap() error {
+	return e.cause
+}
+
+func newTokenStateFailure(stage string, cause error) error {
+	return tokenStateFailureError{stage: stage, cause: cause}
 }
 
 type pendingTokenState struct {
@@ -206,7 +271,7 @@ func New(cfg config.JinkoConfig, alerts *alert.Manager) *Client {
 			return http.ErrUseLastResponse
 		},
 	}
-	return &Client{
+	client := &Client{
 		cfg: cfg,
 		hc:  hc,
 		tokenHC: &http.Client{
@@ -229,8 +294,18 @@ func New(cfg config.JinkoConfig, alerts *alert.Manager) *Client {
 		bearerTokenExp:    bearerTokenExp,
 		hasBearerTokenExp: hasBearerTokenExp,
 		tokenUpdatedAt:    tokenUpdatedAt,
+		steadyNow:         jinkoRuntimeNow,
 		refreshUncertain:  refreshUncertain,
 	}
+	// Persisted wall-clock timestamps cannot carry Go's monotonic component.
+	// Restore only the remaining anti-spin interval onto this process's steady
+	// clock. A future timestamp (for example after a wall-clock rollback) earns
+	// one conservative full interval, never an unbounded delay or immediate
+	// repeat refresh.
+	if token != "" {
+		client.armBackgroundRefreshFloorFromPersisted(tokenUpdatedAt, time.Now())
+	}
+	return client
 }
 
 func (c *Client) Name() string {
@@ -306,19 +381,20 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	}
 
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("jinko detail request failed: status=%d", status)
+		return nil, newRequestFailure("detail", status, "http-status", nil)
 	}
 
 	snapshot, err := ParseDetailResponse(raw)
 	if err != nil {
-		log.Error().Err(err).Str("source", c.Name()).Str("url", c.cfg.URL).Msg("failed to parse Jinko detail response")
-		return nil, err
+		failure := newRequestFailure("detail", status, "decode", err)
+		log.Error().Err(failure).Str("source", c.Name()).Msg("failed to parse Jinko detail response")
+		return nil, failure
 	}
 	if len(snapshot.Metrics) == 0 {
-		return nil, fmt.Errorf("jinko detail response contained no metrics")
+		return nil, newRequestFailure("detail", status, "no-metrics", nil)
 	}
 	if strings.TrimSpace(snapshot.DeviceSN) == "" {
-		return nil, fmt.Errorf("jinko detail response contained no device serial")
+		return nil, newRequestFailure("detail", status, "empty-device-serial", nil)
 	}
 	if err := c.persistPendingTokenState(ctx); err != nil {
 		c.alertRefreshFailure(ctx, "durability")
@@ -352,7 +428,7 @@ func (c *Client) doDetailRequestWithRetry(ctx context.Context, reqBody []byte) (
 				delay := c.retryDelay(attempt)
 				log.Warn().
 					Str("source", c.Name()).
-					Str("url", c.cfg.URL).
+					Str("stage", "detail").
 					Int("status", status).
 					Int("attempt", attempt).
 					Int("max_attempts", attempts).
@@ -373,7 +449,7 @@ func (c *Client) doDetailRequestWithRetry(ctx context.Context, reqBody []byte) (
 			log.Error().
 				Err(err).
 				Str("source", c.Name()).
-				Str("url", c.cfg.URL).
+				Str("stage", "detail").
 				Int("attempt", attempt).
 				Int("max_attempts", attempts).
 				Msg("API request failed")
@@ -384,7 +460,7 @@ func (c *Client) doDetailRequestWithRetry(ctx context.Context, reqBody []byte) (
 		log.Warn().
 			Err(err).
 			Str("source", c.Name()).
-			Str("url", c.cfg.URL).
+			Str("stage", "detail").
 			Int("attempt", attempt).
 			Int("max_attempts", attempts).
 			Dur("retry_in", delay).
@@ -405,13 +481,13 @@ func (c *Client) doDetailRequest(ctx context.Context, reqBody []byte, attempt, a
 	}
 	req, err := c.newDetailRequestWithBearer(ctx, reqBody, bearerToken)
 	if err != nil {
-		return nil, 0, tokenVersion, err
+		return nil, 0, tokenVersion, newRequestFailure("detail", 0, requestFailureCategory("build-request", err), err)
 	}
 
 	fields := log.Info().
 		Str("source", c.Name()).
+		Str("stage", "detail").
 		Str("method", req.Method).
-		Str("url", req.URL.String()).
 		Int("attempt", attempt).
 		Int("max_attempts", attempts)
 	if hasBearerTokenExp {
@@ -422,19 +498,19 @@ func (c *Client) doDetailRequest(ctx context.Context, reqBody []byte, attempt, a
 	start := time.Now()
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return nil, 0, tokenVersion, err
+		return nil, 0, tokenVersion, newRequestFailure("detail", 0, requestFailureCategory("transport", err), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := readResponseBody(resp.Body)
 	if err != nil {
-		return nil, 0, tokenVersion, err
+		return nil, 0, tokenVersion, newRequestFailure("detail", resp.StatusCode, requestFailureCategory("read-response", err), err)
 	}
 
 	log.Info().
 		Str("source", c.Name()).
+		Str("stage", "detail").
 		Str("method", http.MethodPost).
-		Str("url", c.cfg.URL).
 		Int("attempt", attempt).
 		Int("max_attempts", attempts).
 		Int("status", resp.StatusCode).
@@ -568,6 +644,9 @@ func (c *Client) hasUncertainRefreshOutcome() bool {
 }
 
 func (c *Client) notifyRefreshOutcomeUncertain(ctx context.Context) {
+	if source.IsDiagnosticFetch(ctx) {
+		return
+	}
 	c.tokenMu.Lock()
 	shouldNotify := c.refreshUncertain && !c.uncertainSent && !c.uncertainNotifyInFlight
 	if shouldNotify {
@@ -597,6 +676,9 @@ func (c *Client) notifyRefreshOutcomeUncertain(ctx context.Context) {
 }
 
 func (c *Client) notifyUnknownExpiryPause(ctx context.Context) {
+	if source.IsDiagnosticFetch(ctx) {
+		return
+	}
 	c.tokenMu.Lock()
 	shouldNotify := c.refreshedUnknown && !c.hasBearerTokenExp && !c.unknownExpirySent && !c.unknownExpiryNotifyInFlight
 	if shouldNotify {
@@ -694,7 +776,7 @@ func (c *Client) persistPendingTokenState(ctx context.Context) error {
 	c.tokenMu.Unlock()
 
 	if err := c.persistState(c.cfg.TokenStateFile, pending.state); err != nil {
-		return tokenStateDurabilityError{err: fmt.Errorf("persist pending Jinko token state: %w", err)}
+		return tokenStateDurabilityError{err: newTokenStateFailure("persist-pending", err)}
 	}
 
 	promoted := false
@@ -864,17 +946,66 @@ func (c *Client) backgroundRefreshScheduleLocked(now time.Time) (due bool, wait 
 		// Fetch trigger the next rotation rather than consume tokens on a guess.
 		return false, 0, false
 	}
+	floorWait := c.backgroundRefreshFloorWaitLocked()
 	dueAt := c.bearerTokenExp.Add(-c.refreshBefore())
-	if !c.tokenUpdatedAt.IsZero() && !c.tokenUpdatedAt.After(now) {
-		minimumDueAt := c.tokenUpdatedAt.Add(minimumBackgroundRefreshInterval)
-		if dueAt.Before(minimumDueAt) {
-			dueAt = minimumDueAt
+	expiryWait := time.Duration(0)
+	if dueAt.After(now) {
+		expiryWait = dueAt.Sub(now)
+	}
+	if floorWait > expiryWait {
+		return false, floorWait, true
+	}
+	if expiryWait > 0 {
+		return false, expiryWait, true
+	}
+	return true, 0, true
+}
+
+func (c *Client) backgroundRefreshFloorWaitLocked() time.Duration {
+	if !c.hasBackgroundRefreshFloor {
+		return 0
+	}
+	steadyNow := jinkoRuntimeNow
+	if c.steadyNow != nil {
+		steadyNow = c.steadyNow
+	}
+	wait := c.backgroundRefreshNotBefore - steadyNow()
+	if wait <= 0 {
+		c.hasBackgroundRefreshFloor = false
+		c.backgroundRefreshNotBefore = 0
+		return 0
+	}
+	return wait
+}
+
+func (c *Client) armBackgroundRefreshFloorLocked(wait time.Duration) {
+	if wait <= 0 {
+		c.hasBackgroundRefreshFloor = false
+		c.backgroundRefreshNotBefore = 0
+		return
+	}
+	steadyNow := jinkoRuntimeNow
+	if c.steadyNow != nil {
+		steadyNow = c.steadyNow
+	}
+	c.backgroundRefreshNotBefore = steadyNow() + wait
+	c.hasBackgroundRefreshFloor = true
+}
+
+func (c *Client) armBackgroundRefreshFloorFromPersisted(updatedAt, now time.Time) {
+	if updatedAt.IsZero() {
+		return
+	}
+	wait := minimumBackgroundRefreshInterval
+	if !updatedAt.After(now) {
+		age := now.Sub(updatedAt)
+		if age >= minimumBackgroundRefreshInterval {
+			wait = 0
+		} else if age > 0 {
+			wait -= age
 		}
 	}
-	if !dueAt.After(now) {
-		return true, 0, true
-	}
-	return false, dueAt.Sub(now), true
+	c.armBackgroundRefreshFloorLocked(wait)
 }
 
 func (c *Client) performRefresh(ctx context.Context, material refreshMaterial) (bool, error) {
@@ -895,7 +1026,7 @@ func (c *Client) performRefresh(ctx context.Context, material refreshMaterial) (
 
 	req, err := http.NewRequest(http.MethodPost, c.cfg.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return false, fmt.Errorf("build Jinko token refresh request: %w", err)
+		return false, newRequestFailure("token-refresh", 0, requestFailureCategory("build-request", err), err)
 	}
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -917,7 +1048,7 @@ func (c *Client) performRefresh(ctx context.Context, material refreshMaterial) (
 		UpdatedAt:               markerUpdatedAt,
 		RefreshOutcomeUncertain: true,
 	}); err != nil {
-		return false, fmt.Errorf("prepare Jinko token state: %w", err)
+		return false, newTokenStateFailure("prepare", err)
 	}
 	c.tokenMu.Lock()
 	c.refreshInFlight = true
@@ -986,7 +1117,7 @@ func (c *Client) performRefresh(ctx context.Context, material refreshMaterial) (
 		log.Error().Err(persistErr).Str("source", c.Name()).Msg("rotated Jinko credential pair is not durable; shutdown or process loss could lose refresh capability")
 		// Surface the durability failure so priority can fall through while the
 		// background keeper retries only the atomic state write.
-		return true, tokenStateDurabilityError{err: fmt.Errorf("persist refreshed Jinko token state: %w", persistErr)}
+		return true, tokenStateDurabilityError{err: newTokenStateFailure("persist-refreshed", persistErr)}
 	}
 
 	fields := log.Info().Str("source", c.Name())
@@ -1021,10 +1152,13 @@ func (c *Client) persistRefreshedTokenState(ctx context.Context, statePath strin
 			break
 		}
 		if err := sleepBeforeRetry(ctx, minimumTokenStateRetryDelay); err != nil {
-			return fmt.Errorf("retry refreshed Jinko token-state persistence: %w (last persistence error: %v)", err, lastErr)
+			return newTokenStateFailure("persist-refreshed-retry", errors.Join(err, lastErr))
 		}
 	}
-	return lastErr
+	if lastErr == nil {
+		return nil
+	}
+	return newTokenStateFailure("persist-refreshed", lastErr)
 }
 
 func (c *Client) activateTokenStateLocked(state tokenState) {
@@ -1032,6 +1166,7 @@ func (c *Client) activateTokenStateLocked(state tokenState) {
 	c.refreshToken = strings.TrimSpace(state.RefreshToken)
 	c.bearerTokenExp, c.hasBearerTokenExp = tokenStateExpiry(state)
 	c.tokenUpdatedAt = state.UpdatedAt
+	c.armBackgroundRefreshFloorLocked(minimumBackgroundRefreshInterval)
 	c.refreshedUnknown = !c.hasBearerTokenExp
 	c.unknownExpirySent = false
 	c.refreshInFlight = false
@@ -1078,13 +1213,13 @@ func oauthExpiresInSeconds(raw json.RawMessage) (int64, bool) {
 }
 
 func isRefreshOutcomeUncertainError(err error) bool {
-	var uncertainErr refreshOutcomeUncertainError
-	return errors.As(err, &uncertainErr)
+	_, ok := errors.AsType[refreshOutcomeUncertainError](err)
+	return ok
 }
 
 func isTokenStateDurabilityError(err error) bool {
-	var durabilityErr tokenStateDurabilityError
-	return errors.As(err, &durabilityErr)
+	_, ok := errors.AsType[tokenStateDurabilityError](err)
+	return ok
 }
 
 func pendingTokenDurabilityError() error {
@@ -1151,18 +1286,23 @@ func isRetryableRequestError(err error) bool {
 		return true
 	}
 
-	text := strings.ToLower(err.Error())
-	if strings.Contains(text, "tls handshake timeout") ||
-		strings.Contains(text, "connection reset") ||
-		strings.Contains(text, "connection refused") ||
-		strings.Contains(text, "connection aborted") ||
-		strings.Contains(text, "server closed idle connection") ||
-		strings.Contains(text, "temporary failure") {
-		return true
+	// requestFailureError deliberately redacts its cause from Error(). Inspect
+	// the chain only for retry classification; none of this text is returned or
+	// logged.
+	for current, depth := err, 0; current != nil && depth < 16; current, depth = errors.Unwrap(current), depth+1 {
+		text := strings.ToLower(current.Error())
+		if strings.Contains(text, "tls handshake timeout") ||
+			strings.Contains(text, "connection reset") ||
+			strings.Contains(text, "connection refused") ||
+			strings.Contains(text, "connection aborted") ||
+			strings.Contains(text, "server closed idle connection") ||
+			strings.Contains(text, "temporary failure") {
+			return true
+		}
 	}
 
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
+	netErr, ok := errors.AsType[net.Error](err)
+	return ok && netErr.Timeout()
 }
 
 func shouldRetryHTTPStatus(status int) bool {
@@ -1265,19 +1405,19 @@ func loadTokenState(path string) (tokenState, error) {
 		return state, nil
 	}
 	if err != nil {
-		return state, fmt.Errorf("open token state: %w", err)
+		return state, newTokenStateFailure("open", err)
 	}
 	defer func() { _ = file.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(file, maxTokenStateBytes+1))
 	if err != nil {
-		return state, fmt.Errorf("read token state: %w", err)
+		return state, newTokenStateFailure("read", err)
 	}
 	if len(raw) > maxTokenStateBytes {
-		return state, fmt.Errorf("token state exceeds %d bytes", maxTokenStateBytes)
+		return state, newTokenStateFailure("size-limit", nil)
 	}
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return tokenState{}, fmt.Errorf("decode token state: %w", err)
+		return tokenState{}, newTokenStateFailure("decode", err)
 	}
 	return state, nil
 }
@@ -1290,7 +1430,7 @@ func persistTokenState(path string, state tokenState) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".jinko-token-state-*")
 	if err != nil {
-		return fmt.Errorf("create temporary token state: %w", err)
+		return newTokenStateFailure("create-temporary", err)
 	}
 	tmpName := tmp.Name()
 	removeTemp := true
@@ -1302,34 +1442,34 @@ func persistTokenState(path string, state tokenState) error {
 	}()
 
 	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("secure temporary token state: %w", err)
+		return newTokenStateFailure("secure-temporary", err)
 	}
 	encoder := json.NewEncoder(tmp)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(state); err != nil {
-		return fmt.Errorf("encode token state: %w", err)
+		return newTokenStateFailure("encode", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("sync temporary token state: %w", err)
+		return newTokenStateFailure("sync-temporary", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temporary token state: %w", err)
+		return newTokenStateFailure("close-temporary", err)
 	}
 	if err := replaceTokenStateFile(tmpName, path); err != nil {
-		return fmt.Errorf("replace token state: %w", err)
+		return newTokenStateFailure("replace", err)
 	}
 	removeTemp = false
 	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("secure token state: %w", err)
+		return newTokenStateFailure("secure", err)
 	}
 	if err := syncTokenStateLocation(path); err != nil {
-		return fmt.Errorf("sync token state location: %w", err)
+		return newTokenStateFailure("sync-location", err)
 	}
 	return nil
 }
 
 func (c *Client) checkBearerToken(ctx context.Context) {
-	if c.alerts == nil || c.hasRefreshCredentials() {
+	if c.alerts == nil || source.IsDiagnosticFetch(ctx) || c.hasRefreshCredentials() {
 		return
 	}
 
@@ -1344,10 +1484,8 @@ func (c *Client) checkBearerToken(ctx context.Context) {
 			Key:     "jinko_bearer_token_expired",
 			Subject: "Jinko bearer token expired",
 			Body: fmt.Sprintf(
-				"The configured Jinko bearer token is already expired.\n\nSource: %s\nDevice ID: %d\nSite ID: %d\nExpired At: %s\nCurrent Time: %s\n\nReplace JINKO_BEARER_TOKEN before the next successful poll.",
+				"The configured Jinko bearer token is already expired.\n\nSource: %s\nExpired At: %s\nCurrent Time: %s\n\nNo endpoint or device/site identity is included. Replace JINKO_BEARER_TOKEN before the next successful poll.",
 				c.Name(),
-				c.cfg.DeviceID,
-				c.cfg.SiteID,
 				expiry.UTC().Format(time.RFC3339),
 				now.UTC().Format(time.RFC3339),
 			),
@@ -1360,10 +1498,8 @@ func (c *Client) checkBearerToken(ctx context.Context) {
 			Key:     "jinko_bearer_token_expiring_soon",
 			Subject: "Jinko bearer token expiring soon",
 			Body: fmt.Sprintf(
-				"The configured Jinko bearer token is close to expiry.\n\nSource: %s\nDevice ID: %d\nSite ID: %d\nExpires At: %s\nTime Remaining: %s\nAlert Window: %s\n\nRefresh JINKO_BEARER_TOKEN before it expires.",
+				"The configured Jinko bearer token is close to expiry.\n\nSource: %s\nExpires At: %s\nTime Remaining: %s\nAlert Window: %s\n\nNo endpoint or device/site identity is included. Refresh JINKO_BEARER_TOKEN before it expires.",
 				c.Name(),
-				c.cfg.DeviceID,
-				c.cfg.SiteID,
 				expiry.UTC().Format(time.RFC3339),
 				expiry.Sub(now).Round(time.Second),
 				c.cfg.TokenAlertWindow,
@@ -1373,7 +1509,7 @@ func (c *Client) checkBearerToken(ctx context.Context) {
 }
 
 func (c *Client) alertRefreshFailure(ctx context.Context, phase string) {
-	if c.alerts == nil {
+	if c.alerts == nil || source.IsDiagnosticFetch(ctx) {
 		return
 	}
 	c.alerts.Notify(ctx, alert.Event{
@@ -1388,7 +1524,7 @@ func (c *Client) alertRefreshFailure(ctx context.Context, phase string) {
 }
 
 func (c *Client) alertAuthFailure(ctx context.Context, status int) {
-	if c.alerts == nil {
+	if c.alerts == nil || source.IsDiagnosticFetch(ctx) {
 		return
 	}
 
@@ -1396,12 +1532,9 @@ func (c *Client) alertAuthFailure(ctx context.Context, status int) {
 		Key:     fmt.Sprintf("jinko_auth_failure_%d", status),
 		Subject: fmt.Sprintf("Jinko API authentication failed with HTTP %d", status),
 		Body: fmt.Sprintf(
-			"The Jinko detail request returned an authentication-related HTTP status.\n\nSource: %s\nDevice ID: %d\nSite ID: %d\nStatus: %d\nURL: %s\n\nCheck the configured Jinko refresh token, bearer token, and cookie.",
+			"The Jinko detail request returned an authentication-related HTTP status.\n\nSource: %s\nStage: detail\nStatus: %d\nCategory: authentication\n\nNo URL, device/site identity, credential, cookie, or upstream response body is included.",
 			c.Name(),
-			c.cfg.DeviceID,
-			c.cfg.SiteID,
 			status,
-			c.cfg.URL,
 		),
 	})
 }

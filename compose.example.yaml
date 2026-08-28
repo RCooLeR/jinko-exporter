@@ -5,15 +5,18 @@ services:
     container_name: jinko_bridge
     restart: unless-stopped
     user: "65532:65532"
-    # The bridge may finish one already-started, bounded OAuth token rotation
-    # before exiting so a consumed refresh token is never abandoned mid-write.
-    stop_grace_period: 40s
+    # The bridge may finish one already-started bounded OAuth rotation or alert
+    # correlation job before exiting, preserving token and diagnostic state.
+    stop_grace_period: 70s
     ports:
       - "9876:9876"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
-    # Token refresh state needs a dedicated writable mount when enabled:
+    # Token refresh and persistent MQTT discovery state use a dedicated
+    # writable mount when either feature is enabled:
+    # Create ./state as a private directory owned by the effective user below;
+    # read_only protects the root filesystem, not this explicit bind mount.
     # volumes:
     #   - ./state:/var/lib/jinko-bridge
     security_opt:
@@ -46,6 +49,8 @@ services:
       # MQTT_PASSWORD_FILE: "/run/secrets/mqtt_password"
       # MQTT_TOPIC_PREFIX: "jinko-exporter"
       # MQTT_DISCOVERY_PREFIX: "homeassistant"
+      # MQTT_DEVICE_ID: "<STABLE_INVERTER_SERIAL>"
+      # MQTT_DISCOVERY_STATE_FILE: "/var/lib/jinko-bridge/mqtt-discovery-state.json"
       # MQTT_RETAIN: "true"
 
       # Recommended local-first failover after a supervised Modbus-only fetch:
@@ -77,6 +82,18 @@ services:
       # MODBUS_UNIT_ID: "1"
       # MODBUS_TIMEOUT: "5s"
 
+      # Optional diagnostic correlation for a non-zero Modbus warning/fault
+      # word. This requires the exact modbus,jinko,solarman priority chain and
+      # sends a dedicated Home Assistant notification with cloud evidence.
+      # MODBUS_ALERT_CORRELATION_ENABLED: "true"
+      # MODBUS_ALERT_CORRELATION_COOLDOWN: "6h"
+      # MODBUS_ALERT_CORRELATION_JOB_TIMEOUT: "45s"
+      # HOMEASSISTANT_URL: "https://homeassistant.example.test"
+      # HOMEASSISTANT_TOKEN_FILE: "/run/secrets/homeassistant_token"
+      # JINKO_HA_NOTIFY_SERVICE: "notify.mobile_app_operator_phone"
+      # HOMEASSISTANT_TIMEOUT: "10s"
+      # HOMEASSISTANT_ALLOW_INSECURE_HTTP: "false"
+
       # Optional: enrich inverter data with real grid-side load from Shelly Pro 3EM.
       # SHELLY_GRID_LOAD_ENABLED: "true"
       # SHELLY_GRID_LOAD_URL: "http://192.0.2.50"
@@ -86,6 +103,7 @@ services:
       # - jinko_refresh_token
       # - jinko_cookie
       # - mqtt_password
+      # - homeassistant_token
       # - solarman_app_secret
       # - solarman_password
 
@@ -98,6 +116,8 @@ secrets:
   #   file: ./secrets/jinko_cookie
   # mqtt_password:
   #   file: ./secrets/mqtt_password
+  # homeassistant_token:
+  #   file: ./secrets/homeassistant_token
   # solarman_app_secret:
   #   file: ./secrets/solarman_app_secret
   # solarman_password:

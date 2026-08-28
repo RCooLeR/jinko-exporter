@@ -123,10 +123,10 @@ Expiry-aware rotation requires either JWT `exp` or OAuth `expires_in`. If Jinko 
 
 The bridge also journals an internal `refresh_outcome_uncertain` marker before sending a refresh-token request. If Jinko may have consumed the refresh token but no valid response pair is proven, automatic refresh stays paused across restarts and the credential is never replayed. To recover, stop the bridge, obtain a complete new access/refresh pair, replace or remove the old state file as appropriate, and restart. Do not simply edit the marker to `false` while retaining the possibly consumed refresh token.
 
-When running under Compose, allow at least 40 seconds of stop grace time. The
-example configuration sets `stop_grace_period: 40s`, which lets an
-already-started OAuth transaction finish its bounded request and durable state
-write before the container is terminated.
+When running under Compose, use the example's `stop_grace_period: 70s`. This
+lets an already-started OAuth transaction finish its bounded request and
+durable state write, and lets an enabled alert-correlation worker cancel/join
+its separately bounded HA and cloud phases before the container is terminated.
 
 ## Solarman Source
 
@@ -199,7 +199,9 @@ The first three every-fetch reads are the generator zero-domain contract: regist
 
 The existing PV input request reads registers 672-679 once. It emits `DP1=R672×10 W`, `DP2=R673×10 W`, `DV1=R676×0.1 V`, `DC1=R677×0.1 A`, `DV2=R678×0.1 V`, `DC2=R679×0.1 A`, and `S_P_T=(R672+R673)×10 W`. The exact reviewed response, compatible read-only protocol maps, same-frame `V×I` agreement, and separately bracketed cloud aggregate establish the register provenance and scales. The capability gate requires two MPPTs, registers 674-675 must remain zero for unused PV3/PV4 power, each channel and aggregate power are capped at twice rated power, voltage is bounded to `1000 V`, and current is bounded to `100 A`. Promoting the six per-channel values added no PV request; the current 24/22 plan also includes the three later generator zero-domain reads, one later output-power high-word read, and the power/AC-relay status read.
 
-The direct-load low-word read `650 x 4`, sequence `0x12`, runs immediately before the existing `655 x 5`, sequence `0x13`, frequency/high-word read. Low-first pairs 650/656, 651/657, and 652/658 emit canonical `LPP_A/B/C`; dedicated pair 653/659 emits `E_Puse_t1`. Every high word must be zero, and zero through `65535 W` are accepted independently for each value. A live same-frame sample measured the phase sum at `243 W` while the dedicated total was `251 W`, so phase-sum equality is deliberately not a gate. A negative or otherwise nonzero-high encoding rejects the whole snapshot because only the non-negative domain has been verified; `C_P_L1..3` aliases remain excluded. There is no `Pr1`-derived power cap: the model-dependent AC pass-through rating is a separate specification, and available official revisions/table layouts do not make the 40 A versus 80 A split safe to encode here. Register 588 exposes its one validated SOC value through both canonical keys `B_left_cap1` and `BMS_SOC`; register 586 likewise exposes the validated temperature through `B_T1` and `BMST`. None is filled with a guessed zero.
+The direct-load low-word read `650 x 4`, sequence `0x12`, runs immediately before the existing `655 x 5`, sequence `0x13`, frequency/high-word read. Low-first pairs 650/656, 651/657, and 652/658 emit canonical signed `LPP_A/B/C`. Each phase high word must be `0x0000` or `0xFFFF`, and the joined value must remain inside the conservative `-32767..32767 W` coherence envelope so a stale sign word across zero fails closed. Dedicated pair 653/659 emits independent non-negative `E_Puse_t1`: R659 must be zero, while R653 retains the full numerically U16 `0..65535 W` subset of its documented signed wire pair. A live same-frame sample measured the phase sum at `243 W` while the dedicated total was `251 W`, so phase-sum equality is deliberately not a gate. A failed phase or total gate rejects the whole snapshot; `C_P_L1..3` aliases remain excluded. The phase guard is not a `Pr1` or pass-through cap, and the wider dedicated-total range is preserved. Register 588 exposes its one validated SOC value through both canonical keys `B_left_cap1` and `BMS_SOC`; register 586 likewise exposes the validated temperature through `B_T1` and `BMST`. None is filled with a guessed zero.
+
+Grid phase and total powers use two consecutive fixed reads: low words `622 x 4`, sequence `0x0C`, followed immediately by high words `687 x 4`, sequence `0x0D`. Production joins each pair low-word-first as signed 32-bit, requires canonical high words `0x0000` or `0xFFFF`, restricts every value to the conservative `-32767..32767 W` coherence envelope, and requires the exact signed phase sum to equal the total. The symmetric `0x7FFF` boundary makes a stale sign-extension word fail closed if the two reads straddle zero; it is not derived from `Pr1` or a pass-through rating. An invalid high word, out-of-envelope value, or signed-sum mismatch rejects the whole snapshot and allows configured cloud fallback.
 
 Output active power uses two consecutive fixed reads: `627 x 12`, sequence `0x0E`, contains low words 633-636, and the immediately following `691 x 5`, sequence `0x0F`, contains their high words 691-694. Production joins each pair low-word-first as signed 32-bit and emits `INV_O_P_L1`, `INV_O_P_L2`, `INV_O_P_L3`, and `INV_O_P_T` only inside a conservative coherence envelope: every active high word must be `0x0000` or `0xFFFF`, every joined value must be between `-32767` and `32767 W`, and the exact signed phase sum must equal the total. The symmetric `0x7FFF` guard protects against combining a low word with a stale sign-extension word when the two reads straddle zero; it is not derived from `Pr1` or an inverter/pass-through rating. An invalid high word, out-of-envelope value, or signed-sum mismatch rejects the whole snapshot and allows configured cloud fallback. The target has produced `R691=0xFFFF`, although that log did not preserve a complete negative raw pair for exact magnitude correlation. Apparent-power candidate words 637/695 remain ignored, so `O_P` is not emitted.
 
@@ -239,9 +241,24 @@ All sources listed in the priority must have valid configuration. Every poll sta
 
 In long-running `serve`, the Jinko OAuth credential maintainer is independent of that selection and keeps the rotating access/refresh pair current through the token endpoint only when usable expiry metadata is available. With unknown opaque-token expiry it follows the conservative pause-and-401 behavior described above. Its failure is reported separately and cannot turn a successful Modbus poll into a failed poll. Solarman obtains its short-lived access token on demand from its reusable account credentials. A one-shot `fetch` starts no background token task.
 
+Optional raw-warning correlation is also a `serve`-only background task. Set
+`MODBUS_ALERT_CORRELATION_ENABLED=true` only with the exact
+`modbus,jinko,solarman` priority above, then configure `HOMEASSISTANT_URL`, one
+of `HOMEASSISTANT_TOKEN`/`HOMEASSISTANT_TOKEN_FILE`, and a dedicated
+`JINKO_HA_NOTIFY_SERVICE=mobile_app_*`. A complete Modbus snapshot with any
+non-zero R553-R558 word first sends one bounded HA push, then gives Jinko and
+Solarman a fresh concurrent evidence budget. Cloud results are diagnostic only:
+they never replace the accepted Modbus snapshot or clear its alert. An all-zero
+complete Modbus snapshot sends the recovery push. Completion details are logged
+without a second mobile notification. For an internal HTTP HA URL, the explicit
+`HOMEASSISTANT_ALLOW_INSECURE_HTTP=true` opt-in accepts only a private/loopback
+literal address or a single-label hostname whose resolved addresses are pinned
+to the private network. Prefer HTTPS and a dedicated least-privilege HA token.
+A one-shot `fetch` never starts this worker or contacts HA/cloud for correlation.
+
 For the hardware acceptance read, temporarily force `EXPORTER_SOURCE=modbus` and clear `EXPORTER_SOURCE_PRIORITY`; otherwise a cloud fallback could conceal a Modbus failure. Never run another Modbus poller against the same logger concurrently.
 
-When MQTT is enabled for a mixed priority chain, set one explicit `MQTT_DEVICE_ID` that remains stable across all three sources. Set `MODBUS_DEVICE_SN` to the same inverter serial exposed by the cloud sources as well; it is snapshot identity only and is never sent to the logger.
+When MQTT is enabled for a mixed priority chain, set one explicit `MQTT_DEVICE_ID` that remains stable across all three sources. Set `MODBUS_DEVICE_SN` to the same inverter serial exposed by the cloud sources as well; it is snapshot identity only and is never sent to the logger. Persistent Discovery state is optional for compatibility but strongly recommended: set `MQTT_DISCOVERY_STATE_FILE=/var/lib/jinko-bridge/mqtt-discovery-state.json` and mount the private `./state` directory shown below. The configured first-priority source then owns the ordinary Home Assistant surface across process restarts; a cold cloud fallback cannot add cloud-only ordinary entities before that primary succeeds.
 
 ## Home Assistant MQTT
 
@@ -254,6 +271,8 @@ services:
     restart: unless-stopped
     ports:
       - "9876:9876"
+    volumes:
+      - ./state:/var/lib/jinko-bridge
     environment:
       EXPORTER_SOURCE: "jinko"
       JINKO_DEVICE_ID: "100000001"
@@ -266,9 +285,13 @@ services:
       MQTT_TOPIC_PREFIX: "jinko-exporter"
       MQTT_DISCOVERY_PREFIX: "homeassistant"
       MQTT_DEVICE_NAME: "Jinko Inverter"
+      MQTT_DEVICE_ID: "synthetic_inverter_001"
+      MQTT_DISCOVERY_STATE_FILE: "/var/lib/jinko-bridge/mqtt-discovery-state.json"
       MQTT_RETAIN: "true"
       MQTT_QOS: "0"
 ```
+
+Create `./state` as a private directory writable by container UID `65532`, as in the token-refresh example above. Use a different manifest file for every bridge device, never point it at a Docker secret or `JINKO_TOKEN_STATE_FILE`, and allow exactly one bridge process to write it. `MQTT_RETAIN` controls state and availability retention; Discovery configs are always retained. If the manifest is corrupt or its stored ownership no longer matches the configured device, prefix, or primary source, startup fails closed rather than replacing the file or deleting broker topics.
 
 When the bridge and Mosquitto are in the same Compose project, use the broker service name:
 

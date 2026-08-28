@@ -22,11 +22,16 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-const maxJinkoTokenStateBytes = 64 * 1024
+const (
+	maxJinkoTokenStateBytes    = 64 * 1024
+	maxHomeAssistantTokenBytes = 64 * 1024
+)
 
 var (
-	metricPrefixPattern       = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	solarmanAPIVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	metricPrefixPattern         = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	solarmanAPIVersionPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	homeAssistantNotifyPattern  = regexp.MustCompile(`^mobile_app_[a-z0-9_]+$`)
+	homeAssistantLocalHostLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 )
 
 type Config struct {
@@ -40,6 +45,8 @@ type Config struct {
 	DropSourceLabel        bool
 	ProjectFailoverMetrics bool
 	Alerts                 AlertConfig
+	ModbusAlertCorrelation ModbusAlertCorrelationConfig
+	HomeAssistant          HomeAssistantConfig
 	MQTT                   MQTTConfig
 	Jinko                  JinkoConfig
 	Solarman               SolarmanConfig
@@ -50,6 +57,7 @@ type Config struct {
 func (cfg Config) Redacted() Config {
 	redacted := cfg
 	redacted.Alerts.SMTPPassword = redactSecret(redacted.Alerts.SMTPPassword)
+	redacted.HomeAssistant.Token = redactSecret(redacted.HomeAssistant.Token)
 	redacted.MQTT.Password = redactSecret(redacted.MQTT.Password)
 	redacted.Jinko.BearerToken = redactSecret(redacted.Jinko.BearerToken)
 	redacted.Jinko.RefreshToken = redactSecret(redacted.Jinko.RefreshToken)
@@ -87,6 +95,26 @@ type AlertConfig struct {
 	HighTemperatureThreshold float64
 }
 
+// ModbusAlertCorrelationConfig controls the bounded background job triggered
+// when one of the raw Modbus warning/fault words is non-zero. It is deliberately
+// independent from the generic threshold/SMTP alert manager.
+type ModbusAlertCorrelationConfig struct {
+	Enabled    bool
+	Cooldown   time.Duration
+	JobTimeout time.Duration
+}
+
+// HomeAssistantConfig is used only by the dedicated Modbus alert notifier.
+// Token is populated from either HOMEASSISTANT_TOKEN or its private file, never
+// both. NotifyService stores the normalized service segment without "notify.".
+type HomeAssistantConfig struct {
+	BaseURL           string
+	Token             string
+	NotifyService     string
+	Timeout           time.Duration
+	AllowInsecureHTTP bool
+}
+
 type MQTTConfig struct {
 	Enabled            bool
 	Broker             string
@@ -101,6 +129,8 @@ type MQTTConfig struct {
 	Retain             bool
 	Timeout            time.Duration
 	InsecureSkipVerify bool
+	DiscoveryStateFile string
+	PrimarySource      string
 }
 
 type JinkoConfig struct {
@@ -185,9 +215,10 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "mqtt-device-name", Usage: "Optional Home Assistant device name; defaults to Jinko Inverter plus device serial when available", Sources: cli.EnvVars("MQTT_DEVICE_NAME")},
 		&cli.StringFlag{Name: "mqtt-device-id", Usage: "Optional stable Home Assistant device identifier; defaults to the inverter/logger serial when available", Sources: cli.EnvVars("MQTT_DEVICE_ID")},
 		&cli.IntFlag{Name: "mqtt-qos", Value: 0, Usage: "MQTT QoS for discovery and state publishes: 0, 1, or 2", Sources: cli.EnvVars("MQTT_QOS")},
-		&cli.BoolFlag{Name: "mqtt-retain", Value: true, Usage: "Retain Home Assistant discovery, availability, and state messages", Sources: cli.EnvVars("MQTT_RETAIN")},
+		&cli.BoolFlag{Name: "mqtt-retain", Value: true, Usage: "Retain MQTT state and availability messages; Home Assistant discovery configs are always retained", Sources: cli.EnvVars("MQTT_RETAIN")},
 		&cli.DurationFlag{Name: "mqtt-timeout", Value: 10 * time.Second, Usage: "MQTT connect and publish timeout", Sources: cli.EnvVars("MQTT_TIMEOUT")},
 		&cli.BoolFlag{Name: "mqtt-insecure-skip-verify", Value: false, Usage: "Skip TLS certificate verification for MQTT TLS connections; insecure", Sources: cli.EnvVars("MQTT_INSECURE_SKIP_VERIFY")},
+		&cli.StringFlag{Name: "mqtt-discovery-state-file", Usage: "Private writable file used to persist the owned Home Assistant discovery schema across restarts", Sources: cli.EnvVars("MQTT_DISCOVERY_STATE_FILE")},
 
 		&cli.BoolFlag{Name: "alerts-enabled", Value: false, Usage: "Enable outbound alert delivery", Sources: cli.EnvVars("ALERTS_ENABLED")},
 		&cli.BoolFlag{Name: "alerts-notify-recovery", Value: false, Usage: "Send recovery notifications when alert conditions clear", Sources: cli.EnvVars("ALERTS_NOTIFY_RECOVERY")},
@@ -207,6 +238,16 @@ func Flags() []cli.Flag {
 		&cli.Float64Flag{Name: "alert-grid-down-voltage-threshold", Value: 20, Usage: "Alert when all available grid phase voltages are at or below this threshold", Sources: cli.EnvVars("ALERT_GRID_DOWN_VOLTAGE_THRESHOLD")},
 		&cli.Float64Flag{Name: "alert-battery-soc-low-threshold", Value: 0, Usage: "Optional battery SOC alert threshold in percent; must be below 100, and 0 disables it", Sources: cli.EnvVars("ALERT_BATTERY_SOC_LOW_THRESHOLD")},
 		&cli.Float64Flag{Name: "alert-high-temperature-threshold", Value: 0, Usage: "Optional temperature alert threshold in C; 0 disables it", Sources: cli.EnvVars("ALERT_HIGH_TEMPERATURE_THRESHOLD")},
+
+		&cli.BoolFlag{Name: "modbus-alert-correlation-enabled", Value: false, Usage: "On a non-zero Modbus warning/fault word, notify Home Assistant and correlate Jinko and Solarman cloud alerts", Sources: cli.EnvVars("MODBUS_ALERT_CORRELATION_ENABLED")},
+		&cli.DurationFlag{Name: "modbus-alert-correlation-cooldown", Value: 6 * time.Hour, Usage: "Minimum interval between repeated correlation jobs for an unchanged non-zero Modbus alert signature", Sources: cli.EnvVars("MODBUS_ALERT_CORRELATION_COOLDOWN")},
+		&cli.DurationFlag{Name: "modbus-alert-correlation-job-timeout", Value: 45 * time.Second, Usage: "Absolute deadline for one Modbus alert cloud-correlation job", Sources: cli.EnvVars("MODBUS_ALERT_CORRELATION_JOB_TIMEOUT")},
+		&cli.StringFlag{Name: "homeassistant-url", Usage: "Home Assistant base URL used only for Modbus alert push notifications", Sources: cli.EnvVars("HOMEASSISTANT_URL")},
+		&cli.StringFlag{Name: "homeassistant-token", Usage: "Dedicated Home Assistant bearer token used only for Modbus alert push notifications", Sources: cli.EnvVars("HOMEASSISTANT_TOKEN")},
+		&cli.StringFlag{Name: "homeassistant-token-file", Usage: "Read the dedicated Home Assistant bearer token from a private regular file", Sources: cli.EnvVars("HOMEASSISTANT_TOKEN_FILE")},
+		&cli.StringFlag{Name: "jinko-ha-notify-service", Usage: "Dedicated Home Assistant mobile_app notify service (mobile_app_* or notify.mobile_app_*)", Sources: cli.EnvVars("JINKO_HA_NOTIFY_SERVICE")},
+		&cli.DurationFlag{Name: "homeassistant-timeout", Value: 10 * time.Second, Usage: "Timeout for one Home Assistant notification request", Sources: cli.EnvVars("HOMEASSISTANT_TIMEOUT")},
+		&cli.BoolFlag{Name: "homeassistant-allow-insecure-http", Value: false, Usage: "Allow cleartext HTTP only to a private/loopback IP or single-label internal Home Assistant hostname", Sources: cli.EnvVars("HOMEASSISTANT_ALLOW_INSECURE_HTTP")},
 
 		&cli.StringFlag{Name: "jinko-url", Value: "https://smart-global.jinkosolar.com/device-s/device/v3/detail", Usage: "Jinko detail endpoint", Sources: cli.EnvVars("JINKO_URL")},
 		&cli.DurationFlag{Name: "jinko-timeout", Value: 20 * time.Second, Usage: "Jinko HTTP timeout", Sources: cli.EnvVars("JINKO_TIMEOUT")},
@@ -275,6 +316,10 @@ func FromCLI(c *cli.Command) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	homeAssistantToken, err := exclusiveSecretValue(c, "homeassistant-token", "homeassistant-token-file", maxHomeAssistantTokenBytes)
+	if err != nil {
+		return Config{}, err
+	}
 	jinkoBearerToken, err := secretValue(c, "jinko-bearer-token", "jinko-bearer-token-file")
 	if err != nil {
 		return Config{}, err
@@ -333,6 +378,7 @@ func FromCLI(c *cli.Command) (Config, error) {
 			Retain:             c.Bool("mqtt-retain"),
 			Timeout:            c.Duration("mqtt-timeout"),
 			InsecureSkipVerify: c.Bool("mqtt-insecure-skip-verify"),
+			DiscoveryStateFile: strings.TrimSpace(c.String("mqtt-discovery-state-file")),
 		},
 		Alerts: AlertConfig{
 			Enabled:                  c.Bool("alerts-enabled"),
@@ -352,6 +398,18 @@ func FromCLI(c *cli.Command) (Config, error) {
 			GridDownVoltageThreshold: c.Float64("alert-grid-down-voltage-threshold"),
 			BatterySOCLowThreshold:   c.Float64("alert-battery-soc-low-threshold"),
 			HighTemperatureThreshold: c.Float64("alert-high-temperature-threshold"),
+		},
+		ModbusAlertCorrelation: ModbusAlertCorrelationConfig{
+			Enabled:    c.Bool("modbus-alert-correlation-enabled"),
+			Cooldown:   c.Duration("modbus-alert-correlation-cooldown"),
+			JobTimeout: c.Duration("modbus-alert-correlation-job-timeout"),
+		},
+		HomeAssistant: HomeAssistantConfig{
+			BaseURL:           strings.TrimSpace(c.String("homeassistant-url")),
+			Token:             homeAssistantToken,
+			NotifyService:     strings.TrimSpace(c.String("jinko-ha-notify-service")),
+			Timeout:           c.Duration("homeassistant-timeout"),
+			AllowInsecureHTTP: c.Bool("homeassistant-allow-insecure-http"),
 		},
 		Jinko: JinkoConfig{
 			URL:                c.String("jinko-url"),
@@ -425,6 +483,37 @@ func FromCLI(c *cli.Command) (Config, error) {
 	if len(cfg.SourcePriority) == 0 {
 		cfg.SourcePriority = []string{cfg.Source}
 	}
+	if cfg.ModbusAlertCorrelation.Enabled && cfg.HomeAssistant.NotifyService != "" {
+		normalized, err := NormalizeHomeAssistantNotifyService(cfg.HomeAssistant.NotifyService)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.HomeAssistant.NotifyService = normalized
+	}
+	cfg.MQTT.PrimarySource = cfg.SourcePriority[0]
+	if cfg.MQTT.DiscoveryStateFile != "" {
+		for _, secretFileFlag := range []string{
+			"mqtt-password-file",
+			"smtp-password-file",
+			"homeassistant-token-file",
+			"jinko-bearer-token-file",
+			"jinko-refresh-token-file",
+			"jinko-token-state-file",
+			"jinko-cookie-file",
+			"solarman-app-secret-file",
+			"solarman-password-file",
+			"solarman-password-sha256-file",
+		} {
+			secretPath := strings.TrimSpace(c.String(secretFileFlag))
+			if secretPath != "" && sameConfiguredFile(cfg.MQTT.DiscoveryStateFile, secretPath) {
+				return Config{}, fmt.Errorf("mqtt-discovery-state-file must be separate from configured secret and token-state files")
+			}
+		}
+	}
+	homeAssistantTokenFile := strings.TrimSpace(c.String("homeassistant-token-file"))
+	if homeAssistantTokenFile != "" && cfg.Jinko.TokenStateFile != "" && sameConfiguredFile(homeAssistantTokenFile, cfg.Jinko.TokenStateFile) {
+		return Config{}, fmt.Errorf("homeassistant-token-file must be separate from jinko-token-state-file")
+	}
 	if err := validate(cfg); err != nil {
 		return Config{}, err
 	}
@@ -467,6 +556,14 @@ func validate(cfg Config) error {
 		if cfg.MQTT.Timeout <= 0 {
 			return fmt.Errorf("mqtt-timeout must be > 0 when MQTT is enabled")
 		}
+		if cfg.MQTT.DiscoveryStateFile != "" {
+			if strings.TrimSpace(cfg.MQTT.DeviceID) == "" {
+				return fmt.Errorf("mqtt-device-id is required when mqtt-discovery-state-file is configured so manifest ownership stays bound to one device")
+			}
+			if err := validateWritableStatePath(cfg.MQTT.DiscoveryStateFile, "mqtt-discovery-state-file"); err != nil {
+				return err
+			}
+		}
 		if len(cfg.SourcePriority) > 1 && strings.TrimSpace(cfg.MQTT.DeviceID) == "" {
 			return fmt.Errorf("mqtt-device-id is required with multiple priority sources so retained Home Assistant state keeps one stable device identity")
 		}
@@ -508,6 +605,30 @@ func validate(cfg Config) error {
 		}
 	}
 
+	if cfg.ModbusAlertCorrelation.Enabled {
+		if len(cfg.SourcePriority) == 0 || cfg.SourcePriority[0] != "modbus" {
+			return fmt.Errorf("source-priority must start with modbus when Modbus alert correlation is enabled")
+		}
+		requiredSources := map[string]bool{"modbus": false, "jinko": false, "solarman": false}
+		for _, sourceName := range cfg.SourcePriority {
+			if _, ok := requiredSources[sourceName]; ok {
+				requiredSources[sourceName] = true
+			}
+		}
+		if !requiredSources["jinko"] || !requiredSources["solarman"] {
+			return fmt.Errorf("source-priority must contain jinko and solarman when Modbus alert correlation is enabled")
+		}
+		if cfg.ModbusAlertCorrelation.Cooldown <= 0 {
+			return fmt.Errorf("modbus-alert-correlation-cooldown must be > 0 when Modbus alert correlation is enabled")
+		}
+		if cfg.ModbusAlertCorrelation.JobTimeout <= 0 {
+			return fmt.Errorf("modbus-alert-correlation-job-timeout must be > 0 when Modbus alert correlation is enabled")
+		}
+		if err := ValidateHomeAssistantConfig(cfg.HomeAssistant); err != nil {
+			return err
+		}
+	}
+
 	if cfg.ShellyGridLoad.Enabled {
 		if strings.TrimSpace(cfg.ShellyGridLoad.BaseURL) == "" {
 			return fmt.Errorf("shelly-grid-load-url is required when shelly-grid-load-enabled is set")
@@ -538,6 +659,32 @@ func validate(cfg Config) error {
 		if _, hasModbus := seenSources["modbus"]; hasModbus && strings.TrimSpace(cfg.Modbus.DeviceSN) == "" {
 			return fmt.Errorf("modbus-device-sn is required with multiple priority sources so Prometheus device_sn stays stable across failover")
 		}
+	}
+	return nil
+}
+
+func validateWritableStatePath(path string, field string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	info, err := os.Lstat(path)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("%s must be a regular file when it exists", field)
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat %s: %w", field, err)
+	}
+	parent := filepath.Dir(path)
+	parentInfo, err := os.Stat(parent)
+	if err != nil {
+		return fmt.Errorf("%s parent directory must exist: %w", field, err)
+	}
+	if !parentInfo.IsDir() {
+		return fmt.Errorf("%s parent path must be a directory", field)
 	}
 	return nil
 }
@@ -689,6 +836,98 @@ func ValidateShellyGridLoadURL(rawURL string) error {
 		}
 	}
 	return nil
+}
+
+// NormalizeHomeAssistantNotifyService accepts the two operator-facing Home
+// Assistant spellings and returns only the safe service path segment. The
+// notifier always supplies the fixed notify domain itself.
+func NormalizeHomeAssistantNotifyService(value string) (string, error) {
+	service := strings.TrimSpace(value)
+	service = strings.TrimPrefix(service, "notify.")
+	if len(service) > 128 || !homeAssistantNotifyPattern.MatchString(service) {
+		return "", fmt.Errorf("jinko-ha-notify-service must be mobile_app_* or notify.mobile_app_* using lowercase letters, digits, and underscores")
+	}
+	return service, nil
+}
+
+// ValidateHomeAssistantConfig validates the dedicated push-only integration at
+// both CLI parsing and direct notifier construction. Rejected values are never
+// included in errors because URLs and tokens may contain sensitive material.
+func ValidateHomeAssistantConfig(cfg HomeAssistantConfig) error {
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	if baseURL == "" {
+		return fmt.Errorf("homeassistant-url is required when Modbus alert correlation is enabled")
+	}
+	endpoint, err := url.Parse(baseURL)
+	if err != nil || !endpoint.IsAbs() || endpoint.Opaque != "" || endpoint.Hostname() == "" {
+		return fmt.Errorf("homeassistant-url must be a valid absolute HTTP or HTTPS URL")
+	}
+	scheme := strings.ToLower(endpoint.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("homeassistant-url scheme must be http or https")
+	}
+	if endpoint.User != nil {
+		return fmt.Errorf("homeassistant-url must not contain user information")
+	}
+	if endpoint.Path != "" && endpoint.Path != "/" {
+		return fmt.Errorf("homeassistant-url must not contain a path")
+	}
+	if endpoint.RawPath != "" {
+		return fmt.Errorf("homeassistant-url must not contain an encoded path")
+	}
+	if endpoint.RawQuery != "" || endpoint.ForceQuery || strings.Contains(baseURL, "?") {
+		return fmt.Errorf("homeassistant-url must not contain a query")
+	}
+	if endpoint.Fragment != "" || endpoint.RawFragment != "" || strings.Contains(baseURL, "#") {
+		return fmt.Errorf("homeassistant-url must not contain a fragment")
+	}
+	if strings.HasSuffix(endpoint.Host, ":") {
+		return fmt.Errorf("homeassistant-url contains an invalid port")
+	}
+	if portText := endpoint.Port(); portText != "" {
+		port, err := strconv.Atoi(portText)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("homeassistant-url port must be between 1 and 65535")
+		}
+	}
+	if scheme == "http" {
+		if !cfg.AllowInsecureHTTP {
+			return fmt.Errorf("homeassistant-url must use HTTPS unless homeassistant-allow-insecure-http is explicitly enabled")
+		}
+		hostname := endpoint.Hostname()
+		address, parseErr := netip.ParseAddr(hostname)
+		if parseErr == nil {
+			address = address.Unmap()
+			if !address.IsPrivate() && !address.IsLoopback() {
+				return fmt.Errorf("an insecure homeassistant-url must use a private/loopback IP or single-label internal hostname")
+			}
+		} else if strings.Contains(hostname, ".") || !homeAssistantLocalHostLabel.MatchString(hostname) {
+			return fmt.Errorf("an insecure homeassistant-url must use a private/loopback IP or single-label internal hostname")
+		}
+	}
+
+	if !validHomeAssistantToken(cfg.Token) {
+		return fmt.Errorf("homeassistant-token or homeassistant-token-file must contain one non-empty ASCII bearer token")
+	}
+	if _, err := NormalizeHomeAssistantNotifyService(cfg.NotifyService); err != nil {
+		return err
+	}
+	if cfg.Timeout <= 0 {
+		return fmt.Errorf("homeassistant-timeout must be > 0 when Modbus alert correlation is enabled")
+	}
+	return nil
+}
+
+func validHomeAssistantToken(value string) bool {
+	if value == "" || len(value) > maxHomeAssistantTokenBytes {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x21 || r > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func validateSourceConfig(cfg Config, sourceName string) error {
@@ -914,6 +1153,46 @@ func secretValue(c *cli.Command, valueName string, fileName string) (string, err
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", fileName, err)
+	}
+	return strings.TrimRight(string(raw), "\r\n"), nil
+}
+
+// exclusiveSecretValue is the stricter secret reader used by the Home
+// Assistant integration. Unlike legacy secret flags, direct and file-backed
+// values are mutually exclusive, and the file must be a bounded regular file
+// reached without following a symlink.
+func exclusiveSecretValue(c *cli.Command, valueName string, fileName string, maxBytes int64) (string, error) {
+	value := c.String(valueName)
+	path := strings.TrimSpace(c.String(fileName))
+	if value != "" && path != "" {
+		return "", fmt.Errorf("%s and %s cannot both be configured", valueName, fileName)
+	}
+	if value != "" {
+		return value, nil
+	}
+	if path == "" {
+		return "", nil
+	}
+
+	pathInfo, err := os.Lstat(path)
+	if err != nil || pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() {
+		return "", fmt.Errorf("%s must be a readable regular file and must not be a symlink", fileName)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("%s must be a readable regular file and must not be a symlink", fileName)
+	}
+	defer func() { _ = file.Close() }()
+	openedInfo, err := file.Stat()
+	if err != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) {
+		return "", fmt.Errorf("%s must remain the same regular file while it is read", fileName)
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read %s failed", fileName)
+	}
+	if int64(len(raw)) > maxBytes {
+		return "", fmt.Errorf("%s exceeds %d bytes", fileName, maxBytes)
 	}
 	return strings.TrimRight(string(raw), "\r\n"), nil
 }

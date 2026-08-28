@@ -225,6 +225,7 @@ func TestRunServeBindsListenerBeforeStartingSourceWork(t *testing.T) {
 		t.Fatalf("start fake MQTT broker: %v", err)
 	}
 	defer mqttBroker.Close()
+	discoveryStatePath := filepath.Join(t.TempDir(), "mqtt-discovery-state.json")
 
 	cfg := config.Config{
 		SourcePriority: []string{"jinko"},
@@ -233,12 +234,15 @@ func TestRunServeBindsListenerBeforeStartingSourceWork(t *testing.T) {
 		MetricPrefix:   "solar",
 		PollInterval:   time.Minute,
 		MQTT: config.MQTTConfig{
-			Enabled:         true,
-			Broker:          "tcp://" + mqttBroker.Addr().String(),
-			ClientID:        "bind-first-test",
-			TopicPrefix:     "test/jinko",
-			DiscoveryPrefix: "homeassistant",
-			Timeout:         100 * time.Millisecond,
+			Enabled:            true,
+			Broker:             "tcp://" + mqttBroker.Addr().String(),
+			ClientID:           "bind-first-test",
+			TopicPrefix:        "test/jinko",
+			DiscoveryPrefix:    "homeassistant",
+			DeviceID:           "synthetic_inverter_001",
+			Timeout:            100 * time.Millisecond,
+			DiscoveryStateFile: discoveryStatePath,
+			PrimarySource:      "jinko",
 		},
 		Jinko: config.JinkoConfig{
 			URL:           detailServer.URL,
@@ -251,6 +255,9 @@ func TestRunServeBindsListenerBeforeStartingSourceWork(t *testing.T) {
 	}
 	if err := runServe(context.Background(), cfg); err == nil {
 		t.Fatal("runServe() error = nil, want occupied-listener failure before polling")
+	}
+	if _, err := os.Stat(discoveryStatePath); !os.IsNotExist(err) {
+		t.Fatalf("discovery state was created before listener bind: %v", err)
 	}
 	time.Sleep(20 * time.Millisecond)
 	if got := detailCalls.Load(); got != 0 {

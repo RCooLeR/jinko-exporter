@@ -69,7 +69,9 @@ The Jinko source can send alerts for:
 - token refresh failures
 - Jinko `401` or `403` responses
 
-Authentication alerts include status and endpoint context but never include bearer tokens, refresh tokens, or upstream response bodies.
+Authentication alerts include only the source, request stage, HTTP status, and
+a closed error category. They never include URLs, device/site identities,
+bearer tokens, refresh tokens, cookies, or upstream response bodies.
 
 ### Solarman Request Alerts
 
@@ -80,6 +82,11 @@ The Solarman source can send alerts for:
 - token refresh failure after `401`
 - current data request failure
 - API response decode failure
+
+Solarman request alerts use the same privacy boundary: source, request stage,
+HTTP status, and a closed error category only. The bridge never copies a base
+URL, App ID query, email, station/device identity or name, upstream `msg`, or
+response body into logs, returned error text, or SMTP notification text.
 
 ### No Successful Poll
 
@@ -116,7 +123,7 @@ Consequently, a clear Jinko or Solarman fallback snapshot cannot resolve an
 active Deye/Modbus raw-word condition; that condition resolves only after a
 later successful Modbus snapshot explicitly reports its words as zero.
 Home Assistant uses a separate aggregate problem entity per source and makes
-the Modbus entity unknown during cloud fallback; it never interprets a clear
+the Modbus entity `unavailable` during cloud fallback; it never interprets a clear
 cloud domain as a Deye-word recovery.
 
 The reported values are raw decimal U16 words, not decoded fault codes, and
@@ -124,6 +131,61 @@ the alert count is the number of non-zero words rather than the number of set
 bits. The bridge never clears or acknowledges a word and sends no Modbus write
 in response to an alert. These inverter-wide Deye words are not aliases for
 the Jinko `L_B_A_F`, `L_B_F_F`, `L_B_A_F2`, or `L_B_F_F2` lithium-BMS flags.
+
+### Optional Modbus Cloud Correlation And Home Assistant Push
+
+The raw-word correlation path is separate from SMTP alerts and is disabled by
+default. When explicitly enabled, all six zero words mean that the Modbus raw
+alert aggregate is clear. The first non-zero vector, a changed vector, or an
+unchanged vector whose cooldown has elapsed queues one bounded background job:
+
+- the already-accepted Modbus snapshot remains successful and is not delayed
+- Home Assistant receives a mobile-app push through one configured notify service
+- Jinko and Solarman are queried for contemporaneous alert evidence
+- bounded comparable cloud metrics, source-local alerts, and the six raw words are logged for later comparison
+
+Cloud failures cannot clear, replace, or invalidate the raw Modbus alert. The
+bridge does not infer that a particular Deye bit is a Jinko lithium flag. Jobs
+for an unchanged signature are rate-limited by a separate cooldown. The first
+Home Assistant notification has its own timeout; Jinko and Solarman then share
+a fresh correlation-job deadline, so a slow notification cannot consume the
+cloud evidence budget.
+
+Evidence-only Jinko and Solarman reads do not emit the sources' ordinary SMTP
+request, authentication, or token alerts. Home Assistant receives one detected
+push before those reads and one recovery push only after a later complete
+all-zero Modbus snapshot. Cloud completion is written to structured logs and
+does not create a second mobile push. Correlation logs contain the six raw
+words, closed source statuses, bounded normalized numeric metrics, timestamps,
+counts, and a digest. They exclude cloud identities and names, URLs, request or
+response bodies, upstream error text, credentials, cookies, and account email.
+Ordinary evidence is limited to keys present in the triggering Modbus snapshot,
+and its group/unit identity is taken from that accepted Modbus metric rather
+than from cloud labels. Alert evidence is limited to the four shared canonical
+lithium-alert keys. Unknown upstream alert labels are discarded even when their
+spelling would be safe to serialize.
+
+Minimum shape for a local-first deployment:
+
+```yaml
+EXPORTER_SOURCE_PRIORITY: "modbus,jinko,solarman"
+MODBUS_ALERT_CORRELATION_ENABLED: "true"
+MODBUS_ALERT_CORRELATION_COOLDOWN: "6h"
+MODBUS_ALERT_CORRELATION_JOB_TIMEOUT: "45s"
+HOMEASSISTANT_URL: "https://ha.example.test"
+HOMEASSISTANT_TOKEN_FILE: "/run/secrets/homeassistant_token"
+JINKO_HA_NOTIFY_SERVICE: "mobile_app_operator_phone"
+HOMEASSISTANT_TIMEOUT: "10s"
+```
+
+`HOMEASSISTANT_TOKEN` and `HOMEASSISTANT_TOKEN_FILE` are mutually exclusive.
+The service accepts only `mobile_app_*` (optionally prefixed with `notify.`),
+and the client always posts to the fixed `/api/services/notify/<service>` path.
+It never follows redirects, retries a POST, includes response bodies in errors,
+or logs the token. For an internal cleartext endpoint, additionally set
+`HOMEASSISTANT_ALLOW_INSECURE_HTTP=true`. HTTP is then limited to a
+private/loopback literal IP or a single-label hostname whose complete DNS
+answer set is private/loopback; the approved IP is pinned for the connection.
 
 ### Grid Down
 

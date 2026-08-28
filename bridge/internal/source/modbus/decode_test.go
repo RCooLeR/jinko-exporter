@@ -176,7 +176,6 @@ func TestDecodeBatteryAndGridRangeGuards(t *testing.T) {
 		})
 	}
 }
-
 func TestDecodeLoadScalarsUsesOnlyApprovedValues(t *testing.T) {
 	voltages, err := decodeLoadVoltages([]uint16{
 		0xFFFF, 0x8000, 0x7FFF, 0x1234,
@@ -226,7 +225,7 @@ func TestDecodeLoadScalarsRangeGuards(t *testing.T) {
 	}
 }
 
-func TestDecodeDirectLoadPowersAcceptOnlyVerifiedNonNegativeDomain(t *testing.T) {
+func TestDecodeDirectLoadPowersAcceptsSignedPhaseCoherenceDomainAndIndependentTotal(t *testing.T) {
 	tests := []struct {
 		name  string
 		lows  []uint16
@@ -246,17 +245,23 @@ func TestDecodeDirectLoadPowersAcceptOnlyVerifiedNonNegativeDomain(t *testing.T)
 			want:  directLoadPowers{phasesW: [3]float64{80, 80, 83}, totalW: 251},
 		},
 		{
-			name:  "low word sign bit is positive in joined signed32 value",
-			lows:  []uint16{0xFFFF, 0x8000, 0x1234, 1},
-			highs: []uint16{5000, 0, 0, 0, 0},
-			want:  directLoadPowers{phasesW: [3]float64{65535, 32768, 4660}, totalW: 1},
+			name:  "synthetic coherent phase A negative using observed sign-extension shape",
+			lows:  []uint16{0xFFF6, 20, 30, 45},
+			highs: []uint16{5000, 0xFFFF, 0, 0, 0},
+			want:  directLoadPowers{phasesW: [3]float64{-10, 20, 30}, totalW: 45},
+		},
+		{
+			name:  "synthetic coherent all-negative phases",
+			lows:  []uint16{0xFFFF, 0xFFFE, 0xFFFD, 6},
+			highs: []uint16{5000, 0xFFFF, 0xFFFF, 0xFFFF, 0},
+			want:  directLoadPowers{phasesW: [3]float64{-1, -2, -3}, totalW: 6},
 		},
 		{name: "zero", lows: make([]uint16, 4), highs: make([]uint16, 5), want: directLoadPowers{}},
 		{
-			name:  "full verified U16 boundary for every pair",
-			lows:  []uint16{65535, 65535, 65535, 65535},
-			highs: []uint16{5000, 0, 0, 0, 0},
-			want:  directLoadPowers{phasesW: [3]float64{65535, 65535, 65535}, totalW: 65535},
+			name:  "signed phase boundaries and full verified U16 total boundary",
+			lows:  []uint16{0x7FFF, 0x8001, 0, 0xFFFF},
+			highs: []uint16{5000, 0, 0xFFFF, 0, 0},
+			want:  directLoadPowers{phasesW: [3]float64{32767, -32767, 0}, totalW: 65535},
 		},
 	}
 	for _, tt := range tests {
@@ -280,9 +285,13 @@ func TestDecodeDirectLoadPowersFailsClosed(t *testing.T) {
 		{name: "long low block", lows: make([]uint16, 5), highs: make([]uint16, 5), want: "expected 4"},
 		{name: "short high block", lows: make([]uint16, 4), highs: make([]uint16, 4), want: "expected 5"},
 		{name: "long high block", lows: make([]uint16, 4), highs: make([]uint16, 6), want: "expected 5"},
-		{name: "phase A above verified U16 boundary", lows: []uint16{1, 2, 3, 6}, highs: []uint16{5000, 1, 0, 0, 0}, want: "phase A high word register 656"},
-		{name: "negative phase B encoding", lows: []uint16{1, 2, 3, 6}, highs: []uint16{5000, 0, 0xFFFF, 0, 0}, want: "phase B high word register 657"},
-		{name: "phase C above verified U16 boundary", lows: []uint16{1, 2, 3, 6}, highs: []uint16{5000, 0, 0, 1, 0}, want: "phase C high word register 658"},
+		{name: "phase A noncanonical high word", lows: []uint16{1, 2, 3, 6}, highs: []uint16{5000, 1, 0, 0, 0}, want: "expected signed extension"},
+		{name: "phase B noncanonical negative high word", lows: []uint16{1, 2, 3, 6}, highs: []uint16{5000, 0, 0xFFFE, 0, 0}, want: "expected signed extension"},
+		{name: "phase B positive just outside coherence boundary", lows: []uint16{1, 0x8000, 3, 6}, highs: []uint16{5000, 0, 0, 0, 0}, want: "safe signed coherence range"},
+		{name: "phase C negative just outside coherence boundary", lows: []uint16{1, 2, 0x8000, 6}, highs: []uint16{5000, 0, 0, 0xFFFF, 0}, want: "safe signed coherence range"},
+		{name: "zero low with later negative high", lows: []uint16{0, 2, 3, 6}, highs: []uint16{5000, 0xFFFF, 0, 0, 0}, want: "decode to -65536W"},
+		{name: "torn positive low with later negative high", lows: []uint16{1, 2, 3, 6}, highs: []uint16{5000, 0xFFFF, 0, 0, 0}, want: "safe signed coherence range"},
+		{name: "torn negative low with later positive high", lows: []uint16{0xFFFF, 2, 3, 6}, highs: []uint16{5000, 0, 0, 0, 0}, want: "safe signed coherence range"},
 		{name: "negative total encoding", lows: []uint16{1, 2, 3, 6}, highs: []uint16{5000, 0, 0, 0, 0xFFFF}, want: "only verified non-negative"},
 		{name: "total above verified U16 boundary", lows: []uint16{1, 2, 3, 6}, highs: []uint16{5000, 0, 0, 0, 1}, want: "total high word register 659"},
 	}
@@ -583,28 +592,16 @@ func TestDecodeGridPowersUsesSignedLowWordFirstValues(t *testing.T) {
 			want: [4]float64{-777, -780, -774, -2331},
 		},
 		{
-			name: "positive above int16 range",
-			low:  []uint16{40000, 10000, 5000, 55000},
+			name: "positive coherence boundary",
+			low:  []uint16{32767, 0, 0, 32767},
 			high: []uint16{0, 0, 0, 0},
-			want: [4]float64{40000, 10000, 5000, 55000},
+			want: [4]float64{32767, 0, 0, 32767},
 		},
 		{
-			name: "negative below int16 range",
-			low:  []uint16{0x63C0, 0xD8F0, 0xEC78, 0x2928},
-			high: []uint16{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF},
-			want: [4]float64{-40000, -10000, -5000, -55000},
-		},
-		{
-			name: "positive family-envelope boundary",
-			low:  []uint16{40000, 20000, 5535, 65535},
-			high: []uint16{0, 0, 0, 0},
-			want: [4]float64{40000, 20000, 5535, 65535},
-		},
-		{
-			name: "negative family-envelope boundary",
-			low:  []uint16{0x63C0, 0xB1E0, 0xEA61, 0x0001},
-			high: []uint16{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF},
-			want: [4]float64{-40000, -20000, -5535, -65535},
+			name: "negative coherence boundary",
+			low:  []uint16{0x8001, 0, 0, 0x8001},
+			high: []uint16{0xFFFF, 0, 0, 0xFFFF},
+			want: [4]float64{-32767, 0, 0, -32767},
 		},
 	}
 	for _, tt := range tests {
@@ -630,7 +627,26 @@ func TestDecodeGridPowersFailsClosed(t *testing.T) {
 		{name: "short low block", low: []uint16{1, 2, 3}, high: []uint16{0, 0, 0, 0}, want: "returned 3 words"},
 		{name: "short high block", low: []uint16{1, 2, 3, 6}, high: []uint16{0, 0, 0}, want: "returned 3 words"},
 		{name: "unsupported high word", low: []uint16{1, 2, 3, 6}, high: []uint16{0, 1, 0, 0}, want: "expected 0x0000 or 0xFFFF"},
-		{name: "family envelope", low: []uint16{0, 0, 0, 0}, high: []uint16{0xFFFF, 0, 0, 0xFFFF}, want: "JKS family validation maximum"},
+		{name: "positive just outside coherence boundary", low: []uint16{0x8000, 0, 0, 0x8000}, high: []uint16{0, 0, 0, 0}, want: "safe signed coherence range"},
+		{name: "negative just outside coherence boundary", low: []uint16{0x8000, 0, 0, 0x8000}, high: []uint16{0xFFFF, 0, 0, 0xFFFF}, want: "safe signed coherence range"},
+		{
+			name: "observed zero low with later negative sign extension",
+			low:  []uint16{0, 0, 0, 0},
+			high: []uint16{0xFFFF, 0, 0, 0xFFFF},
+			want: "grid power L1 -65536W",
+		},
+		{
+			name: "torn positive to negative with matching phase sum",
+			low:  []uint16{1, 10, 20, 31},
+			high: []uint16{0xFFFF, 0, 0, 0xFFFF},
+			want: "safe signed coherence range",
+		},
+		{
+			name: "torn negative to positive with matching phase sum",
+			low:  []uint16{0xFFE1, 10, 20, 0xFFFF},
+			high: []uint16{0, 0, 0, 0},
+			want: "safe signed coherence range",
+		},
 		{name: "phase sum", low: []uint16{100, 100, 100, 301}, high: []uint16{0, 0, 0, 0}, want: "phase sum"},
 	}
 	for _, tt := range tests {

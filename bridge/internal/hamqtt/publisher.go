@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,11 +31,15 @@ var (
 )
 
 type Publisher struct {
-	cfg               config.MQTTConfig
-	client            mqtt.Client
-	topicPrefix       string
-	discoveryPrefix   string
-	availabilityTopic string
+	cfg                     config.MQTTConfig
+	client                  mqtt.Client
+	topicPrefix             string
+	discoveryPrefix         string
+	availabilityTopic       string
+	discoveryStateFile      string
+	primarySource           string
+	discoveryState          *discoveryState
+	discoveryStatePersisted bool
 
 	lifecycleMu      sync.Mutex
 	connectAttemptMu sync.Mutex
@@ -57,6 +61,10 @@ type Publisher struct {
 	cachedStateTopic   string
 	cachedState        []byte
 	lastAvailability   string
+	// offlinePublishPending records an offline transition that was not
+	// acknowledged by the broker. It lets a later failed poll retry the exact
+	// retained write even though lastAvailability is already offline.
+	offlinePublishPending bool
 }
 
 type metricEntity struct {
@@ -95,12 +103,42 @@ func NewPublisher(cfg config.MQTTConfig) (*Publisher, error) {
 	}
 
 	p := &Publisher{
-		cfg:               cfg,
-		topicPrefix:       topicPrefix,
-		discoveryPrefix:   discoveryPrefix,
-		availabilityTopic: topicPrefix + "/availability",
-		discoveryPayloads: make(map[string]string),
-		discoveredMetrics: make(map[string]metricEntity),
+		cfg:                cfg,
+		topicPrefix:        topicPrefix,
+		discoveryPrefix:    discoveryPrefix,
+		availabilityTopic:  topicPrefix + "/availability",
+		discoveryStateFile: strings.TrimSpace(cfg.DiscoveryStateFile),
+		primarySource:      normalizeSourceName(cfg.PrimarySource),
+		discoveryPayloads:  make(map[string]string),
+		discoveredMetrics:  make(map[string]metricEntity),
+	}
+	if p.discoveryStateFile != "" {
+		if strings.TrimSpace(cfg.DeviceID) == "" {
+			return nil, errors.New("mqtt-device-id is required when mqtt-discovery-state-file is configured")
+		}
+		if p.primarySource == "" {
+			return nil, errors.New("MQTT primary source is required when mqtt-discovery-state-file is configured")
+		}
+		device := p.device(&model.Snapshot{})
+		stateTopic := p.stateTopic(device.ID)
+		binding := discoveryStateBinding{
+			TopicPrefix:       p.topicPrefix,
+			DiscoveryPrefix:   p.discoveryPrefix,
+			DeviceID:          device.ID,
+			DeviceIdentifier:  device.Identifier,
+			StateTopic:        stateTopic,
+			AvailabilityTopic: p.availabilityTopic,
+			PrimarySource:     p.primarySource,
+		}
+		state, exists, err := loadDiscoveryState(p.discoveryStateFile, binding)
+		if err != nil {
+			return nil, err
+		}
+		p.discoveryState = &state
+		p.discoveryStatePersisted = exists
+		if err := p.syncPersistentMetricRegistry(); err != nil {
+			return nil, err
+		}
 	}
 
 	opts := mqtt.NewClientOptions()
@@ -153,6 +191,13 @@ func (p *Publisher) Start() error {
 	if p.started {
 		p.mu.Unlock()
 		return nil
+	}
+	if p.discoveryState != nil && !p.discoveryStatePersisted {
+		if err := persistDiscoveryState(p.discoveryStateFile, *p.discoveryState); err != nil {
+			p.mu.Unlock()
+			return err
+		}
+		p.discoveryStatePersisted = true
 	}
 	p.started = true
 	ctx, cancel := context.WithCancel(context.Background())
@@ -257,13 +302,37 @@ func (p *Publisher) connectUntilReady(ctx context.Context, done chan<- struct{})
 	}
 }
 
-func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Duration) error {
+func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Duration) (resultErr error) {
 	if snapshot == nil {
 		return nil
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	defer func() {
+		if resultErr != nil {
+			wasOnline := p.lastAvailability == availabilityOnline
+			p.lastAvailability = availabilityOffline
+			if wasOnline {
+				p.offlinePublishPending = true
+			}
+			if p.offlinePublishPending {
+				// A schema/manifest failure invalidates this poll even though the
+				// poller itself reached its success observer. Replace retained
+				// online availability before returning the original error. Keep a
+				// failed write pending for the next invalid poll or reconnect, and
+				// never mask the original processing error.
+				if err := p.publishString(p.availabilityTopic, availabilityOffline, p.cfg.Retain); err != nil {
+					log.Warn().
+						Err(err).
+						Str("broker", p.cfg.Broker).
+						Msg("failed to publish MQTT offline availability after poll processing error")
+				} else {
+					p.offlinePublishPending = false
+				}
+			}
+		}
+		p.mu.Unlock()
+	}()
 	if p.closing || p.closed {
 		return nil
 	}
@@ -271,16 +340,42 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 	device := p.device(snapshot)
 	stateTopic := p.stateTopic(device.ID)
 
-	discoveryShapeSig := p.discoverySignature(snapshot, device, stateTopic)
 	var discoveryMessages []discoveryMessage
-	if discoveryShapeSig != p.discoveryShapeSig {
-		var err error
-		discoveryMessages, err = p.discoveryMessages(snapshot, device, stateTopic)
+	discoveryShapeSig := ""
+	if p.discoveryState != nil {
+		candidate := p.discoveryState.clone()
+		changed, err := candidate.mergeSnapshot(snapshot, p.primarySource)
 		if err != nil {
 			return err
 		}
-		p.cachedDiscovery = cloneDiscoveryMessages(discoveryMessages)
-		p.cachedDiscoverySig = discoveryShapeSig
+		if changed || !p.discoveryStatePersisted {
+			if err := validateDiscoveryState(candidate, p.discoveryState.Binding); err != nil {
+				return err
+			}
+			// The durable schema must commit before the in-memory cache or any
+			// MQTT topic can expose the newly learned entity ownership.
+			if err := persistDiscoveryState(p.discoveryStateFile, candidate); err != nil {
+				return err
+			}
+			p.discoveryState = &candidate
+			p.discoveryStatePersisted = true
+		}
+		if err := p.refreshPersistentDiscovery(device, stateTopic); err != nil {
+			return err
+		}
+		discoveryMessages = cloneDiscoveryMessages(p.cachedDiscovery)
+		discoveryShapeSig = p.cachedDiscoverySig
+	} else {
+		discoveryShapeSig = p.discoverySignature(snapshot, device, stateTopic)
+		if discoveryShapeSig != p.discoveryShapeSig {
+			var err error
+			discoveryMessages, err = p.discoveryMessages(snapshot, device, stateTopic)
+			if err != nil {
+				return err
+			}
+			p.cachedDiscovery = cloneDiscoveryMessages(discoveryMessages)
+			p.cachedDiscoverySig = discoveryShapeSig
+		}
 	}
 
 	// Cache state before publishing so a reconnect can replay the latest poll even
@@ -292,6 +387,7 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 	p.cachedStateTopic = stateTopic
 	p.cachedState = append(p.cachedState[:0], payload...)
 	p.lastAvailability = availabilityOnline
+	p.offlinePublishPending = false
 
 	for _, msg := range discoveryMessages {
 		if previous, published := p.discoveryPayloads[msg.topic]; published && previous == msg.payload {
@@ -303,7 +399,7 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 		}
 		p.discoveryPayloads[msg.topic] = msg.payload
 	}
-	if discoveryShapeSig != p.discoveryShapeSig {
+	if discoveryShapeSig != "" && discoveryShapeSig != p.discoveryShapeSig {
 		p.discoveryShapeSig = discoveryShapeSig
 	}
 
@@ -331,6 +427,7 @@ func (p *Publisher) OnPollFailure(sourceName string, err error, duration time.Du
 		return nil
 	}
 	p.lastAvailability = availabilityOffline
+	p.offlinePublishPending = true
 
 	log.Warn().
 		Err(err).
@@ -340,6 +437,8 @@ func (p *Publisher) OnPollFailure(sourceName string, err error, duration time.Du
 		Msg("marking MQTT entities unavailable after poll failure")
 	if err := p.publishString(p.availabilityTopic, availabilityOffline, p.cfg.Retain); err != nil {
 		p.logPublishSkipped(err, p.availabilityTopic)
+	} else {
+		p.offlinePublishPending = false
 	}
 	return nil
 }
@@ -390,6 +489,7 @@ func (p *Publisher) onConnect(_ mqtt.Client) {
 		log.Warn().Err(err).Str("broker", p.cfg.Broker).Msg("failed to publish MQTT availability after connect")
 		return
 	}
+	p.offlinePublishPending = false
 	log.Info().Str("broker", p.cfg.Broker).Str("topic_prefix", p.topicPrefix).Msg("connected MQTT publisher")
 }
 
@@ -414,17 +514,118 @@ func cloneDiscoveryMessages(messages []discoveryMessage) []discoveryMessage {
 	return cloned
 }
 
+func (p *Publisher) refreshPersistentDiscovery(device deviceInfo, stateTopic string) error {
+	if p.discoveryState == nil {
+		return nil
+	}
+	metrics, err := p.discoveryState.allMetrics()
+	if err != nil {
+		return err
+	}
+	discovered := make(map[string]metricEntity, len(metrics))
+	for _, metric := range metrics {
+		stateKey := metricStateKey(metric)
+		discovered[stateKey] = metricEntity{StateKey: stateKey, Metric: metric}
+	}
+	alertMetricDomains, err := p.discoveryState.alertMetricDomains()
+	if err != nil {
+		return err
+	}
+	messages, err := p.discoveryMessagesForSchema(
+		metrics,
+		p.discoveryState.PrimaryMetaKeys,
+		p.discoveryState.alertSources(),
+		alertMetricDomains,
+		device,
+		stateTopic,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Swap the complete runtime view only after generation succeeds. On schema
+	// updates the state file has already been durably replaced by the caller.
+	p.discoveredMetrics = discovered
+	p.cachedDiscovery = cloneDiscoveryMessages(messages)
+	p.cachedDiscoverySig = discoveryMessagesSignature(messages)
+	return nil
+}
+
+func (p *Publisher) syncPersistentMetricRegistry() error {
+	if p.discoveryState == nil {
+		return nil
+	}
+	metrics, err := p.discoveryState.allMetrics()
+	if err != nil {
+		return err
+	}
+	discovered := make(map[string]metricEntity, len(metrics))
+	for _, metric := range metrics {
+		stateKey := metricStateKey(metric)
+		discovered[stateKey] = metricEntity{StateKey: stateKey, Metric: metric}
+	}
+	p.discoveredMetrics = discovered
+	return nil
+}
+
+func discoveryMessagesSignature(messages []discoveryMessage) string {
+	var b strings.Builder
+	for _, message := range messages {
+		fmt.Fprintf(&b, "%d:%s=%d:%s|", len(message.topic), message.topic, len(message.payload), message.payload)
+	}
+	return b.String()
+}
+
 func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInfo, stateTopic string) ([]discoveryMessage, error) {
-	messages := make([]discoveryMessage, 0, len(snapshot.Metrics)+16)
+	metaKeys := make([]string, 0, len(snapshot.Meta))
+	for key := range snapshot.Meta {
+		stateKey := sanitizeID(key)
+		if stateKey != "" {
+			metaKeys = append(metaKeys, stateKey)
+		}
+	}
+	sort.Strings(metaKeys)
+
+	alertSources := make([]string, 0, 1)
+	alertMetricDomains := make(map[string][]string)
+	newlyDiscovered := make(map[string]metricEntity, len(snapshot.Metrics))
+	for _, metric := range snapshot.Metrics {
+		stateKey := metricStateKey(metric)
+		if stateKey == "" {
+			continue
+		}
+		newlyDiscovered[stateKey] = metricEntity{StateKey: stateKey, Metric: metric}
+		if isAlertMetric(metric) && len(alertSources) == 0 {
+			alertSources = append(alertSources, firstNonEmpty(normalizeSourceName(snapshot.Source), "unknown_source"))
+		}
+		if isAlertMetric(metric) {
+			alertMetricDomains[stateKey] = []string{alertDomain(snapshot.Source)}
+		}
+	}
+	messages, err := p.discoveryMessagesForSchema(snapshot.Metrics, metaKeys, alertSources, alertMetricDomains, device, stateTopic)
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(p.discoveredMetrics, newlyDiscovered)
+	return messages, nil
+}
+
+func (p *Publisher) discoveryMessagesForSchema(metrics []model.Metric, metaKeys, alertSources []string, alertMetricDomains map[string][]string, device deviceInfo, stateTopic string) ([]discoveryMessage, error) {
+	messages := make([]discoveryMessage, 0, len(metrics)+len(alertSources)+16)
+	seenTopics := make(map[string]struct{}, cap(messages))
 
 	add := func(component, objectSuffix string, payload map[string]any) error {
 		objectID := sanitizeID(device.ID + "_" + objectSuffix)
 		topic := fmt.Sprintf("%s/%s/%s/config", p.discoveryPrefix, component, objectID)
+		if _, duplicate := seenTopics[topic]; duplicate {
+			return fmt.Errorf("duplicate MQTT discovery topic %s", topic)
+		}
 		raw, err := json.Marshal(payload)
 		if err != nil {
 			return fmt.Errorf("encode MQTT discovery payload for %s: %w", objectID, err)
 		}
 		messages = append(messages, discoveryMessage{topic: topic, payload: string(raw)})
+		seenTopics[topic] = struct{}{}
 		return nil
 	}
 
@@ -449,11 +650,6 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 		}
 	}
 
-	metaKeys := make([]string, 0, len(snapshot.Meta))
-	for key := range snapshot.Meta {
-		metaKeys = append(metaKeys, key)
-	}
-	sort.Strings(metaKeys)
 	for _, key := range metaKeys {
 		stateKey := sanitizeID(key)
 		if stateKey == "" {
@@ -486,15 +682,12 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 		payload: "",
 	})
 
-	alertDomain := sanitizeID(snapshot.Source)
-	if alertDomain == "" {
-		alertDomain = "unknown_source"
-	}
-	hasAlertMetrics := slices.ContainsFunc(snapshot.Metrics, isAlertMetric)
-	if hasAlertMetrics {
-		objectSuffix := alertDomain + "_warning_alarm_fault_active"
-		alertPayload := p.baseDiscoveryPayload(device, "Warning/Alarm/Fault Active ("+snapshot.Source+")", device.ID+"_"+objectSuffix, stateTopic)
-		alertPayload["value_template"] = "{{ 'ON' if value_json.alert_domain == '" + alertDomain + "' and value_json.alerts_known and value_json.alerts_active else 'OFF' if value_json.alert_domain == '" + alertDomain + "' and value_json.alerts_known else none }}"
+	for _, source := range alertSources {
+		domain := alertDomain(source)
+		objectSuffix := domain + "_warning_alarm_fault_active"
+		alertPayload := p.baseDiscoveryPayload(device, "Warning/Alarm/Fault Active ("+source+")", device.ID+"_"+objectSuffix, stateTopic)
+		alertPayload["value_template"] = "{{ 'ON' if value_json.get('alert_domain') == '" + domain + "' and value_json.get('alerts_known', false) and value_json.get('alerts_active', false) else 'OFF' }}"
+		p.setEntityAvailability(alertPayload, stateTopic, "{{ 'online' if value_json.get('alert_domain') == '"+domain+"' and value_json.get('alerts_known', false) else 'offline' }}")
 		alertPayload["payload_on"] = "ON"
 		alertPayload["payload_off"] = "OFF"
 		alertPayload["device_class"] = "problem"
@@ -503,15 +696,26 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 		}
 	}
 
-	for _, metric := range snapshot.Metrics {
+	for _, metric := range metrics {
 		stateKey := metricStateKey(metric)
 		if stateKey == "" {
 			continue
 		}
-		p.discoveredMetrics[stateKey] = metricEntity{StateKey: stateKey, Metric: metric}
 
 		payload := p.baseDiscoveryPayload(device, metricName(metric), device.ID+"_"+stateKey, stateTopic)
-		payload["value_template"] = "{{ value_json.metrics." + stateKey + " }}"
+		payload["value_template"] = "{{ value_json.get('metrics', {}).get('" + stateKey + "') }}"
+		if isAlertMetric(metric) {
+			domains, ok := alertMetricDomains[stateKey]
+			if !ok || len(domains) == 0 {
+				return nil, fmt.Errorf("MQTT discovery alert metric %q has no source ownership", stateKey)
+			}
+			availabilityTemplate, err := alertMetricAvailabilityTemplate(stateKey, domains)
+			if err != nil {
+				return nil, err
+			}
+			payload["value_template"] = "{{ value_json.get('alert_metrics', {}).get('" + stateKey + "') }}"
+			p.setEntityAvailability(payload, stateTopic, availabilityTemplate)
+		}
 
 		meta := metricSensorMeta(metric)
 		if meta.DeviceClass != "" {
@@ -538,7 +742,12 @@ func (p *Publisher) discoveryMessages(snapshot *model.Snapshot, device deviceInf
 
 		if isAlertMetric(metric) {
 			binaryPayload := p.baseDiscoveryPayload(device, metricName(metric)+" Active", device.ID+"_"+stateKey+"_active", stateTopic)
-			binaryPayload["value_template"] = "{{ 'ON' if '" + stateKey + "' in value_json.alert_metrics and value_json.alert_metrics." + stateKey + "|float != 0 else 'OFF' if '" + stateKey + "' in value_json.alert_metrics else none }}"
+			availabilityTemplate, err := alertMetricAvailabilityTemplate(stateKey, alertMetricDomains[stateKey])
+			if err != nil {
+				return nil, err
+			}
+			binaryPayload["value_template"] = "{{ 'ON' if '" + stateKey + "' in value_json.get('alert_metrics', {}) and value_json.get('alert_metrics', {}).get('" + stateKey + "')|float(0) != 0 else 'OFF' if '" + stateKey + "' in value_json.get('alert_metrics', {}) else none }}"
+			p.setEntityAvailability(binaryPayload, stateTopic, availabilityTemplate)
 			binaryPayload["payload_on"] = "ON"
 			binaryPayload["payload_off"] = "OFF"
 			binaryPayload["device_class"] = "problem"
@@ -571,6 +780,52 @@ func (p *Publisher) baseDiscoveryPayload(device deviceInfo, name string, uniqueI
 	}
 }
 
+func (p *Publisher) setEntityAvailability(payload map[string]any, stateTopic, valueTemplate string) {
+	delete(payload, "availability_topic")
+	delete(payload, "payload_available")
+	delete(payload, "payload_not_available")
+	payload["availability"] = []map[string]any{
+		{
+			"topic":                 p.availabilityTopic,
+			"payload_available":     availabilityOnline,
+			"payload_not_available": availabilityOffline,
+		},
+		{
+			"topic":                 stateTopic,
+			"value_template":        valueTemplate,
+			"payload_available":     availabilityOnline,
+			"payload_not_available": availabilityOffline,
+		},
+	}
+	payload["availability_mode"] = "all"
+}
+
+func alertMetricAvailabilityTemplate(stateKey string, domains []string) (string, error) {
+	if stateKey == "" || len(domains) == 0 {
+		return "", fmt.Errorf("MQTT discovery alert metric %q has no source ownership", stateKey)
+	}
+	unique := make([]string, 0, len(domains))
+	seen := make(map[string]struct{}, len(domains))
+	for _, domain := range domains {
+		domain = alertDomain(domain)
+		if _, duplicate := seen[domain]; duplicate {
+			continue
+		}
+		seen[domain] = struct{}{}
+		unique = append(unique, domain)
+	}
+	sort.Strings(unique)
+	domainCondition := "value_json.get('alert_domain') == '" + unique[0] + "'"
+	if len(unique) > 1 {
+		quoted := make([]string, len(unique))
+		for i, domain := range unique {
+			quoted[i] = "'" + domain + "'"
+		}
+		domainCondition = "value_json.get('alert_domain') in [" + strings.Join(quoted, ", ") + "]"
+	}
+	return "{{ 'online' if " + domainCondition + " and '" + stateKey + "' in value_json.get('alert_metrics', {}) else 'offline' }}", nil
+}
+
 func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Duration) statePayload {
 	metrics := make(map[string]*float64, len(p.discoveredMetrics)+len(snapshot.Metrics))
 	for stateKey := range p.discoveredMetrics {
@@ -581,7 +836,7 @@ func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Du
 	alertCount := 0
 	for _, metric := range snapshot.Metrics {
 		stateKey := metricStateKey(metric)
-		if stateKey == "" {
+		if stateKey == "" || !p.metricOwnedByDiscoveryState(snapshot.Source, stateKey, metric) {
 			continue
 		}
 		if !math.IsNaN(metric.Value) && !math.IsInf(metric.Value, 0) {
@@ -610,13 +865,50 @@ func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Du
 		Metrics:             metrics,
 		MetricCount:         len(snapshot.Metrics),
 		AlertMetrics:        alertMetrics,
-		AlertDomain:         firstNonEmpty(sanitizeID(snapshot.Source), "unknown_source"),
+		AlertDomain:         alertDomain(snapshot.Source),
 		AlertCount:          alertCount,
 		AlertsKnown:         len(alertMetrics) > 0,
 		AlertsActive:        alertCount > 0,
 		PollDurationSeconds: duration.Seconds(),
-		Meta:                normalizedMeta(snapshot.Meta),
+		Meta:                p.discoveryStateMeta(snapshot.Meta),
 	}
+}
+
+func (p *Publisher) metricOwnedByDiscoveryState(source, stateKey string, metric model.Metric) bool {
+	if p.discoveryState == nil {
+		return true
+	}
+	if isAlertMetric(metric) {
+		source = firstNonEmpty(normalizeSourceName(source), "unknown_source")
+		_, owned := p.discoveryState.AlertMetrics[source][stateKey]
+		return owned
+	}
+	if strings.EqualFold(strings.TrimSpace(metric.Group), "grid_load") {
+		_, owned := p.discoveryState.GridLoadMetrics[stateKey]
+		return owned
+	}
+	_, owned := p.discoveryState.OrdinaryMetrics[stateKey]
+	return owned
+}
+
+func (p *Publisher) discoveryStateMeta(meta map[string]string) map[string]string {
+	normalized := normalizedMeta(meta)
+	if p.discoveryState == nil || len(normalized) == 0 {
+		return normalized
+	}
+	allowed := make(map[string]struct{}, len(p.discoveryState.PrimaryMetaKeys))
+	for _, key := range p.discoveryState.PrimaryMetaKeys {
+		allowed[key] = struct{}{}
+	}
+	for key := range normalized {
+		if _, ok := allowed[key]; !ok {
+			delete(normalized, key)
+		}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func (p *Publisher) device(snapshot *model.Snapshot) deviceInfo {

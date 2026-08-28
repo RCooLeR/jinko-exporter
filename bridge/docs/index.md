@@ -8,8 +8,9 @@ The bridge is the Go service in this repository. It reads solar telemetry from t
 - Normalizes numeric telemetry into a common snapshot shape.
 - Serves Prometheus metrics from `/metrics`.
 - Serves `/healthz` and `/readyz`.
-- Optionally publishes retained MQTT Discovery configs and retained state JSON for Home Assistant.
+- Optionally publishes always-retained MQTT Discovery configs and Home Assistant state JSON whose retention is controlled by `MQTT_RETAIN`.
 - Optionally sends SMTP alerts for request failures, inverter alarms, grid-down checks, low battery SOC, high temperature, and missing successful polls.
+- Optionally turns a non-zero raw Modbus warning/fault vector into an immediate Home Assistant mobile push and a bounded, evidence-only Jinko/Solarman correlation job.
 
 ## Documentation
 
@@ -52,6 +53,8 @@ bridge poller
         +--> MQTT Discovery + state JSON
         |
         +--> optional SMTP alerts
+        |
+        +--> optional HA push + cloud alert correlation
 ```
 
 ## Important Notes

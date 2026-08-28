@@ -2,7 +2,9 @@ package hamqtt
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -129,11 +131,12 @@ func TestDiscoveryMessagesAndStatePayload(t *testing.T) {
 	if fault["device_class"] != "problem" || fault["entity_category"] != "diagnostic" {
 		t.Fatalf("unexpected fault binary discovery payload: %#v", fault)
 	}
-	if template, _ := fault["value_template"].(string); !strings.Contains(template, "in value_json.alert_metrics") || !strings.Contains(template, "else none") {
-		t.Fatalf("fault binary template is not missing-safe: %#v", fault)
+	wantFaultTemplate := "{{ 'ON' if 'alert_l_b_f_f' in value_json.get('alert_metrics', {}) and value_json.get('alert_metrics', {}).get('alert_l_b_f_f')|float(0) != 0 else 'OFF' if 'alert_l_b_f_f' in value_json.get('alert_metrics', {}) else none }}"
+	if template, _ := fault["value_template"].(string); template != wantFaultTemplate {
+		t.Fatalf("fault binary template = %q, want defaulted, missing-safe conversion %q", template, wantFaultTemplate)
 	}
 	jinkoAggregate := decodeDiscovery(t, messages, "homeassistant/binary_sensor/abc123_jinko_warning_alarm_fault_active/config")
-	if template, _ := jinkoAggregate["value_template"].(string); !strings.Contains(template, "value_json.alert_domain == 'jinko'") || !strings.Contains(template, "else none") {
+	if template, _ := jinkoAggregate["value_template"].(string); !strings.Contains(template, "value_json.get('alert_domain') == 'jinko'") || !strings.Contains(template, "else 'OFF'") {
 		t.Fatalf("Jinko aggregate template is not source-domain-safe: %#v", jinkoAggregate)
 	}
 
@@ -172,6 +175,194 @@ func TestDiscoveryMessagesAndStatePayload(t *testing.T) {
 	}
 	if state.Meta["base_url"] != "https://example.invalid" {
 		t.Fatalf("Meta[base_url] = %q, want https://example.invalid", state.Meta["base_url"])
+	}
+}
+
+func TestAlertDiscoveryPayloadsUseExactEntityScopedAvailability(t *testing.T) {
+	publisher, err := NewPublisher(config.MQTTConfig{
+		Broker:          "tcp://localhost:1883",
+		ClientID:        "alert-availability-contract",
+		TopicPrefix:     "jinko-exporter",
+		DiscoveryPrefix: "homeassistant",
+		Timeout:         time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &model.Snapshot{
+		Source:   "jinko",
+		DeviceSN: "ALERT001",
+		Metrics: []model.Metric{
+			{Group: "alert", Key: "L_B_F_F", Name: "Lithium battery fault flag", Value: 0},
+		},
+	}
+	device := publisher.device(snapshot)
+	stateTopic := publisher.stateTopic(device.ID)
+	messages, err := publisher.discoveryMessages(snapshot, device, stateTopic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	globalAvailability := map[string]any{
+		"payload_available":     "online",
+		"payload_not_available": "offline",
+		"topic":                 "jinko-exporter/availability",
+	}
+	metricAvailabilityTemplate := "{{ 'online' if value_json.get('alert_domain') == 'jinko' and 'alert_l_b_f_f' in value_json.get('alert_metrics', {}) else 'offline' }}"
+	devicePayload := map[string]any{
+		"identifiers":   []string{"jinko_exporter_alert001"},
+		"manufacturer":  "Jinko",
+		"model":         "Solar inverter via jinko-exporter",
+		"name":          "Jinko Inverter ALERT001",
+		"serial_number": "ALERT001",
+	}
+	exact := []struct {
+		topic string
+		want  map[string]any
+	}{
+		{
+			topic: "homeassistant/binary_sensor/alert001_jinko_warning_alarm_fault_active/config",
+			want: map[string]any{
+				"availability": []map[string]any{
+					globalAvailability,
+					{
+						"payload_available":     "online",
+						"payload_not_available": "offline",
+						"topic":                 stateTopic,
+						"value_template":        "{{ 'online' if value_json.get('alert_domain') == 'jinko' and value_json.get('alerts_known', false) else 'offline' }}",
+					},
+				},
+				"availability_mode": "all",
+				"device":            devicePayload,
+				"device_class":      "problem",
+				"name":              "Warning/Alarm/Fault Active (jinko)",
+				"payload_off":       "OFF",
+				"payload_on":        "ON",
+				"qos":               0,
+				"state_topic":       stateTopic,
+				"unique_id":         "alert001_jinko_warning_alarm_fault_active",
+				"value_template":    "{{ 'ON' if value_json.get('alert_domain') == 'jinko' and value_json.get('alerts_known', false) and value_json.get('alerts_active', false) else 'OFF' }}",
+			},
+		},
+		{
+			topic: "homeassistant/sensor/alert001_alert_l_b_f_f/config",
+			want: map[string]any{
+				"availability": []map[string]any{
+					globalAvailability,
+					{
+						"payload_available":     "online",
+						"payload_not_available": "offline",
+						"topic":                 stateTopic,
+						"value_template":        metricAvailabilityTemplate,
+					},
+				},
+				"availability_mode": "all",
+				"device":            devicePayload,
+				"entity_category":   "diagnostic",
+				"icon":              "mdi:alert-circle",
+				"name":              "Lithium battery fault flag",
+				"qos":               0,
+				"state_topic":       stateTopic,
+				"unique_id":         "alert001_alert_l_b_f_f",
+				"value_template":    "{{ value_json.get('alert_metrics', {}).get('alert_l_b_f_f') }}",
+			},
+		},
+		{
+			topic: "homeassistant/binary_sensor/alert001_alert_l_b_f_f_active/config",
+			want: map[string]any{
+				"availability": []map[string]any{
+					globalAvailability,
+					{
+						"payload_available":     "online",
+						"payload_not_available": "offline",
+						"topic":                 stateTopic,
+						"value_template":        metricAvailabilityTemplate,
+					},
+				},
+				"availability_mode": "all",
+				"device":            devicePayload,
+				"device_class":      "problem",
+				"entity_category":   "diagnostic",
+				"name":              "Lithium battery fault flag Active",
+				"payload_off":       "OFF",
+				"payload_on":        "ON",
+				"qos":               0,
+				"state_topic":       stateTopic,
+				"unique_id":         "alert001_alert_l_b_f_f_active",
+				"value_template":    "{{ 'ON' if 'alert_l_b_f_f' in value_json.get('alert_metrics', {}) and value_json.get('alert_metrics', {}).get('alert_l_b_f_f')|float(0) != 0 else 'OFF' if 'alert_l_b_f_f' in value_json.get('alert_metrics', {}) else none }}",
+			},
+		},
+	}
+	for _, tc := range exact {
+		t.Run(tc.topic, func(t *testing.T) {
+			raw := discoveryPayload(t, messages, tc.topic)
+			var got map[string]any
+			if err := json.Unmarshal([]byte(raw), &got); err != nil {
+				t.Fatal(err)
+			}
+			wantRaw, err := json.Marshal(tc.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want map[string]any
+			if err := json.Unmarshal(wantRaw, &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("discovery payload mismatch\ngot:  %s\nwant: %s", raw, wantRaw)
+			}
+		})
+	}
+
+	ordinary := decodeDiscovery(t, messages, "homeassistant/sensor/alert001_alert_l_b_f_f/config")
+	if _, exists := ordinary["availability_topic"]; exists {
+		t.Fatal("source-scoped alert retained the single global availability form")
+	}
+}
+
+func TestAlertStateDistinguishesZeroNonzeroMissingAndGlobalOffline(t *testing.T) {
+	publisher, client := newPublisherWithRecordingClient(t)
+	zero := &model.Snapshot{
+		Source:   "modbus",
+		DeviceSN: "ALERT001",
+		Metrics: []model.Metric{
+			{Group: "alert", Key: "R553", Name: "Modbus warning word", Value: 0},
+		},
+	}
+	if err := publisher.OnPollSuccess(zero, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	state := publishedState(t, client, "jinko-exporter/alert001/state")
+	if !state.AlertsKnown || state.AlertsActive || state.AlertCount != 0 || state.AlertMetrics["alert_r553"] != 0 {
+		t.Fatalf("zero alert state = %#v, want known clear with explicit zero", state)
+	}
+
+	nonzero := *zero
+	nonzero.Metrics = []model.Metric{{Group: "alert", Key: "R553", Name: "Modbus warning word", Value: 4}}
+	if err := publisher.OnPollSuccess(&nonzero, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	state = publishedState(t, client, "jinko-exporter/alert001/state")
+	if !state.AlertsKnown || !state.AlertsActive || state.AlertCount != 1 || state.AlertMetrics["alert_r553"] != 4 {
+		t.Fatalf("nonzero alert state = %#v, want known active value 4", state)
+	}
+
+	missing := *zero
+	missing.Metrics = []model.Metric{{Group: "alert", Key: "R553", Name: "Modbus warning word", Value: math.NaN()}}
+	if err := publisher.OnPollSuccess(&missing, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	state = publishedState(t, client, "jinko-exporter/alert001/state")
+	if state.AlertsKnown || state.AlertsActive || len(state.AlertMetrics) != 0 {
+		t.Fatalf("non-finite alert state = %#v, want source entity unavailable", state)
+	}
+
+	client.clear()
+	if err := publisher.OnPollFailure("modbus", errors.New("synthetic poll failure"), time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	if payloads := client.payloadsForTopic("jinko-exporter/availability"); len(payloads) != 1 || payloads[0] != "offline" {
+		t.Fatalf("global availability after failure = %#v, want offline", payloads)
 	}
 }
 
@@ -329,7 +520,7 @@ func TestModbusRawWarningFaultMetricsHaveUniqueDiscoveryAndCountWords(t *testing
 	if modbusAggregate["name"] != "Warning/Alarm/Fault Active (modbus)" {
 		t.Fatalf("Modbus alert discovery name = %q", modbusAggregate["name"])
 	}
-	if template, _ := modbusAggregate["value_template"].(string); !strings.Contains(template, "value_json.alert_domain == 'modbus'") || !strings.Contains(template, "else none") {
+	if template, _ := modbusAggregate["value_template"].(string); !strings.Contains(template, "value_json.get('alert_domain') == 'modbus'") || !strings.Contains(template, "else 'OFF'") {
 		t.Fatalf("Modbus aggregate template is not source-domain-safe: %#v", modbusAggregate)
 	}
 	alertCount := decodeDiscovery(t, messages, "homeassistant/sensor/synthetic_inverter_001_alert_count/config")
@@ -410,8 +601,12 @@ func TestAlertAggregateDiscoveryIsSourceScopedAndLegacyTopicIsDeleted(t *testing
 			t.Fatalf("legacy aggregate tombstone body = %q, want empty", message.body)
 		}
 	}
-	if !client.hasTopic("homeassistant/binary_sensor/synthetic_inverter_001_modbus_warning_alarm_fault_active/config", true, "value_json.alert_domain == 'modbus'") {
+	if !client.hasTopic("homeassistant/binary_sensor/synthetic_inverter_001_modbus_warning_alarm_fault_active/config", true, "value_json.get('alert_domain') == 'modbus'") {
 		t.Fatalf("source-scoped Modbus aggregate was not published: %#v", client.messages)
+	}
+	modbusMetricTopic := "homeassistant/binary_sensor/synthetic_inverter_001_alert_deye_modbus_r554_warning_word_2_raw_active/config"
+	if !client.hasTopic(modbusMetricTopic, true, "|float(0)") {
+		t.Fatalf("retained Modbus metric discovery does not default numeric conversion: %#v", client.messages)
 	}
 
 	client.clear()
@@ -426,7 +621,7 @@ func TestAlertAggregateDiscoveryIsSourceScopedAndLegacyTopicIsDeleted(t *testing
 	if err := publisher.OnPollSuccess(jinko, time.Second); err != nil {
 		t.Fatalf("Jinko OnPollSuccess() error = %v", err)
 	}
-	if !client.hasTopic("homeassistant/binary_sensor/synthetic_inverter_001_jinko_warning_alarm_fault_active/config", true, "value_json.alert_domain == 'jinko'") {
+	if !client.hasTopic("homeassistant/binary_sensor/synthetic_inverter_001_jinko_warning_alarm_fault_active/config", true, "value_json.get('alert_domain') == 'jinko'") {
 		t.Fatalf("source switch did not publish a distinct Jinko aggregate: %#v", client.messages)
 	}
 	var state statePayload
@@ -443,6 +638,9 @@ func TestAlertAggregateDiscoveryIsSourceScopedAndLegacyTopicIsDeleted(t *testing
 	}
 	if !foundState || state.AlertDomain != "jinko" || !state.AlertsKnown || state.AlertsActive || state.AlertCount != 0 {
 		t.Fatalf("source-switched alert state = found=%v domain=%q known=%v active=%v count=%d", foundState, state.AlertDomain, state.AlertsKnown, state.AlertsActive, state.AlertCount)
+	}
+	if _, exists := state.AlertMetrics["alert_deye_modbus_r554_warning_word_2_raw"]; exists {
+		t.Fatalf("source-switched state unexpectedly retained the Modbus alert metric: %#v", state.AlertMetrics)
 	}
 
 	client.clear()
@@ -566,8 +764,50 @@ func TestIdentityDiscoveryTemplatesAreMissingSafeAndStable(t *testing.T) {
 	assertDiscoveryContract(t, metric, map[string]any{
 		"unique_id":      "synthetic_inv_001_electric_dp1",
 		"state_topic":    "jinko-exporter/synthetic_inv_001/state",
-		"value_template": "{{ value_json.metrics.electric_dp1 }}",
+		"value_template": "{{ value_json.get('metrics', {}).get('electric_dp1') }}",
 	})
+}
+
+func TestColdMetricDiscoveryTemplateIsMissingSafeAndZeroIsPublished(t *testing.T) {
+	publisher, _ := newPublisherWithRecordingClient(t)
+	snapshot := &model.Snapshot{
+		Source:      "modbus",
+		DeviceSN:    "SYNTHETIC_INV_001",
+		CollectedAt: time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC),
+		Metrics: []model.Metric{
+			{Group: "generator", Key: "GEN_TOTAL_POWER", Name: "Generator Total Power", Unit: "W", Value: 0},
+		},
+	}
+
+	device := publisher.device(snapshot)
+	messages, err := publisher.discoveryMessages(snapshot, device, publisher.stateTopic(device.ID))
+	if err != nil {
+		t.Fatalf("discoveryMessages() error = %v", err)
+	}
+	payload := decodeDiscovery(t, messages, "homeassistant/sensor/synthetic_inv_001_generator_gen_total_power/config")
+	if got := payload["value_template"]; got != "{{ value_json.get('metrics', {}).get('generator_gen_total_power') }}" {
+		t.Fatalf("metric value_template = %#v, want exact nested missing-safe lookup", got)
+	}
+
+	state := publisher.buildStatePayload(snapshot, time.Second)
+	value, ok := state.Metrics["generator_gen_total_power"]
+	if !ok || value == nil || *value != 0 {
+		t.Fatalf("zero metric = %#v (present=%v), want a present numeric zero", value, ok)
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var encoded struct {
+		Metrics map[string]*float64 `json:"metrics"`
+	}
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	value, ok = encoded.Metrics["generator_gen_total_power"]
+	if !ok || value == nil || *value != 0 {
+		t.Fatalf("serialized zero metric = %#v (present=%v), want a present numeric zero", value, ok)
+	}
 }
 
 func TestRepeatedColdFallbackPublishesWarningSafeIdentitySchema(t *testing.T) {
@@ -1122,6 +1362,7 @@ type recordingMQTTClient struct {
 	publishStarted chan struct{}
 	publishRelease <-chan struct{}
 	publishSignal  sync.Once
+	publishErrors  []error
 }
 
 func (c *recordingMQTTClient) IsConnected() bool {
@@ -1179,6 +1420,11 @@ func (c *recordingMQTTClient) Publish(topic string, _ byte, retained bool, paylo
 	}
 	c.mu.Lock()
 	c.messages = append(c.messages, publishedMQTTMessage{topic: topic, retain: retained, body: body})
+	var publishErr error
+	if len(c.publishErrors) > 0 {
+		publishErr = c.publishErrors[0]
+		c.publishErrors = c.publishErrors[1:]
+	}
 	shouldBlock := topic == c.blockedTopic && body == c.blockedBody && c.publishRelease != nil
 	started := c.publishStarted
 	release := c.publishRelease
@@ -1189,7 +1435,7 @@ func (c *recordingMQTTClient) Publish(topic string, _ byte, retained bool, paylo
 		}
 		<-release
 	}
-	return staticMQTTToken{}
+	return staticMQTTToken{err: publishErr}
 }
 
 func (c *recordingMQTTClient) Subscribe(string, byte, mqtt.MessageHandler) mqtt.Token {
@@ -1214,6 +1460,12 @@ func (c *recordingMQTTClient) clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.messages = nil
+}
+
+func (c *recordingMQTTClient) failNextPublishes(errs ...error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.publishErrors = append(c.publishErrors, errs...)
 }
 
 func (c *recordingMQTTClient) hasTopic(topic string, retain bool, contains string) bool {
@@ -1322,7 +1574,9 @@ func (t *controlledMQTTToken) Error() error {
 	return t.err
 }
 
-type staticMQTTToken struct{}
+type staticMQTTToken struct {
+	err error
+}
 
 func (staticMQTTToken) Wait() bool {
 	return true
@@ -1338,6 +1592,6 @@ func (staticMQTTToken) Done() <-chan struct{} {
 	return done
 }
 
-func (staticMQTTToken) Error() error {
-	return nil
+func (t staticMQTTToken) Error() error {
+	return t.err
 }

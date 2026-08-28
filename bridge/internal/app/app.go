@@ -340,10 +340,16 @@ func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error
 		}
 		sources = append(sources, src)
 	}
-	if len(sources) == 1 {
+	if len(sources) == 1 && !cfg.ModbusAlertCorrelation.Enabled {
 		return enrichSource(sources[0], cfg)
 	}
-	return enrichSource(source.NewPriority(sources, cfg.ProjectFailoverMetrics), cfg)
+	priority := source.NewPriority(sources, cfg.ProjectFailoverMetrics)
+	if cfg.ModbusAlertCorrelation.Enabled {
+		if err := configureModbusAlertCorrelation(priority, cfg); err != nil {
+			return nil, err
+		}
+	}
+	return enrichSource(priority, cfg)
 }
 
 func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manager) (source.Source, error) {

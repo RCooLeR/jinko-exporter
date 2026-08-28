@@ -14,16 +14,17 @@ const (
 	maximumTemperatureC   = 100.0
 	maximumVoltageV       = 1000.0
 
-	maximumAbsoluteGridPowerW   = 65535.0
-	maximumAbsoluteOutputPowerW = int64(0x7FFF)
-	maximumOutputPhaseVoltageV  = 500.0
-	maximumAbsoluteOutputAmps   = 100.0
-	maximumOutputFrequencyHz    = 100.0
-	maximumLoadPhaseVoltageV    = 500.0
-	maximumLoadFrequencyHz      = 100.0
-	maximumGridFrequencyHz      = 100.0
-	maximumAbsoluteGridAmps     = 100.0
-	maximumPVToRatedPowerRatio  = 2.0
+	maximumGridPowerCoherenceW       = int64(0x7FFF)
+	maximumDirectLoadPhaseCoherenceW = int64(0x7FFF)
+	maximumOutputPowerCoherenceW     = int64(0x7FFF)
+	maximumOutputPhaseVoltageV       = 500.0
+	maximumAbsoluteOutputAmps        = 100.0
+	maximumOutputFrequencyHz         = 100.0
+	maximumLoadPhaseVoltageV         = 500.0
+	maximumLoadFrequencyHz           = 100.0
+	maximumGridFrequencyHz           = 100.0
+	maximumAbsoluteGridAmps          = 100.0
+	maximumPVToRatedPowerRatio       = 2.0
 	// The supported family spans several ratings and hardware revisions. Keep
 	// the PV-current guard deliberately above their model-specific input-current
 	// limits, using the same broad 100 A telemetry envelope as the validated AC
@@ -200,25 +201,39 @@ func decodeDirectLoadPowers(lowWords, frequencyWords []uint16) (directLoadPowers
 	}
 
 	// The primary maps pair low words 650-653 with high words 656-659 as
-	// low-word-first signed 32-bit values. Live verification currently covers
-	// only the non-negative zero-high-word domain, so every pair fails closed
-	// when its high word is non-zero (including 0xFFFF sign extension).
-	labels := [...]string{"phase A", "phase B", "phase C", "total"}
-	values := [4]float64{}
-	for index := range values {
+	// low-word-first signed 32-bit values. Production admits the signed domain
+	// for the three phases only. The blocks require separate reads, so the
+	// symmetric 0x7FFF envelope makes a stale phase sign-extension word fail
+	// closed when those reads straddle zero. It is a coherence guard, not an
+	// inverter or pass-through rating.
+	labels := [...]string{"phase A", "phase B", "phase C"}
+	phasesW := [3]float64{}
+	for index := range phasesW {
 		high := frequencyWords[index+1]
-		if high != 0 {
-			return directLoadPowers{}, fmt.Errorf("direct-load %s high word register %d is 0x%04X; only verified non-negative zero-high-word values are accepted", labels[index], 656+index, high)
+		if high != 0x0000 && high != 0xFFFF {
+			return directLoadPowers{}, fmt.Errorf("direct-load %s high word register %d is 0x%04X; expected signed extension 0x0000 or 0xFFFF", labels[index], 656+index, high)
 		}
-		raw := uint32(lowWords[index]) | uint32(high)<<16
-		values[index] = float64(int32(raw))
+		raw := int32(uint32(lowWords[index]) | uint32(high)<<16)
+		if int64(raw) < -maximumDirectLoadPhaseCoherenceW || int64(raw) > maximumDirectLoadPhaseCoherenceW {
+			return directLoadPowers{}, fmt.Errorf("direct-load %s registers %d/%d decode to %dW; safe signed coherence range is -%d..%dW", labels[index], 650+index, 656+index, raw, maximumDirectLoadPhaseCoherenceW, maximumDirectLoadPhaseCoherenceW)
+		}
+		phasesW[index] = float64(raw)
+	}
+
+	// The dedicated total pair 653/659 remains in the independently verified
+	// zero-high, non-negative subset of its documented signed wire type. No
+	// target evidence establishes a negative total, and preserving the numeric
+	// 0..65535 W subset avoids imposing an inverter-rated-power cap on a separate
+	// pass-through measurement.
+	if high := frequencyWords[4]; high != 0 {
+		return directLoadPowers{}, fmt.Errorf("direct-load total high word register 659 is 0x%04X; only verified non-negative zero-high-word values are accepted", high)
 	}
 
 	// The dedicated total is independent. A same-frame live capture disproved
 	// exact phase-sum equality, so it must not be used as a validation gate.
 	return directLoadPowers{
-		phasesW: [3]float64{values[0], values[1], values[2]},
-		totalW:  values[3],
+		phasesW: phasesW,
+		totalW:  float64(lowWords[3]),
 	}, nil
 }
 
@@ -304,6 +319,9 @@ func decodeGridPowers(lowWords, highWords []uint16) ([4]float64, error) {
 		return [4]float64{}, err
 	}
 
+	// Registers 622-625 and 687-690 require separate reads. The symmetric
+	// 0x7FFF envelope makes a stale sign-extension word fail closed when those
+	// reads straddle zero; it is a coherence guard, not an equipment rating.
 	labels := [...]string{"L1", "L2", "L3", "total"}
 	result := [4]float64{}
 	rawValues := [4]int32{}
@@ -311,11 +329,11 @@ func decodeGridPowers(lowWords, highWords []uint16) ([4]float64, error) {
 		low := lowWords[index]
 		high := highWords[index]
 		if high != 0x0000 && high != 0xFFFF {
-			return [4]float64{}, fmt.Errorf("grid power %s high word 0x%04X is outside the verified JKS family envelope; expected 0x0000 or 0xFFFF", labels[index], high)
+			return [4]float64{}, fmt.Errorf("grid power %s high word 0x%04X is not a canonical signed extension; expected 0x0000 or 0xFFFF", labels[index], high)
 		}
 		raw := int32(uint32(low) | uint32(high)<<16)
-		if math.Abs(float64(raw)) > maximumAbsoluteGridPowerW {
-			return [4]float64{}, fmt.Errorf("grid power %s %dW exceeds %.0fW JKS family validation maximum", labels[index], raw, maximumAbsoluteGridPowerW)
+		if int64(raw) < -maximumGridPowerCoherenceW || int64(raw) > maximumGridPowerCoherenceW {
+			return [4]float64{}, fmt.Errorf("grid power %s %dW is outside safe signed coherence range -%d..%dW", labels[index], raw, maximumGridPowerCoherenceW, maximumGridPowerCoherenceW)
 		}
 		rawValues[index] = raw
 		result[index] = float64(raw)
@@ -378,8 +396,8 @@ func decodeOutputActivePowers(outputWords, highWords []uint16) ([4]float64, erro
 			return [4]float64{}, fmt.Errorf("output active power %s high word register %d is 0x%04X; expected signed extension 0x0000 or 0xFFFF", labels[index], 691+index, high)
 		}
 		raw := int32(uint32(low) | uint32(high)<<16)
-		if int64(raw) < -maximumAbsoluteOutputPowerW || int64(raw) > maximumAbsoluteOutputPowerW {
-			return [4]float64{}, fmt.Errorf("output active power %s registers %d/%d decode to %dW; safe signed validation range is -%d..%dW", labels[index], 633+index, 691+index, raw, maximumAbsoluteOutputPowerW, maximumAbsoluteOutputPowerW)
+		if int64(raw) < -maximumOutputPowerCoherenceW || int64(raw) > maximumOutputPowerCoherenceW {
+			return [4]float64{}, fmt.Errorf("output active power %s registers %d/%d decode to %dW; safe signed coherence range is -%d..%dW", labels[index], 633+index, 691+index, raw, maximumOutputPowerCoherenceW, maximumOutputPowerCoherenceW)
 		}
 		rawValues[index] = raw
 		result[index] = float64(raw)

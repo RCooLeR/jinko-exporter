@@ -22,6 +22,11 @@ func TestRedactedMasksSecrets(t *testing.T) {
 			SMTPUsername: "alerts@example.test",
 			SMTPPassword: "smtp-secret",
 		},
+		HomeAssistant: HomeAssistantConfig{
+			BaseURL:       "https://ha.example.test",
+			Token:         "home-assistant-secret",
+			NotifyService: "mobile_app_phone",
+		},
 		MQTT: MQTTConfig{
 			Broker:   "tcp://broker.example.test:1883",
 			Username: "mqtt-user",
@@ -51,6 +56,7 @@ func TestRedactedMasksSecrets(t *testing.T) {
 
 	for _, secret := range []string{
 		"smtp-secret",
+		"home-assistant-secret",
 		"mqtt-secret",
 		"jinko-token",
 		"jinko-refresh-token",
@@ -214,6 +220,189 @@ func TestFromCLIValidatesMQTTBrokerURL(t *testing.T) {
 				t.Fatalf("error = %v, want safe mqtt-broker rejection", err)
 			}
 		})
+	}
+}
+
+func TestFromCLIConfiguresMQTTDiscoveryStateFileAndPrimarySource(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "mqtt-discovery-state.json")
+	cfg := mustConfigFromArgs(t,
+		"--source", "jinko",
+		"--source-priority", "SOLARMAN,JINKO",
+		"--jinko-device-id", "100",
+		"--jinko-site-id", "200",
+		"--jinko-bearer-token", "opaque-jinko-token",
+		"--solarman-app-id", "app-id",
+		"--solarman-app-secret", "opaque-solarman-secret",
+		"--solarman-email", "solar@example.test",
+		"--solarman-password-sha256", "opaque-password-digest",
+		"--solarman-device-sn", "SYNTHETIC_INVERTER_001",
+		"--mqtt-enabled",
+		"--mqtt-device-id", "SYNTHETIC_INVERTER_001",
+		"--mqtt-discovery-state-file", " "+statePath+" ",
+	)
+
+	if cfg.MQTT.DiscoveryStateFile != statePath {
+		t.Fatalf("MQTT.DiscoveryStateFile = %q, want %q", cfg.MQTT.DiscoveryStateFile, statePath)
+	}
+	if cfg.MQTT.PrimarySource != "solarman" {
+		t.Fatalf("MQTT.PrimarySource = %q, want first normalized source-priority entry solarman", cfg.MQTT.PrimarySource)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("config parsing created or could stat missing discovery state file: %v", err)
+	}
+}
+
+func TestFromEnvironmentConfiguresMQTTDiscoveryStateFile(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "mqtt-discovery-state.json")
+	for key, value := range map[string]string{
+		"EXPORTER_SOURCE_PRIORITY":  "jinko",
+		"MQTT_ENABLED":              "true",
+		"MQTT_DEVICE_ID":            "SYNTHETIC_INVERTER_001",
+		"MQTT_DISCOVERY_STATE_FILE": statePath,
+	} {
+		t.Setenv(key, value)
+	}
+
+	cfg := mustConfigFromArgs(t,
+		"--source", "jinko",
+		"--jinko-device-id", "100",
+		"--jinko-site-id", "200",
+		"--jinko-bearer-token", "opaque-jinko-token",
+	)
+	if cfg.MQTT.DiscoveryStateFile != statePath {
+		t.Fatalf("MQTT.DiscoveryStateFile = %q, want %q", cfg.MQTT.DiscoveryStateFile, statePath)
+	}
+	if cfg.MQTT.PrimarySource != "jinko" {
+		t.Fatalf("MQTT.PrimarySource = %q, want jinko", cfg.MQTT.PrimarySource)
+	}
+	if cfg.MQTT.DeviceID != "SYNTHETIC_INVERTER_001" {
+		t.Fatalf("MQTT.DeviceID = %q, want environment value", cfg.MQTT.DeviceID)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("config parsing created or could stat missing discovery state file: %v", err)
+	}
+}
+
+func TestFromCLIValidatesMQTTDiscoveryStateFileTarget(t *testing.T) {
+	dir := t.TempDir()
+	base := []string{
+		"--source", "jinko",
+		"--jinko-device-id", "100",
+		"--jinko-site-id", "200",
+		"--jinko-bearer-token", "opaque-jinko-token",
+		"--mqtt-enabled",
+	}
+	tests := []struct {
+		name     string
+		path     string
+		deviceID bool
+		wantErr  string
+	}{
+		{
+			name:    "explicit stable device ID is required",
+			path:    filepath.Join(dir, "state-without-device.json"),
+			wantErr: "mqtt-device-id is required when mqtt-discovery-state-file is configured",
+		},
+		{
+			name:     "parent directory must already exist",
+			path:     filepath.Join(dir, "missing-parent", "state.json"),
+			deviceID: true,
+			wantErr:  "mqtt-discovery-state-file parent directory must exist",
+		},
+		{
+			name:     "existing directory is not a regular state file",
+			path:     dir,
+			deviceID: true,
+			wantErr:  "mqtt-discovery-state-file must be a regular file when it exists",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append(append([]string{}, base...), "--mqtt-discovery-state-file", tt.path)
+			if tt.deviceID {
+				args = append(args, "--mqtt-device-id", "SYNTHETIC_INVERTER_001")
+			}
+			err := runConfigFromArgs(t, args...)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestFromCLIRejectsMQTTDiscoveryStateSecretPathAliasesWithoutDisclosure(t *testing.T) {
+	dir := t.TempDir()
+	const stateName = "private-owned-state-sentinel.json"
+	statePath := filepath.Join(dir, stateName)
+	if err := os.WriteFile(statePath, []byte("opaque-file-value\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	aliasPath := dir + string(os.PathSeparator) + "." + string(os.PathSeparator) + stateName
+	if aliasPath == statePath {
+		t.Fatal("test path alias unexpectedly equals the canonical path")
+	}
+
+	base := []string{
+		"--source", "jinko",
+		"--jinko-device-id", "100",
+		"--jinko-site-id", "200",
+		"--jinko-bearer-token", "opaque-jinko-token",
+		"--mqtt-enabled",
+		"--mqtt-device-id", "SYNTHETIC_INVERTER_001",
+		"--mqtt-discovery-state-file", statePath,
+	}
+	secretFileFlags := []string{
+		"--mqtt-password-file",
+		"--smtp-password-file",
+		"--homeassistant-token-file",
+		"--jinko-bearer-token-file",
+		"--jinko-refresh-token-file",
+		"--jinko-token-state-file",
+		"--jinko-cookie-file",
+		"--solarman-app-secret-file",
+		"--solarman-password-file",
+		"--solarman-password-sha256-file",
+	}
+	const wantError = "mqtt-discovery-state-file must be separate from configured secret and token-state files"
+	for _, flag := range secretFileFlags {
+		t.Run(strings.TrimPrefix(flag, "--"), func(t *testing.T) {
+			args := append(append([]string{}, base...), flag, aliasPath)
+			err := runConfigFromArgs(t, args...)
+			if err == nil {
+				t.Fatalf("path alias through %s was accepted", flag)
+			}
+			if err.Error() != wantError {
+				t.Fatalf("error = %q, want path-free alias rejection", err)
+			}
+			if strings.Contains(err.Error(), statePath) || strings.Contains(err.Error(), aliasPath) || strings.Contains(err.Error(), stateName) {
+				t.Fatalf("alias rejection exposed the configured path: %q", err)
+			}
+		})
+	}
+}
+
+func TestMQTTDiscoveryStateFileRemainsOptionalForSingleSource(t *testing.T) {
+	t.Setenv("MQTT_DISCOVERY_STATE_FILE", "")
+	t.Setenv("MQTT_DEVICE_ID", "")
+	t.Setenv("EXPORTER_SOURCE_PRIORITY", "")
+	cfg := mustConfigFromArgs(t,
+		"--source", "jinko",
+		"--jinko-device-id", "100",
+		"--jinko-site-id", "200",
+		"--jinko-bearer-token", "opaque-jinko-token",
+		"--mqtt-enabled",
+	)
+	if cfg.MQTT.DiscoveryStateFile != "" {
+		t.Fatalf("MQTT.DiscoveryStateFile = %q, want optional empty default", cfg.MQTT.DiscoveryStateFile)
+	}
+	if cfg.MQTT.DeviceID != "" {
+		t.Fatalf("MQTT.DeviceID = %q, want legacy serial-derived identity", cfg.MQTT.DeviceID)
+	}
+	if cfg.MQTT.PrimarySource != "jinko" {
+		t.Fatalf("MQTT.PrimarySource = %q, want single source jinko", cfg.MQTT.PrimarySource)
 	}
 }
 
@@ -1040,6 +1229,189 @@ func TestFromCLIRejectsUnsafeAlertConfiguration(t *testing.T) {
 	}
 }
 
+func TestFromCLIModbusAlertCorrelationConfig(t *testing.T) {
+	cfg := mustConfigFromArgs(t, validModbusAlertCorrelationArgs()...)
+	if !cfg.ModbusAlertCorrelation.Enabled {
+		t.Fatal("ModbusAlertCorrelation.Enabled = false, want true")
+	}
+	if cfg.ModbusAlertCorrelation.Cooldown != 6*time.Hour || cfg.ModbusAlertCorrelation.JobTimeout != 45*time.Second {
+		t.Fatalf("Modbus correlation timing = %s/%s", cfg.ModbusAlertCorrelation.Cooldown, cfg.ModbusAlertCorrelation.JobTimeout)
+	}
+	if cfg.HomeAssistant.BaseURL != "https://ha.example.test" {
+		t.Fatalf("HomeAssistant.BaseURL = %q", cfg.HomeAssistant.BaseURL)
+	}
+	if cfg.HomeAssistant.Token != "ha-token" {
+		t.Fatalf("HomeAssistant.Token = %q, want parsed token", cfg.HomeAssistant.Token)
+	}
+	if cfg.HomeAssistant.NotifyService != "mobile_app_operator_phone" {
+		t.Fatalf("HomeAssistant.NotifyService = %q, want normalized service segment", cfg.HomeAssistant.NotifyService)
+	}
+	if cfg.HomeAssistant.Timeout != 10*time.Second {
+		t.Fatalf("HomeAssistant.Timeout = %s", cfg.HomeAssistant.Timeout)
+	}
+}
+
+func TestFromCLIAllowsExplicitInternalHTTPHomeAssistant(t *testing.T) {
+	for _, baseURL := range []string{
+		"http://192.168.100.2:8123",
+		"http://127.0.0.1:8123",
+		"http://[::1]:8123",
+		"http://homeassistant:8123",
+		"http://ha-core:8123",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			args := append(validModbusAlertCorrelationArgs(),
+				"--homeassistant-url", baseURL,
+				"--homeassistant-allow-insecure-http",
+			)
+			cfg := mustConfigFromArgs(t, args...)
+			if !cfg.HomeAssistant.AllowInsecureHTTP {
+				t.Fatal("HomeAssistant.AllowInsecureHTTP = false")
+			}
+		})
+	}
+}
+
+func TestFromCLIRejectsUnsafeModbusAlertCorrelationConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "modbus not first", args: []string{"--source-priority", "jinko,modbus,solarman"}, wantErr: "must start with modbus"},
+		{name: "solarman absent", args: []string{"--source-priority", "modbus,jinko"}, wantErr: "must contain jinko and solarman"},
+		{name: "zero cooldown", args: []string{"--modbus-alert-correlation-cooldown", "0s"}, wantErr: "cooldown must be > 0"},
+		{name: "zero job timeout", args: []string{"--modbus-alert-correlation-job-timeout", "0s"}, wantErr: "job-timeout must be > 0"},
+		{name: "http not opted in", args: []string{"--homeassistant-url", "http://192.168.100.2:8123"}, wantErr: "must use HTTPS"},
+		{name: "public http IP", args: []string{"--homeassistant-url", "http://203.0.113.20:8123", "--homeassistant-allow-insecure-http"}, wantErr: "private/loopback IP"},
+		{name: "http FQDN", args: []string{"--homeassistant-url", "http://ha.internal.example:8123", "--homeassistant-allow-insecure-http"}, wantErr: "single-label internal hostname"},
+		{name: "URL user info", args: []string{"--homeassistant-url", "https://user:secret@ha.example.test"}, wantErr: "must not contain user information"},
+		{name: "URL path", args: []string{"--homeassistant-url", "https://ha.example.test/api"}, wantErr: "must not contain a path"},
+		{name: "URL query", args: []string{"--homeassistant-url", "https://ha.example.test?token=secret"}, wantErr: "must not contain a query"},
+		{name: "URL fragment", args: []string{"--homeassistant-url", "https://ha.example.test#secret"}, wantErr: "must not contain a fragment"},
+		{name: "generic notify service", args: []string{"--jinko-ha-notify-service", "notify.persistent_notification"}, wantErr: "must be mobile_app_*"},
+		{name: "unsafe service path", args: []string{"--jinko-ha-notify-service", "mobile_app_phone/../../restart"}, wantErr: "must be mobile_app_*"},
+		{name: "zero HA timeout", args: []string{"--homeassistant-timeout", "0s"}, wantErr: "homeassistant-timeout must be > 0"},
+		{name: "empty token", args: []string{"--homeassistant-token", ""}, wantErr: "must contain one non-empty ASCII bearer token"},
+		{name: "token control", args: []string{"--homeassistant-token", "secret\nvalue"}, wantErr: "must contain one non-empty ASCII bearer token"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runConfigFromArgs(t, append(validModbusAlertCorrelationArgs(), tt.args...)...)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestFromCLIHomeAssistantTokenFileIsExclusiveBoundedAndRedacted(t *testing.T) {
+	dir := t.TempDir()
+	tokenPath := filepath.Join(dir, "ha-token")
+	if err := os.WriteFile(tokenPath, []byte("file-ha-token\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(token) error = %v", err)
+	}
+
+	args := validModbusAlertCorrelationArgs()
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--homeassistant-token" {
+			args = append(args[:i], args[i+2:]...)
+			break
+		}
+	}
+	cfg := mustConfigFromArgs(t, append(args, "--homeassistant-token-file", tokenPath)...)
+	if cfg.HomeAssistant.Token != "file-ha-token" {
+		t.Fatalf("HomeAssistant.Token = %q", cfg.HomeAssistant.Token)
+	}
+	redacted, err := json.Marshal(cfg.Redacted())
+	if err != nil {
+		t.Fatalf("Marshal(Redacted()) error = %v", err)
+	}
+	if strings.Contains(string(redacted), "file-ha-token") {
+		t.Fatalf("redacted config exposed Home Assistant token: %s", redacted)
+	}
+
+	err = runConfigFromArgs(t, append(validModbusAlertCorrelationArgs(), "--homeassistant-token-file", tokenPath)...)
+	if err == nil || !strings.Contains(err.Error(), "cannot both be configured") {
+		t.Fatalf("direct plus file error = %v", err)
+	}
+
+	sentinel := "PRIVATE_PATH_SENTINEL"
+	badPath := filepath.Join(dir, sentinel)
+	if err := os.WriteFile(badPath, make([]byte, maxHomeAssistantTokenBytes+1), 0o600); err != nil {
+		t.Fatalf("WriteFile(oversized) error = %v", err)
+	}
+	err = runConfigFromArgs(t, "--homeassistant-token-file", badPath)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized token-file error = %v", err)
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("token-file error exposed path: %v", err)
+	}
+
+	err = runConfigFromArgs(t, "--homeassistant-token-file", dir)
+	if err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("directory token-file error = %v", err)
+	}
+}
+
+func TestFromCLIRejectsHomeAssistantTokenFileSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "token-link")
+	if err := os.WriteFile(target, []byte("PRIVATE_TOKEN_SENTINEL\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(target) error = %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks are unavailable in this test environment: %v", err)
+	}
+	err := runConfigFromArgs(t, "--homeassistant-token-file", link)
+	if err == nil || !strings.Contains(err.Error(), "must not be a symlink") {
+		t.Fatalf("symlink token-file error = %v", err)
+	}
+	if strings.Contains(err.Error(), target) || strings.Contains(err.Error(), link) || strings.Contains(err.Error(), "PRIVATE_TOKEN_SENTINEL") {
+		t.Fatalf("symlink rejection exposed private input: %v", err)
+	}
+}
+
+func TestFromCLIHomeAssistantSettingsRequireExplicitOptIn(t *testing.T) {
+	cfg := mustConfigFromArgs(t,
+		"--source", "jinko",
+		"--jinko-device-id", "100",
+		"--jinko-site-id", "200",
+		"--jinko-bearer-token", "token",
+		"--homeassistant-url", "https://ha.example.test",
+		"--homeassistant-token", "ha-token",
+		"--jinko-ha-notify-service", "mobile_app_phone",
+	)
+	if cfg.ModbusAlertCorrelation.Enabled {
+		t.Fatal("Modbus correlation enabled without explicit opt-in")
+	}
+}
+
+func validModbusAlertCorrelationArgs() []string {
+	return []string{
+		"--source-priority", "modbus,jinko,solarman",
+		"--poll-interval", "1m",
+		"--modbus-host", "192.168.50.25",
+		"--modbus-logger-serial", "305419896",
+		"--modbus-device-sn", "INVERTER_SN_EXAMPLE",
+		"--jinko-device-id", "100",
+		"--jinko-site-id", "200",
+		"--jinko-bearer-token", "jinko-token",
+		"--solarman-app-id", "app-id",
+		"--solarman-app-secret", "app-secret",
+		"--solarman-email", "solar@example.test",
+		"--solarman-password-sha256", "password-sha",
+		"--solarman-device-sn", "INVERTER_SN_EXAMPLE",
+		"--modbus-alert-correlation-enabled",
+		"--homeassistant-url", "https://ha.example.test",
+		"--homeassistant-token", "ha-token",
+		"--jinko-ha-notify-service", "notify.mobile_app_operator_phone",
+	}
+}
+
 func mustConfigFromArgs(t *testing.T, args ...string) Config {
 	t.Helper()
 	var cfg Config
@@ -1059,7 +1431,7 @@ func runConfigFromArgs(t *testing.T, args ...string) error {
 
 func runConfigApp(t *testing.T, args []string, capture func(Config)) error {
 	t.Helper()
-	command := &cli.Command{
+	app := &cli.Command{
 		Name:  "test",
 		Flags: Flags(),
 		Action: func(_ context.Context, cmd *cli.Command) error {
@@ -1073,5 +1445,5 @@ func runConfigApp(t *testing.T, args []string, capture func(Config)) error {
 			return nil
 		},
 	}
-	return command.Run(t.Context(), append([]string{"test"}, args...))
+	return app.Run(context.Background(), append([]string{"test"}, args...))
 }
