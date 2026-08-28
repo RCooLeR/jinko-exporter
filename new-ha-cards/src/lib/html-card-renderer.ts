@@ -264,7 +264,7 @@ export class HtmlCardRenderer {
 const L = {
   battery: "&#1040;&#1082;&#1091;&#1084;&#1091;&#1083;&#1103;&#1090;&#1086;&#1088;",
   chargeBattery: "&#1047;&#1072;&#1088;&#1103;&#1076; &#1040;&#1050;&#1041;",
-  costDay: "&#1042;&#1072;&#1088;&#1090;&#1110;&#1089;&#1090;&#1100; &#1079;&#1072; &#1076;&#1077;&#1085;&#1100;",
+  costDay: "&#1063;&#1080;&#1089;&#1090;&#1080;&#1081; &#1073;&#1072;&#1083;&#1072;&#1085;&#1089; &#1079;&#1072; &#1076;&#1077;&#1085;&#1100;",
   current: "&#1057;&#1090;&#1088;&#1091;&#1084;:",
   dcBus: "DC &#1096;&#1080;&#1085;&#1072;",
   acTemperature: "AC &#1090;&#1077;&#1084;&#1087;&#1077;&#1088;&#1072;&#1090;&#1091;&#1088;&#1072;",
@@ -314,14 +314,14 @@ const batteryIconStack = (): string => `
   </span>
 `;
 
-const chip = (tone: string, iconName: IconName, label: string, valueField: string, unitField = "", trend: IconName = "arrowUpRight"): string => `
+const chip = (tone: string, iconName: IconName, label: string, valueField: string, unitField = "", trend: IconName | null = "arrowUpRight"): string => `
   <article class="chip chip--${tone}">
     ${icon(iconName)}
     <div class="chip__content">
       <div class="chip__label">${label}</div>
       <div class="chip__value"><span data-field="${valueField}"></span>${unitField ? `<small data-field="${unitField}"></small>` : ""}</div>
     </div>
-    <span class="chip__trend">${iconSvg(trend)}</span>
+    ${trend ? `<span class="chip__trend">${iconSvg(trend)}</span>` : ""}
   </article>
 `;
 
@@ -411,7 +411,7 @@ const topStrip = (): string => `
       ${chip("green", "sun", L.productionDay, "daily.production.value", "daily.production.unit")}
       ${chip("green", "arrowUpRight", L.exportDay, "daily.export.value", "daily.export.unit")}
       ${chip("amber", "cart", L.importDay, "daily.import.value", "daily.import.unit")}
-      ${chip("purple", "wallet", L.costDay, "daily.cost.value", "daily.cost.unit", "arrowDown")}
+      ${chip("purple", "wallet", L.costDay, "daily.cost.value", "daily.cost.unit", null)}
     </div>
     <div class="badge-row">
       ${badge("blue", "grid", L.gridWork)}
@@ -429,7 +429,7 @@ const summaryChips = (): string => `
     ${chip("green", "arrowUpRight", L.exportDay, "daily.export.value", "daily.export.unit")}
     ${chip("amber", "generator", L.generatorDay, "daily.generator.value", "daily.generator.unit")}
     ${chip("blue", "home", L.selfConsumption, "system.self_consumption", "")}
-    ${chip("purple", "wallet", L.costDay, "daily.cost.value", "daily.cost.unit", "arrowDown")}
+    ${chip("purple", "wallet", L.costDay, "daily.cost.value", "daily.cost.unit", null)}
   </section>
 `;
 
@@ -442,7 +442,7 @@ const detailedMarkup = (): string => `
         ${chip("green", "arrowUpRight", L.exportDay, "daily.export.value", "daily.export.unit")}
         ${chip("amber", "cart", L.importDay, "daily.import.value", "daily.import.unit")}
         ${chip("amber", "generator", L.generatorDay, "daily.generator.value", "daily.generator.unit")}
-        ${chip("purple", "wallet", L.costDay, "daily.cost.value", "daily.cost.unit", "arrowDown")}
+        ${chip("purple", "wallet", L.costDay, "daily.cost.value", "daily.cost.unit", null)}
         ${chip("blue", "home", L.selfConsumption, "system.self_consumption", "")}
         ${chip("muted", "clock", L.lastUpdate, "system.updated_at", "")}
       </div>

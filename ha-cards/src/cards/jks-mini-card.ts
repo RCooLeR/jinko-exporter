@@ -1,6 +1,7 @@
 import desktopLayout from "../../assets/overview/desktop_layout_spec.json";
 import mobileLayout from "../../assets/overview/mobile_layout_spec.json";
 import { setClassNameIfChanged, setHiddenIfChanged, setStyleIfChanged, setTextContentIfChanged } from "../lib/dom";
+import { calculateDailyGridBalanceUAH } from "../lib/energy-tariff";
 import { clamp, first, formatEnergy, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber, sum } from "../lib/format";
 import { ENTITY_KEYS, resolveEntities, valueFor, type EntityKey, type EntityOverrides, type ResolvedEntityMap } from "../lib/entity-model";
 import { MINI_CARD_POSITIONS, type PositionBoxModel, type PositionMode } from "../lib/position-models";
@@ -491,18 +492,9 @@ class JksMiniCard extends HTMLElement {
   }
 
   private _formatCosts(buyToday: number | null, sellToday: number | null): string {
-    if (!isFiniteNumber(buyToday) && !isFiniteNumber(sellToday)) {
-      return "--";
-    }
-
-    const buy = buyToday ?? 0;
-    const sell = sellToday ?? 0;
-
-    if (sell > buy) {
-      return `${formatNumber((sell - buy) * 6.515, 1).replace(".", ",")}\u20B4`;
-    }
-
-    return `-${formatNumber((buy - sell) * 4.32, 1).replace(".", ",")}\u20B4`;
+    const balance = calculateDailyGridBalanceUAH(buyToday, sellToday);
+    if (!isFiniteNumber(balance)) return "--";
+    return `${balance > 0 ? "+" : ""}${formatNumber(balance, 2).replace(".", ",")}\u20B4`;
   }
 
   private _applyTextBox(
