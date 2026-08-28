@@ -22,9 +22,21 @@ export class HtmlCardRenderer {
   private flowScaleObserver?: ResizeObserver;
   private flowScaleCleanup?: () => void;
   private flowLineObserver?: ResizeObserver;
+  private connected = false;
 
   constructor(root: ShadowRoot) {
     this.root = root;
+  }
+
+  connect(): void {
+    if (this.connected) return;
+    this.connected = true;
+    this.setupLayoutObservers();
+  }
+
+  disconnect(): void {
+    this.connected = false;
+    this.cleanupLayoutObservers();
   }
 
   render(variant: EnergyCardVariant, state: HtmlRenderState): void {
@@ -42,12 +54,7 @@ export class HtmlCardRenderer {
       return;
     }
 
-    this.flowScaleObserver?.disconnect();
-    this.flowScaleObserver = undefined;
-    this.flowScaleCleanup?.();
-    this.flowScaleCleanup = undefined;
-    this.flowLineObserver?.disconnect();
-    this.flowLineObserver = undefined;
+    this.cleanupLayoutObservers();
     this.root.replaceChildren();
     this.styleEl = document.createElement("style");
     this.styleEl.textContent = styles();
@@ -75,8 +82,23 @@ export class HtmlCardRenderer {
     card.append(shell);
     this.root.append(this.styleEl, card);
     this.renderedVariant = variant;
-    this.setupFlowScaling(variant);
+    this.setupLayoutObservers();
+  }
+
+  private setupLayoutObservers(): void {
+    if (!this.connected || !this.renderedVariant || !this.dashboardEl) return;
+    this.cleanupLayoutObservers();
+    this.setupFlowScaling(this.renderedVariant);
     this.setupFlowLinePositioning();
+  }
+
+  private cleanupLayoutObservers(): void {
+    this.flowScaleObserver?.disconnect();
+    this.flowScaleObserver = undefined;
+    this.flowScaleCleanup?.();
+    this.flowScaleCleanup = undefined;
+    this.flowLineObserver?.disconnect();
+    this.flowLineObserver = undefined;
   }
 
   private setupFlowScaling(variant: EnergyCardVariant): void {

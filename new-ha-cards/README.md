@@ -2,6 +2,8 @@
 
 New implementation for the redesigned JinkoBridge Lovelace cards.
 
+This bundle and the stable bundle under `ha-cards/` register the same custom-element names. Install exactly one of them in Home Assistant; they are release alternatives, not additive resources.
+
 ## Cards
 
 - `custom:jks-detailed` renders the full desktop/mobile topology card.
@@ -54,17 +56,26 @@ Final visual tuning lives in one place:
 
 The renderer contains the card markup and CSS grid rules. Data formatting stays separate in `src/lib/energy-view-model.ts`, so visual tuning does not disturb Home Assistant entity logic.
 
+The renderer also follows the custom element lifecycle: resize observers and window/media-query listeners are released when a card is detached and restored once when it reconnects. This keeps dashboard navigation and editor previews from accumulating background handlers.
+
+## Toolchain
+
+- Node.js `^24.12.0`; the repository pins Node.js 24.20.0 in `.node-version`.
+- npm 11.19.0 with reproducible installs from `package-lock.json`.
+- TypeScript 7 with strict, erasable-syntax, unchecked-index, and side-effect-import checks.
+- Vite 8 producing an ES module for the Baseline Widely Available browser target.
+
+The development server forwards browser console output to the terminal. Production builds target Vite's browser baseline and omit the unused public asset directory.
+
 ## Development
 
 ```shell
-npm install
-npm run dev
-npm run build
+npm ci
+npm run check
 ```
 
-If local npm is unavailable, this repo can still be checked with the parent package toolchain:
+`npm run check` runs tests, checks both browser and tooling TypeScript sources, and creates the production bundle. For interactive work, start the development server with:
 
 ```shell
-node ..\ha-cards\node_modules\typescript\bin\tsc --noEmit -p tsconfig.json
-node ..\ha-cards\node_modules\vite\bin\vite.js build
+npm run dev
 ```

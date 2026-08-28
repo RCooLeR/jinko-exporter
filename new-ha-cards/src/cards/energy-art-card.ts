@@ -69,10 +69,13 @@ export abstract class EnergyArtCard extends HTMLElement {
   }
 
   connectedCallback(): void {
+    this.renderer.connect();
     this.render();
   }
 
-  disconnectedCallback(): void {}
+  disconnectedCallback(): void {
+    this.renderer.disconnect();
+  }
 
   getCardSize(): number {
     return this.defaultCardSize;
