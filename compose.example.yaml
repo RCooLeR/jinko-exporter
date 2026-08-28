@@ -1,8 +1,10 @@
 services:
   jinko_bridge:
-    image: rcooler/jinko_exporter:latest
+    # Override the full image reference with a released tag or digest in production.
+    image: ${JINKO_EXPORTER_IMAGE:-rcooler/jinko_exporter:1.0.3}
     container_name: jinko_bridge
     restart: unless-stopped
+    user: "65532:65532"
     # The bridge may finish one already-started, bounded OAuth token rotation
     # before exiting so a consumed refresh token is never abandoned mid-write.
     stop_grace_period: 40s
@@ -10,7 +12,7 @@ services:
       - "9876:9876"
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
     # Token refresh state needs a dedicated writable mount when enabled:
     # volumes:
     #   - ./state:/var/lib/jinko-bridge
@@ -18,6 +20,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       EXPORTER_SOURCE: "jinko"
       EXPORTER_LISTEN: ":9876"
