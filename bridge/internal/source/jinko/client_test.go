@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/alert"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/config"
+	"github.com/RCooLeR/jinko-exporter/bridge/internal/model"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -1777,10 +1779,7 @@ func TestDetailDoesNotFollowRedirect(t *testing.T) {
 }
 
 func TestFetchRetriesServerErrors(t *testing.T) {
-	fixture, err := os.ReadFile("../../../testdata/jinko_detail_response.json")
-	if err != nil {
-		t.Fatalf("ReadFile fixture error = %v", err)
-	}
+	fixture := readDetailFixture(t)
 
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1836,6 +1835,121 @@ func TestFetchRejectsResponseWithoutDeviceSerial(t *testing.T) {
 	_, err := New(testJinkoConfig(server.URL), nil).Fetch(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "category=empty-device-serial") {
 		t.Fatalf("Fetch() error = %v, want missing device serial error", err)
+	}
+}
+
+func TestFetchRejectsUnusableCollectionTimeWithoutRetryingOrRefreshing(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		timestamp string
+		wantError error
+		category  string
+	}{
+		{name: "missing", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "null", timestamp: "null", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "zero", timestamp: "0", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "negative", timestamp: "-1", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "out of range", timestamp: "1e99", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "offline cache", timestamp: strconv.FormatInt(now.Add(-48*time.Hour).Unix(), 10), wantError: model.ErrStaleCollectionTime, category: "stale-data"},
+		{name: "future", timestamp: strconv.FormatInt(now.Add(5*time.Minute).Unix(), 10), wantError: model.ErrFutureCollectionTime, category: "future-collection-time"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(readDetailFixture(t), &payload); err != nil {
+				t.Fatal(err)
+			}
+			delete(payload, "collectionTime")
+			if tt.timestamp != "" {
+				payload["collectionTime"] = json.RawMessage(tt.timestamp)
+			}
+			fixture, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var detailCalls, refreshCalls, persistenceCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/detail" {
+					refreshCalls.Add(1)
+					http.Error(w, "unexpected refresh", http.StatusInternalServerError)
+					return
+				}
+				detailCalls.Add(1)
+				_, _ = w.Write(fixture)
+			}))
+			defer server.Close()
+			cfg := refreshJinkoConfig(t, server.URL, testJWT(t, now.Add(2*time.Hour), "valid-access"))
+			client := New(cfg, nil)
+			client.persistState = func(string, tokenState) error {
+				persistenceCalls.Add(1)
+				return nil
+			}
+			snapshot, err := client.Fetch(t.Context())
+			if snapshot != nil || !errors.Is(err, tt.wantError) || !strings.Contains(err.Error(), "category="+tt.category) {
+				t.Fatalf("Fetch() = %#v, %v; want no snapshot and %v", snapshot, err, tt.wantError)
+			}
+			if detailCalls.Load() != 1 || refreshCalls.Load() != 0 || persistenceCalls.Load() != 0 {
+				t.Fatalf("calls = detail %d, refresh %d, persistence %d; want 1, 0, 0", detailCalls.Load(), refreshCalls.Load(), persistenceCalls.Load())
+			}
+			if client.tokenVersion != 1 || client.bearerToken != cfg.BearerToken || client.refreshToken != cfg.RefreshToken {
+				t.Fatal("telemetry rejection changed the credential pair")
+			}
+		})
+	}
+}
+
+func TestFetchRecoversFromStaleCacheAndPreservesCollectionTime(t *testing.T) {
+	collectedAt := time.Now().Add(-3 * time.Minute).Truncate(time.Second)
+	var calls atomic.Int32
+	fixture := readDetailFixture(t)
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(fixture, &payload); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		timestamp := collectedAt
+		if calls.Add(1) == 1 {
+			timestamp = timestamp.Add(-48 * time.Hour)
+		}
+		payload["collectionTime"] = json.RawMessage(strconv.FormatInt(timestamp.Unix(), 10))
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+	client := New(testJinkoConfig(server.URL), nil)
+	if snapshot, err := client.Fetch(t.Context()); snapshot != nil || !errors.Is(err, model.ErrStaleCollectionTime) {
+		t.Fatalf("first Fetch() = %#v, %v; want stale cache rejected", snapshot, err)
+	}
+	snapshot, err := client.Fetch(t.Context())
+	if err != nil {
+		t.Fatalf("fresh Fetch() error = %v", err)
+	}
+	if !snapshot.CollectedAt.Equal(collectedAt) || snapshot.Source != "jinko" || len(snapshot.Metrics) == 0 {
+		t.Fatalf("fresh snapshot = %#v; want original collection time %s and metrics", snapshot, collectedAt)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("detail calls = %d, want one per Fetch", calls.Load())
+	}
+}
+
+func TestFetchUsesConfiguredMaxDataAge(t *testing.T) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(readDetailFixture(t), &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["collectionTime"] = json.RawMessage(strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+	cfg := testJinkoConfig(server.URL)
+	cfg.MaxDataAge = 5 * time.Minute
+	if snapshot, err := New(cfg, nil).Fetch(t.Context()); snapshot != nil || !errors.Is(err, model.ErrStaleCollectionTime) {
+		t.Fatalf("Fetch() = %#v, %v; want configured freshness limit enforced", snapshot, err)
+	}
+	cfg.MaxDataAge = 20 * time.Minute
+	if _, err := New(cfg, nil).Fetch(t.Context()); err != nil {
+		t.Fatalf("Fetch() error = %v, want snapshot accepted within configured limit", err)
 	}
 }
 
@@ -2005,6 +2119,15 @@ func readDetailFixture(t *testing.T) []byte {
 	fixture, err := os.ReadFile("../../../testdata/jinko_detail_response.json")
 	if err != nil {
 		t.Fatalf("ReadFile fixture error = %v", err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(fixture, &payload); err != nil {
+		t.Fatalf("decode fixture error = %v", err)
+	}
+	payload["collectionTime"] = json.RawMessage(strconv.FormatInt(time.Now().Unix(), 10))
+	fixture, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("encode fresh fixture error = %v", err)
 	}
 	return fixture
 }

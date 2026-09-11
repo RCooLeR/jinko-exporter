@@ -37,6 +37,9 @@ services:
       JINKO_DEVICE_ID: "100000001"
       JINKO_SITE_ID: "200000001"
       JINKO_BEARER_TOKEN_FILE: "/run/secrets/jinko_bearer_token"
+      # Maximum age of cloud readings, measured from upstream collectionTime.
+      # JINKO_MAX_DATA_AGE: "15m"
+      # SOLARMAN_MAX_DATA_AGE: "15m"
       # Automatic refresh can use the initial bearer above together with:
       # JINKO_REFRESH_TOKEN_FILE: "/run/secrets/jinko_refresh_token"
       # JINKO_TOKEN_STATE_FILE: "/var/lib/jinko-bridge/jinko-token-state.json"

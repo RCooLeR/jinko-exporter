@@ -72,6 +72,7 @@ func TestReadResponseBodyRejectsOversizedBody(t *testing.T) {
 
 func TestFetchWithDeviceSNObtainsTokenAndParsesCurrentData(t *testing.T) {
 	var tokenRequest map[string]string
+	collectedAt := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/account/v1.0/token":
@@ -89,13 +90,15 @@ func TestFetchWithDeviceSNObtainsTokenAndParsesCurrentData(t *testing.T) {
 			if r.URL.Query().Get("appId") != "app-id" || r.URL.Query().Get("language") != "en" {
 				t.Fatalf("currentData query = %s, want appId/language", r.URL.RawQuery)
 			}
-			_, _ = w.Write([]byte(`{
+			_, _ = fmt.Fprintf(w, `{
 				"success": true,
+				"deviceState": 1,
+				"collectionTime": %d,
 				"dataList": [
 					{"key": "DP1", "name": "DC Power PV1", "unit": "W", "value": 321},
-					{"key": "BMS_SOC", "name": "BMS_SOC", "unit": "%", "value": "88.5"}
+					{"key": "BMS_SOC", "name": "BMS_SOC", "unit": "%%", "value": "88.5"}
 				]
-			}`))
+			}`, collectedAt.Unix())
 		default:
 			http.NotFound(w, r)
 		}
@@ -113,6 +116,9 @@ func TestFetchWithDeviceSNObtainsTokenAndParsesCurrentData(t *testing.T) {
 	}
 	if snapshot.Source != "solarman" || snapshot.DeviceSN != "DEVICE_SN" {
 		t.Fatalf("snapshot source/device = %q/%q", snapshot.Source, snapshot.DeviceSN)
+	}
+	if !snapshot.CollectedAt.Equal(collectedAt) {
+		t.Fatalf("snapshot.CollectedAt = %s, want cloud measurement time %s", snapshot.CollectedAt, collectedAt)
 	}
 	if snapshot.ParentSN != "" || snapshot.DeviceID != "" || snapshot.SiteID != "" {
 		t.Fatalf("optional identity = parent %q device %q site %q, want empty", snapshot.ParentSN, snapshot.DeviceID, snapshot.SiteID)
@@ -141,7 +147,7 @@ func TestFetchDiscoversDeviceSNFromDeviceListItems(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&currentDataRequest); err != nil {
 				t.Fatalf("decode currentData body: %v", err)
 			}
-			_, _ = w.Write([]byte(`{"success":true,"dataList":[{"key":"DP1","name":"DC Power PV1","unit":"W","value":123}]}`))
+			writeCurrentDataFixture(w, `[{"key":"DP1","name":"DC Power PV1","unit":"W","value":123}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -176,7 +182,7 @@ func TestFetchRetriesTransientSolarmanError(t *testing.T) {
 				http.Error(w, "temporary failure", http.StatusBadGateway)
 				return
 			}
-			_, _ = w.Write([]byte(`{"success":true,"dataList":[{"key":"DP1","name":"DC Power PV1","unit":"W","value":456}]}`))
+			writeCurrentDataFixture(w, `[{"key":"DP1","name":"DC Power PV1","unit":"W","value":456}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -202,7 +208,7 @@ func TestFetchRejectsMetriclessCurrentData(t *testing.T) {
 		case "/account/v1.0/token":
 			_, _ = w.Write([]byte(`{"success":true,"access_token":"access-token","token_type":"Bearer","expires_in":"3600"}`))
 		case "/device/v1.0/currentData":
-			_, _ = w.Write([]byte(`{"success":true,"dataList":[{"key":"DP1","value":"NaN"}]}`))
+			writeCurrentDataFixture(w, `[{"key":"DP1","value":"NaN"}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -553,6 +559,24 @@ func TestCurrentDataFailuresNeverExposeSensitiveText(t *testing.T) {
 			body:         fmt.Sprintf(`{"success":true,"dataList":[],"msg":%q`, upstreamMessage+" "+testRefreshSecret),
 			wantCategory: "decode",
 		},
+		{
+			name:         "malformed collection time",
+			status:       http.StatusOK,
+			body:         fmt.Sprintf(`{"success":true,"deviceState":1,"collectionTime":%q}`, upstreamMessage+" "+testDeviceSecret),
+			wantCategory: "decode",
+		},
+		{
+			name:         "offline cached response",
+			status:       http.StatusOK,
+			body:         fmt.Sprintf(`{"success":true,"deviceState":3,"collectionTime":%d,"msg":%q}`, time.Now().Unix(), upstreamMessage+" "+testDeviceSecret),
+			wantCategory: "device-offline",
+		},
+		{
+			name:         "stale cached response",
+			status:       http.StatusOK,
+			body:         fmt.Sprintf(`{"success":true,"deviceState":1,"collectionTime":%d,"msg":%q}`, time.Now().Add(-48*time.Hour).Unix(), upstreamMessage+" "+testDeviceSecret),
+			wantCategory: "stale-data",
+		},
 	}
 
 	for _, tt := range tests {
@@ -625,7 +649,7 @@ func TestDiscoveryLogsNeverExposeStationOrDeviceIdentity(t *testing.T) {
 		case "/station/v1.0/device":
 			_, _ = fmt.Fprintf(w, `{"deviceListItems":[{"deviceSn":%q}]}`, deviceSN)
 		case "/device/v1.0/currentData":
-			_, _ = w.Write([]byte(`{"success":true,"dataList":[{"key":"DP1","name":"PV1","unit":"W","value":12}]}`))
+			writeCurrentDataFixture(w, `[{"key":"DP1","name":"PV1","unit":"W","value":12}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -761,4 +785,8 @@ func testSolarmanConfig(baseURL string) config.SolarmanConfig {
 		PasswordSHA256: "password-sha",
 		DeviceSN:       "DEVICE_SN",
 	}
+}
+
+func writeCurrentDataFixture(w http.ResponseWriter, points string) {
+	_, _ = fmt.Fprintf(w, `{"success":true,"deviceState":1,"collectionTime":%d,"dataList":%s}`, time.Now().Unix(), points)
 }

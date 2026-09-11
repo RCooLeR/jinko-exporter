@@ -4,6 +4,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/buildinfo"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/poller"
@@ -19,6 +20,7 @@ type Collector struct {
 	pollSuccessDesc     *prometheus.Desc
 	pollCountDesc       *prometheus.Desc
 	lastUpdateDesc      *prometheus.Desc
+	dataAgeDesc         *prometheus.Desc
 	lastPollSuccessDesc *prometheus.Desc
 	lastSourceSyncDesc  *prometheus.Desc
 	pollDurationDesc    *prometheus.Desc
@@ -71,6 +73,12 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Col
 			deviceLabels,
 			nil,
 		),
+		dataAgeDesc: prometheus.NewDesc(
+			prefix+"_data_age_seconds",
+			"Age in seconds of the last accepted upstream collection timestamp, including while the device is unavailable.",
+			deviceLabels,
+			nil,
+		),
 		lastPollSuccessDesc: prometheus.NewDesc(
 			prefix+"_last_poll_success_timestamp_seconds",
 			"Unix timestamp when the exporter last completed a successful poll.",
@@ -110,6 +118,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.pollSuccessDesc
 	ch <- c.pollCountDesc
 	ch <- c.lastUpdateDesc
+	ch <- c.dataAgeDesc
 	ch <- c.lastPollSuccessDesc
 	ch <- c.lastSourceSyncDesc
 	ch <- c.pollDurationDesc
@@ -146,6 +155,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	if !status.LastSourceSuccessAt.IsZero() {
 		syncTimestamp := float64(status.LastSourceSuccessAt.Unix())
 		ch <- prometheus.MustNewConstMetric(c.lastUpdateDesc, prometheus.GaugeValue, syncTimestamp, c.deviceLabelValues(sourceName, deviceSN)...)
+		ch <- prometheus.MustNewConstMetric(c.dataAgeDesc, prometheus.GaugeValue, max(0, time.Since(status.LastSourceSuccessAt).Seconds()), c.deviceLabelValues(sourceName, deviceSN)...)
 		ch <- prometheus.MustNewConstMetric(c.lastSourceSyncDesc, prometheus.GaugeValue, syncTimestamp, sourceName)
 	}
 	if !status.LastPollSuccessAt.IsZero() {

@@ -66,9 +66,12 @@ func ParseDetailResponse(raw []byte) (*model.Snapshot, error) {
 		}
 	}
 
-	collectedAt := time.Now().UTC()
-	if payload.CollectionTime > 0 {
-		collectedAt = time.Unix(int64(payload.CollectionTime), 0).UTC()
+	// The API can return cached values while a device is offline. Missing or
+	// invalid collection times must not turn that cache into a fresh snapshot.
+	var collectedAt time.Time
+	if payload.CollectionTime > 0 && payload.CollectionTime < float64(math.MaxInt64) {
+		seconds, fraction := math.Modf(payload.CollectionTime)
+		collectedAt = time.Unix(int64(seconds), int64(fraction*float64(time.Second))).UTC()
 	}
 
 	return &model.Snapshot{

@@ -54,6 +54,10 @@ The Jinko parser reads:
 
 For each field, the bridge prefers `orgValue`, falls back to `value`, parses the result as a number, and skips the field when parsing fails.
 
+`collected_at` is the upstream `collectionTime`, never the time an HTTP response
+arrived. Missing or invalid timestamps are rejected. Jinko fetches reject data
+older than `JINKO_MAX_DATA_AGE` (default `15m`) or over one minute in the future.
+
 Jinko metric keys are normalized this way:
 
 - `storageName` is preferred as the metric `key`.
@@ -68,6 +72,23 @@ The Solarman parser reads `dataList` from `/device/v1.0/currentData` and accepts
 - name: `name`, `dataName`, `title`, or `paramName`
 - unit: `unit` or `dataUnit`
 - value: `value` or `val`
+
+The response must include a successful result, `collectionTime` as Unix seconds,
+and `deviceState`. Online (`1`) and alarm (`2`) data can be accepted; offline (`3`),
+missing, or unknown states are rejected. The bridge preserves `collectionTime`
+as `collected_at` and rejects timestamps older than `SOLARMAN_MAX_DATA_AGE`
+(default `15m`), missing/invalid timestamps, or timestamps over one minute in the
+future. These fields are defined by the [Solarman currentData API](https://doc.solarmanpv.com/en/Device%20interface/3.3Real-time%20device%20data).
+
+A successful HTTP response can contain the last cached readings of an inverter
+that has been off for days. Such a response cannot refresh the bridge's last
+successful update or MQTT state. Priority selection tries the next source after
+a rejected snapshot. If every source fails, MQTT publishes `offline`, poll health
+becomes `0`, and readiness fails. Prometheus retains the last accepted readings
+with their original timestamp and an increasing `data_age_seconds`; on a cold
+start with no accepted snapshot, no inverter readings are emitted. Identical
+numeric values alone are not treated as stale: timestamps and device state
+determine validity, so valid zero production at night remains valid.
 
 Solarman groups are inferred from the key and name, but every point recognized by the shared Jinko metric dictionary is always canonicalized to that dictionary's key, group, name, and unit. Unrecognized Solarman-only points remain available in compatibility mode. `SOLARMAN_CANONICAL_JINKO_METRICS=true` is the legacy-named strict-surface switch: it filters those unknown points and keeps only metrics in the shared dictionary. If the option is not set, it defaults to `EXPORTER_METRICS_DROP_SOURCE_LABEL`.
 

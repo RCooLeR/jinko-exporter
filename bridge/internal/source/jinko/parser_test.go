@@ -83,6 +83,32 @@ func TestParseDetailResponseMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestParseDetailResponseDoesNotInventCollectionTime(t *testing.T) {
+	for _, raw := range []string{
+		`{}`,
+		`{"collectionTime":null}`,
+		`{"collectionTime":0}`,
+		`{"collectionTime":-1}`,
+		`{"collectionTime":1e99}`,
+	} {
+		snapshot, err := ParseDetailResponse([]byte(raw))
+		if err != nil || !snapshot.CollectedAt.IsZero() {
+			t.Fatalf("ParseDetailResponse(%s) = %#v, %v; want missing collection time", raw, snapshot, err)
+		}
+	}
+}
+
+func TestParseDetailResponsePreservesFractionalCollectionTime(t *testing.T) {
+	snapshot, err := ParseDetailResponse([]byte(`{"collectionTime":1775145150.25}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Unix(1775145150, int64(250*time.Millisecond))
+	if !snapshot.CollectedAt.Equal(want) {
+		t.Fatalf("CollectedAt = %s, want %s", snapshot.CollectedAt, want)
+	}
+}
+
 func TestParseNumberHandlesCommonSeparators(t *testing.T) {
 	tests := map[string]float64{
 		"1,25":     1.25,

@@ -28,6 +28,7 @@ After a primary surface has been learned, a projected fallback must retain at le
 | --- | --- | --- | --- | --- |
 | `JINKO_URL` | `--jinko-url` | Jinko detail endpoint | No | Absolute HTTPS detail API URL without embedded user information. |
 | `JINKO_TIMEOUT` | `--jinko-timeout` | `20s` | No | HTTP timeout. |
+| `JINKO_MAX_DATA_AGE` | `--jinko-max-data-age` | `15m` | No | Positive maximum age of upstream `collectionTime`. Older, missing, invalid, or more than one minute future-dated timestamps fail the source fetch. |
 | `JINKO_INSECURE_SKIP_VERIFY` | `--jinko-insecure-skip-verify` | `false` | No | Skip TLS verification for Jinko HTTPS requests. |
 | `JINKO_RETRY_ATTEMPTS` | `--jinko-retry-attempts` | `3` | No | Attempts for transient Jinko detail-endpoint errors. Rotating OAuth requests are never replayed. |
 | `JINKO_RETRY_BACKOFF` | `--jinko-retry-backoff` | `2s` | No | Initial detail-endpoint retry delay; OAuth and token-state durability do not use this retry policy. |
@@ -71,6 +72,7 @@ The token-state file contains credentials and transaction state. Store it outsid
 | `SOLARMAN_API_VERSION` | `--solarman-api-version` | `v1.0` | No | Single safe API-version path segment using letters, digits, `.`, `_`, or `-`; path traversal and URL delimiters are rejected. |
 | `SOLARMAN_LANGUAGE` | `--solarman-language` | `en` | No | Request language. |
 | `SOLARMAN_TIMEOUT` | `--solarman-timeout` | `20s` | No | Positive overall HTTP timeout. |
+| `SOLARMAN_MAX_DATA_AGE` | `--solarman-max-data-age` | `15m` | No | Positive maximum age of upstream `collectionTime`. Solarman also requires `deviceState` to be online (`1`) or alarm (`2`); offline (`3`), missing, or unknown states fail the source fetch. |
 | `SOLARMAN_INSECURE_SKIP_VERIFY` | `--solarman-insecure-skip-verify` | `false` | No | Skip TLS verification for Solarman HTTPS requests. |
 | `SOLARMAN_CANONICAL_JINKO_METRICS` | `--solarman-canonical-jinko-metrics` | value of `metrics-drop-source-label` | No | Limit Solarman output to the shared Jinko metric dictionary by filtering unknown Solarman-only points. Recognized points are always canonicalized regardless of this flag. |
 | `SOLARMAN_YEARLY_REQUEST_LIMIT` | `--solarman-yearly-request-limit` | `0` | No | Request pacing budget. `0` disables pacing. |

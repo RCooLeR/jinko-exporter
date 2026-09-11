@@ -137,6 +137,7 @@ type JinkoConfig struct {
 	URL                string
 	TokenURL           string
 	Timeout            time.Duration
+	MaxDataAge         time.Duration
 	InsecureSkipVerify bool
 	RetryAttempts      int
 	RetryBackoff       time.Duration
@@ -163,6 +164,7 @@ type SolarmanConfig struct {
 	APIVersion               string
 	Language                 string
 	Timeout                  time.Duration
+	MaxDataAge               time.Duration
 	InsecureSkipVerify       bool
 	CanonicalJinkoMetrics    bool
 	YearlyRequestLimit       int
@@ -251,6 +253,7 @@ func Flags() []cli.Flag {
 
 		&cli.StringFlag{Name: "jinko-url", Value: "https://smart-global.jinkosolar.com/device-s/device/v3/detail", Usage: "Jinko detail endpoint", Sources: cli.EnvVars("JINKO_URL")},
 		&cli.DurationFlag{Name: "jinko-timeout", Value: 20 * time.Second, Usage: "Jinko HTTP timeout", Sources: cli.EnvVars("JINKO_TIMEOUT")},
+		&cli.DurationFlag{Name: "jinko-max-data-age", Value: 15 * time.Minute, Usage: "Maximum age of the upstream Jinko collectionTime; must be positive", Sources: cli.EnvVars("JINKO_MAX_DATA_AGE")},
 		&cli.BoolFlag{Name: "jinko-insecure-skip-verify", Value: false, Usage: "Skip TLS certificate verification for Jinko HTTPS requests; insecure", Sources: cli.EnvVars("JINKO_INSECURE_SKIP_VERIFY")},
 		&cli.IntFlag{Name: "jinko-retry-attempts", Value: 3, Usage: "Maximum Jinko detail-endpoint attempts for transient errors; rotating OAuth requests are never replayed", Sources: cli.EnvVars("JINKO_RETRY_ATTEMPTS")},
 		&cli.DurationFlag{Name: "jinko-retry-backoff", Value: 2 * time.Second, Usage: "Initial delay between Jinko detail-endpoint retry attempts", Sources: cli.EnvVars("JINKO_RETRY_BACKOFF")},
@@ -278,6 +281,7 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "solarman-api-version", Value: "v1.0", Usage: "Solarman OpenAPI version", Sources: cli.EnvVars("SOLARMAN_API_VERSION")},
 		&cli.StringFlag{Name: "solarman-language", Value: "en", Usage: "Solarman request language", Sources: cli.EnvVars("SOLARMAN_LANGUAGE")},
 		&cli.DurationFlag{Name: "solarman-timeout", Value: 20 * time.Second, Usage: "Solarman HTTP timeout", Sources: cli.EnvVars("SOLARMAN_TIMEOUT")},
+		&cli.DurationFlag{Name: "solarman-max-data-age", Value: 15 * time.Minute, Usage: "Maximum age of the upstream Solarman collectionTime; must be positive", Sources: cli.EnvVars("SOLARMAN_MAX_DATA_AGE")},
 		&cli.BoolFlag{Name: "solarman-insecure-skip-verify", Value: false, Usage: "Skip TLS certificate verification for Solarman HTTPS requests; insecure", Sources: cli.EnvVars("SOLARMAN_INSECURE_SKIP_VERIFY")},
 		&cli.BoolFlag{Name: "solarman-canonical-jinko-metrics", Value: false, Usage: "Limit Solarman output to the shared Jinko metric dictionary; known points are always canonicalized and this defaults to metrics-drop-source-label when unset", Sources: cli.EnvVars("SOLARMAN_CANONICAL_JINKO_METRICS")},
 		&cli.IntFlag{Name: "solarman-yearly-request-limit", Value: 0, Usage: "Solarman yearly API request limit used to pace requests; 0 disables pacing", Sources: cli.EnvVars("SOLARMAN_YEARLY_REQUEST_LIMIT")},
@@ -415,6 +419,7 @@ func FromCLI(c *cli.Command) (Config, error) {
 			URL:                c.String("jinko-url"),
 			TokenURL:           strings.TrimSpace(c.String("jinko-token-url")),
 			Timeout:            c.Duration("jinko-timeout"),
+			MaxDataAge:         c.Duration("jinko-max-data-age"),
 			InsecureSkipVerify: c.Bool("jinko-insecure-skip-verify"),
 			RetryAttempts:      c.Int("jinko-retry-attempts"),
 			RetryBackoff:       c.Duration("jinko-retry-backoff"),
@@ -440,6 +445,7 @@ func FromCLI(c *cli.Command) (Config, error) {
 			APIVersion:               c.String("solarman-api-version"),
 			Language:                 c.String("solarman-language"),
 			Timeout:                  c.Duration("solarman-timeout"),
+			MaxDataAge:               c.Duration("solarman-max-data-age"),
 			InsecureSkipVerify:       c.Bool("solarman-insecure-skip-verify"),
 			CanonicalJinkoMetrics:    boolWithLegacyDefault(c, "solarman-canonical-jinko-metrics", dropSourceLabel),
 			YearlyRequestLimit:       c.Int("solarman-yearly-request-limit"),
@@ -936,6 +942,9 @@ func validateSourceConfig(cfg Config, sourceName string) error {
 		if cfg.Jinko.Timeout <= 0 {
 			return fmt.Errorf("jinko-timeout must be > 0")
 		}
+		if cfg.Jinko.MaxDataAge <= 0 {
+			return fmt.Errorf("jinko-max-data-age must be > 0")
+		}
 		if err := validateSecureJinkoURL(cfg.Jinko.URL); err != nil {
 			return err
 		}
@@ -997,6 +1006,9 @@ func validateSourceConfig(cfg Config, sourceName string) error {
 	case "solarman":
 		if cfg.Solarman.Timeout <= 0 {
 			return fmt.Errorf("solarman-timeout must be > 0")
+		}
+		if cfg.Solarman.MaxDataAge <= 0 {
+			return fmt.Errorf("solarman-max-data-age must be > 0")
 		}
 		if err := validateSecureSolarmanBaseURL(cfg.Solarman.BaseURL); err != nil {
 			return err

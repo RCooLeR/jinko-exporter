@@ -396,6 +396,16 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	if strings.TrimSpace(snapshot.DeviceSN) == "" {
 		return nil, newRequestFailure("detail", status, "empty-device-serial", nil)
 	}
+	if err := model.ValidateCollectionTime(snapshot.CollectedAt, time.Now(), c.cfg.MaxDataAge); err != nil {
+		category := "invalid-collection-time"
+		switch {
+		case errors.Is(err, model.ErrStaleCollectionTime):
+			category = "stale-data"
+		case errors.Is(err, model.ErrFutureCollectionTime):
+			category = "future-collection-time"
+		}
+		return nil, newRequestFailure("detail", status, category, err)
+	}
 	if err := c.persistPendingTokenState(ctx); err != nil {
 		c.alertRefreshFailure(ctx, "durability")
 		return nil, fmt.Errorf("jinko token state became undurable during detail fetch: %w", err)

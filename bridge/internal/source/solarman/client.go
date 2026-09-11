@@ -149,6 +149,13 @@ type device struct {
 	DeviceSN string `json:"deviceSn"`
 }
 
+type currentDataResponse struct {
+	Success        bool   `json:"success"`
+	CollectionTime *int64 `json:"collectionTime"`
+	DeviceState    *int   `json:"deviceState"`
+	DataList       []any  `json:"dataList"`
+}
+
 func New(cfg config.SolarmanConfig, alerts *alert.Manager) *Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if cfg.InsecureSkipVerify {
@@ -197,22 +204,50 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, err
 	}
 
-	var payload map[string]any
+	var payload currentDataResponse
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		failure := newRequestFailure("currentData", status, "decode", err)
 		log.Error().Err(failure).Str("source", c.Name()).Msg("failed to decode Solarman currentData response")
 		c.notifyFailure(ctx, "currentData-decode", failure)
 		return nil, failure
 	}
-	if success, ok := payload["success"].(bool); ok && !success {
+	if !payload.Success {
 		err := newRequestFailure("currentData", status, "api-rejected", nil)
 		c.notifyFailure(ctx, "currentData-api-error", err)
 		return nil, err
 	}
 
-	pointsAny, _ := payload["dataList"].([]any)
-	metrics := make([]model.Metric, 0, len(pointsAny))
-	for _, item := range pointsAny {
+	if payload.DeviceState == nil || (*payload.DeviceState != 1 && *payload.DeviceState != 2 && *payload.DeviceState != 3) {
+		err := newRequestFailure("currentData", status, "invalid-device-state", nil)
+		c.notifyFailure(ctx, "currentData-device-state", err)
+		return nil, err
+	}
+	// An alarm is still live telemetry, but offline data remains cached by the
+	// cloud and must never make the inverter appear available.
+	if *payload.DeviceState == 3 {
+		err := newRequestFailure("currentData", status, "device-offline", nil)
+		c.notifyFailure(ctx, "currentData-device-state", err)
+		return nil, err
+	}
+	var collectedAt time.Time
+	if payload.CollectionTime != nil {
+		collectedAt = time.Unix(*payload.CollectionTime, 0).UTC()
+	}
+	if err := model.ValidateCollectionTime(collectedAt, time.Now(), c.cfg.MaxDataAge); err != nil {
+		category := "invalid-collection-time"
+		switch {
+		case errors.Is(err, model.ErrStaleCollectionTime):
+			category = "stale-data"
+		case errors.Is(err, model.ErrFutureCollectionTime):
+			category = "future-collection-time"
+		}
+		failure := newRequestFailure("currentData", status, category, err)
+		c.notifyFailure(ctx, "currentData-freshness", failure)
+		return nil, failure
+	}
+
+	metrics := make([]model.Metric, 0, len(payload.DataList))
+	for _, item := range payload.DataList {
 		entry, ok := item.(map[string]any)
 		if !ok {
 			continue
@@ -242,7 +277,7 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	return &model.Snapshot{
 		Source:      c.Name(),
 		DeviceSN:    deviceSN,
-		CollectedAt: time.Now().UTC(),
+		CollectedAt: collectedAt,
 		Metrics:     metrics,
 		Meta: map[string]string{
 			"base_url": c.cfg.BaseURL,

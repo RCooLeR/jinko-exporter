@@ -343,6 +343,12 @@ Behavior:
 
 - On successful poll, the bridge publishes `online`.
 - On poll failure, the bridge publishes `offline`.
+- An offline Solarman response or a cloud snapshot with an invalid/expired
+  collection timestamp fails that source. If no priority source has valid data,
+  the bridge publishes `offline` without writing a new state payload. Historical
+  retained readings remain unavailable, and their `collected_at`/`published_at`
+  are not advanced. Both cloud age limits default to `15m` and are configurable
+  through `JINKO_MAX_DATA_AGE` and `SOLARMAN_MAX_DATA_AGE`.
 - On clean shutdown, the bridge publishes `offline`.
 - The MQTT will message also uses `offline`.
 - After the first successful poll in the current process, a broker reconnect republishes the complete owned Discovery schema and latest state payload, then republishes the last known availability value. Before that first success, broker-retained Discovery configs are left in place and the bridge publishes `offline`; if the latest poll failed, reconnect likewise keeps availability `offline` until a later successful poll.
