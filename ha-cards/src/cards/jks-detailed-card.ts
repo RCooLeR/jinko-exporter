@@ -2,8 +2,9 @@ import desktopLayout from "../../assets/main/desktop_layout_spec.json";
 import mobileLayout from "../../assets/main/mobile_layout_spec.json";
 import { setClassNameIfChanged, setHiddenIfChanged, setStyleIfChanged, setTextContentIfChanged } from "../lib/dom";
 import { calculateDailyGridBalanceUAH } from "../lib/energy-tariff";
-import { average, clamp, first, formatCurrent, formatEnergy, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber, sum } from "../lib/format";
+import { average, clamp, first, formatCurrent, formatEnergy, formatMeasuredPhases, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber, sum } from "../lib/format";
 import { ENTITY_KEYS, resolveEntities, valueFor, type EntityKey, type EntityOverrides, type ResolvedEntityMap } from "../lib/entity-model";
+import { measuredGridLoadFor } from "../lib/grid-load";
 import { DETAILED_CARD_POSITIONS, type CardElementPositionModel, type PositionBoxModel, type PositionMode } from "../lib/position-models";
 import type { HomeAssistant, LovelaceCardConfig } from "../types/home-assistant";
 
@@ -59,6 +60,7 @@ interface MetricGroup {
   power: number | null;
   energyToday: number | null;
   hideEnergyToday?: boolean;
+  measured?: boolean;
   voltagePhases?: Array<number | null>;
   currentPhases?: Array<number | null>;
   powerPhases?: Array<number | null>;
@@ -265,11 +267,7 @@ class JksDetailedCard extends HTMLElement {
       const current = isFiniteNumber(power) && isFiniteNumber(voltage) && voltage !== 0 ? Math.abs(power) / voltage : null;
       return { voltage, current, power };
     });
-    const measuredGridLoadPhases = [1, 2, 3].map((phase) => ({
-      voltage: this._value(`grid_load_l${phase}_voltage` as EntityKey),
-      current: this._value(`grid_load_l${phase}_current` as EntityKey),
-      power: this._value(`grid_load_l${phase}_power` as EntityKey)
-    }));
+    const measuredGridLoad = measuredGridLoadFor((key) => this._value(key));
 
     const inverterPhases = [1, 2, 3].map((phase) => ({
       voltage: this._value(`inverter_l${phase}_voltage` as EntityKey),
@@ -301,17 +299,16 @@ class JksDetailedCard extends HTMLElement {
     const homeBackupPhasePower = sum(homePhases.map((phase) => phase.power));
     const calculatedGridLoadPower =
       isFiniteNumber(homeTotalPower) && isFiniteNumber(homeBackupPhasePower) ? homeTotalPower - homeBackupPhasePower : null;
-    const measuredGridLoadPhasePower = measuredGridLoadPhases.map((phase) => phase.power);
-    const measuredGridLoadPhaseCurrent = measuredGridLoadPhases.map((phase) => phase.current);
-    const measuredGridLoadPhaseVoltage = measuredGridLoadPhases.map((phase, index) => first(phase.voltage, gridPhases[index]?.voltage ?? null));
-    const parallelGridLoadPower = first(this._value("grid_load_total_power"), sum(measuredGridLoadPhasePower), calculatedGridLoadPower);
-    const parallelGridLoadCurrent = first(
-      this._value("grid_load_total_current"),
-      sum(measuredGridLoadPhaseCurrent.map((value) => Math.abs(value ?? 0))),
-      isFiniteNumber(parallelGridLoadPower) && isFiniteNumber(gridAverageVoltage) && gridAverageVoltage !== 0
-        ? Math.abs(parallelGridLoadPower) / gridAverageVoltage
-        : null
-    );
+    const measuredGridLoadPhasePower = measuredGridLoad.powerPhases;
+    const measuredGridLoadPhaseCurrent = measuredGridLoad.currentPhases;
+    const measuredGridLoadPhaseVoltage = measuredGridLoad.available ? measuredGridLoad.voltagePhases : gridPhases.map((phase) => phase.voltage);
+    const parallelGridLoadVoltage = measuredGridLoad.available ? measuredGridLoad.voltage : gridAverageVoltage;
+    const parallelGridLoadPower = measuredGridLoad.available ? measuredGridLoad.power : calculatedGridLoadPower;
+    const parallelGridLoadCurrent = measuredGridLoad.available
+      ? measuredGridLoad.current
+      : isFiniteNumber(parallelGridLoadPower) && isFiniteNumber(parallelGridLoadVoltage) && parallelGridLoadVoltage !== 0
+        ? Math.abs(parallelGridLoadPower) / parallelGridLoadVoltage
+        : null;
     const parallelGridLoadPowerPhases = measuredGridLoadPhasePower.some((value) => isFiniteNumber(value))
       ? measuredGridLoadPhasePower
       : null;
@@ -378,7 +375,7 @@ class JksDetailedCard extends HTMLElement {
       this._isMeaningfulValue(inverterAverageVoltage, VOLTAGE_EPSILON) ||
       this._isMeaningfulValue(inverterFrequency, CURRENT_EPSILON) ||
       this._isMeaningfulValue(upsTotalPower, POWER_EPSILON);
-    const parallelOnline = isFiniteNumber(parallelGridLoadPower) && Math.abs(parallelGridLoadPower) > POWER_EPSILON;
+    const parallelOnline = measuredGridLoad.available || this._isMeaningfulValue(parallelGridLoadPower, POWER_EPSILON);
 
     const missingCritical = MISSING_MAIN_KEYS.filter((key) => {
       if (key === "grid_total_power") {
@@ -458,7 +455,8 @@ class JksDetailedCard extends HTMLElement {
           powerPhases: generatorPhases.map((phase) => phase.power)
         },
         parallel_grid_load: {
-          voltage: gridAverageVoltage,
+          measured: measuredGridLoad.available,
+          voltage: parallelGridLoadVoltage,
           current: parallelGridLoadCurrent,
           power: parallelGridLoadPower,
           energyToday: this._value("home_daily_energy"),
@@ -914,6 +912,9 @@ class JksDetailedCard extends HTMLElement {
   }
 
   private _formatMetricRowValue(rowId: string, group: MetricGroup): string {
+    if (group.measured && (rowId === "voltage" || rowId === "current" || rowId === "power")) {
+      return formatMeasuredPhases(rowId, group[`${rowId}Phases`], group[rowId], this._isMobile);
+    }
     switch (rowId) {
       case "voltage":
         return this._formatPhaseVoltage(group.voltagePhases, group.voltage);

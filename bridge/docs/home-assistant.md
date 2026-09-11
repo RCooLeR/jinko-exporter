@@ -222,7 +222,15 @@ The core local Modbus snapshot now contains 80 metrics before optional enrichmen
 
 ### Shelly Grid Load Sensors
 
-When `SHELLY_GRID_LOAD_ENABLED=true`, the bridge appends Shelly Pro 3EM metrics under the `grid_load` group. These entities are useful for hybrid inverter installations where the inverter only measures backup/UPS load and does not expose grid-side load.
+When `SHELLY_GRID_LOAD_ENABLED=true`, the bridge independently polls Shelly Pro 3EM metrics under the `grid_load` group. These entities remain available while the inverter is off, including after a bridge restart, and keep their existing names, unique IDs, and device binding. `MQTT_DEVICE_ID` must be configured for that stable cold-start identity. These entities are useful for hybrid inverter installations where the inverter only measures backup/UPS load and does not expose grid-side load.
+
+In independent mode the shared JSON payload carries `up`, `collected_at`, and
+`published_at` for the inverter, plus `grid_load_up`, `grid_load_collected_at`,
+and `grid_load_published_at` for Shelly. A new Shelly read never advances the
+inverter's timestamps or marks it online. Each entity checks its own stream's
+availability as well as the shared MQTT availability/LWT. Missing optional
+Shelly points are unavailable, not fabricated zeros; real zero readings remain
+valid. Existing retained Discovery configs are updated on the same topics.
 
 Primary card-facing sensors:
 
@@ -341,19 +349,19 @@ Availability topic:
 
 Behavior:
 
-- On successful poll, the bridge publishes `online`.
-- On poll failure, the bridge publishes `offline`.
+- Without Shelly, a successful inverter poll publishes `online` and a failed poll publishes `offline`.
+- With independent Shelly enabled, the shared availability is `online` when at least one stream has a successful latest poll. Inverter entities additionally require `up=true`; grid-load entities require `grid_load_up=true`. If both streams fail, global availability becomes `offline`.
 - An offline Solarman response or a cloud snapshot with an invalid/expired
   collection timestamp fails that source. If no priority source has valid data,
-  the bridge publishes `offline` without writing a new state payload. Historical
+  and Shelly is disabled, the bridge publishes `offline` without writing a new state payload. Historical
   retained readings remain unavailable, and their `collected_at`/`published_at`
   are not advanced. Both cloud age limits default to `15m` and are configurable
   through `JINKO_MAX_DATA_AGE` and `SOLARMAN_MAX_DATA_AGE`.
 - On clean shutdown, the bridge publishes `offline`.
 - The MQTT will message also uses `offline`.
-- After the first successful poll in the current process, a broker reconnect republishes the complete owned Discovery schema and latest state payload, then republishes the last known availability value. Before that first success, broker-retained Discovery configs are left in place and the bridge publishes `offline`; if the latest poll failed, reconnect likewise keeps availability `offline` until a later successful poll.
+- After the first successful poll in the current process, a broker reconnect republishes the complete owned Discovery schema and latest state payload, then republishes the last known availability value. Without Shelly, before that first success broker-retained configs are left in place and the bridge publishes `offline`. Independent mode can regenerate the persisted schema with both streams unavailable even before either succeeds. Reconnect preserves both stream flags and collection timestamps; it never treats a failed stream as recovered. Failed state/discovery delivery also forces shared availability offline until a later valid publication.
 
-If a source temporarily fails, Home Assistant marks the device entities unavailable until a later successful poll publishes `online` again. Source-scoped alert entities additionally require a matching, known current alert domain on the retained state topic. Switching from Modbus to Jinko therefore makes the Modbus alert entities unavailable and makes only the explicitly reported Jinko alert entities available; switching back reverses that relationship.
+If a stream temporarily fails, Home Assistant marks its entities unavailable until a later successful poll restores that stream. A healthy independent Shelly stream does not restore inverter entities. Source-scoped alert entities additionally require a matching, known current alert domain on the retained state topic. Switching from Modbus to Jinko therefore makes the Modbus alert entities unavailable and makes only the explicitly reported Jinko alert entities available; switching back reverses that relationship.
 
 ## Persistent Discovery Schema
 
@@ -370,11 +378,11 @@ environment:
 This option is optional for backward compatibility and strongly recommended for mixed priority. The first item in `EXPORTER_SOURCE_PRIORITY` is the primary schema source; in single-source mode, `EXPORTER_SOURCE` is primary. The behavior is deliberately asymmetric:
 
 - Ordinary inverter metrics are added only by successful primary snapshots and never removed merely because a later primary response omits one.
-- Dynamic metadata diagnostics follow the same primary-only monotonic rule.
+- Inverter metadata diagnostics follow the same primary-only monotonic rule. Independently polled `shelly_grid_load_*` metadata is learned from Shelly and uses its own availability.
 - A cold fallback remains usable for live state and availability, but fallback-only ordinary metrics do not expand the schema.
 - Warning/alarm/fault entities form a separate source-scoped union so an important fallback alert is not hidden. The typed per-source ownership in the manifest is also used to regenerate entity-scoped availability templates after restart; alert keys shared by several sources are accepted only with identical metric semantics.
-- Shelly `grid_load` entities form a separate enrichment union and become `unknown` when an optional value or complete Shelly read is unavailable.
-- Previously owned ordinary metrics absent from the current snapshot are included as `null`, and every Discovery template is missing-safe. Missing ordinary telemetry remains `unknown`; missing or inactive source-scoped alerts are `unavailable`.
+- Shelly `grid_load` entities form a separate union and become `unavailable` when an optional value or complete Shelly read is unavailable; an inverter failure does not affect their own availability.
+- Previously owned ordinary metrics absent from the current snapshot are included as `null`, and every Discovery template is missing-safe. Missing ordinary telemetry is `unknown` in legacy single-stream mode and `unavailable` in independent mode; missing or inactive source-scoped alerts are `unavailable` in both modes.
 
 The manifest stores a strict ownership binding plus typed ordinary, Shelly, alert, and primary-metadata schemas. The current binary regenerates the exact topics and payloads from that typed state, so template and security fixes also apply to entities learned by an older binary. A missing manifest is created before MQTT connects. An existing manifest is read and validated at startup without being rewritten solely to test writability; keep its parent directory writable by container UID `65532` because a later schema change is committed there as an atomic replacement before the new schema is published. New and atomically replaced manifest files are written with private permissions. A manifest must be used by only one bridge process and must be separate from all secrets and `JINKO_TOKEN_STATE_FILE`.
 

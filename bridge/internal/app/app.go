@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -127,12 +128,23 @@ func runServe(parent context.Context, cfg config.Config) error {
 		return err
 	}
 
-	src, err := buildSource(cfg, alerts)
+	src, err := buildInverterSource(cfg, alerts)
 	if err != nil {
 		return err
 	}
 
-	state := poller.NewState(src.Name())
+	var gridLoadSource source.Source
+	var gridLoadState *poller.State
+	initialSource := src.Name()
+	if cfg.ShellyGridLoad.Enabled {
+		gridLoadSource, err = shelly.NewGridLoadClient(cfg.ShellyGridLoad)
+		if err != nil {
+			return err
+		}
+		gridLoadState = poller.NewState(gridLoadSource.Name())
+		initialSource = cfg.SourcePriority[0]
+	}
+	state := poller.NewState(initialSource)
 
 	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	var maintenanceDone <-chan struct{}
@@ -156,9 +168,21 @@ func runServe(parent context.Context, cfg config.Config) error {
 	}
 
 	runner := poller.NewRunner(src, cfg.PollInterval, state, alerts, cfg.Alerts, observers...)
+	runners := []*poller.Runner{runner}
+	var collectorOptions []prom.Option
+	if gridLoadState != nil {
+		var gridObservers []poller.Observer
+		if mqttPublisher != nil {
+			gridObservers = append(gridObservers, mqttPublisher.GridLoadObserver())
+		}
+		// Shelly is an independent meter. Inverter timeouts, cloud pacing, and
+		// failed cloud freshness checks must never hold up its polling loop.
+		runners = append(runners, poller.NewRunner(gridLoadSource, cfg.PollInterval, gridLoadState, nil, config.AlertConfig{}, gridObservers...))
+		collectorOptions = append(collectorOptions, prom.WithGridLoad(gridLoadState, configuredInverterSerial(cfg)))
+	}
 
 	registry := prometheus.NewRegistry()
-	collector := prom.NewCollector(cfg.MetricPrefix, state, cfg.DropSourceLabel)
+	collector := prom.NewCollector(cfg.MetricPrefix, state, cfg.DropSourceLabel, collectorOptions...)
 	if err := registry.Register(collector); err != nil {
 		return fmt.Errorf("register collector: %w", err)
 	}
@@ -194,12 +218,7 @@ func runServe(parent context.Context, cfg config.Config) error {
 
 	maintenanceDone = startBackgroundMaintenance(ctx, src)
 
-	runnerStopped := make(chan struct{})
-	runnerDone = runnerStopped
-	go func() {
-		defer close(runnerStopped)
-		runner.Run(ctx)
-	}()
+	runnerDone = startPollRunners(ctx, runners...)
 
 	go func() {
 		<-ctx.Done()
@@ -248,6 +267,37 @@ func stopServeWorkers(cancel context.CancelFunc, maintenanceDone, runnerDone <-c
 	if closePublisher != nil {
 		closePublisher()
 	}
+}
+
+func startPollRunners(ctx context.Context, runners ...*poller.Runner) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var workers sync.WaitGroup
+		for _, runner := range runners {
+			workers.Go(func() { runner.Run(ctx) })
+		}
+		workers.Wait()
+	}()
+	return done
+}
+
+// Until the first inverter response, use configured serials to keep the grid
+// meter's historical Prometheus device identity. Never substitute its IP.
+func configuredInverterSerial(cfg config.Config) string {
+	for _, name := range cfg.SourcePriority {
+		var serial string
+		switch name {
+		case "modbus":
+			serial = cfg.Modbus.DeviceSN
+		case "solarman":
+			serial = cfg.Solarman.DeviceSN
+		}
+		if serial = strings.TrimSpace(serial); serial != "" {
+			return serial
+		}
+	}
+	return ""
 }
 
 func startBackgroundMaintenance(ctx context.Context, src source.Source) <-chan struct{} {
@@ -332,6 +382,16 @@ func runHealthcheck(parent context.Context, endpoint string, timeout time.Durati
 }
 
 func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error) {
+	primary, err := buildInverterSource(cfg, alerts)
+	if err != nil {
+		return nil, err
+	}
+	// The one-shot fetch command retains its merged-snapshot contract. Serve
+	// schedules these streams separately and combines them only for display.
+	return enrichSource(primary, cfg)
+}
+
+func buildInverterSource(cfg config.Config, alerts *alert.Manager) (source.Source, error) {
 	sources := make([]source.Source, 0, len(cfg.SourcePriority))
 	for _, sourceName := range cfg.SourcePriority {
 		src, err := buildSingleSource(sourceName, cfg, alerts)
@@ -341,7 +401,7 @@ func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error
 		sources = append(sources, src)
 	}
 	if len(sources) == 1 && !cfg.ModbusAlertCorrelation.Enabled {
-		return enrichSource(sources[0], cfg)
+		return sources[0], nil
 	}
 	priority := source.NewPriority(sources, cfg.ProjectFailoverMetrics)
 	if cfg.ModbusAlertCorrelation.Enabled {
@@ -349,7 +409,7 @@ func buildSource(cfg config.Config, alerts *alert.Manager) (source.Source, error
 			return nil, err
 		}
 	}
-	return enrichSource(priority, cfg)
+	return priority, nil
 }
 
 func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manager) (source.Source, error) {

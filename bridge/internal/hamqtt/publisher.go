@@ -65,6 +65,17 @@ type Publisher struct {
 	// acknowledged by the broker. It lets a later failed poll retry the exact
 	// retained write even though lastAvailability is already offline.
 	offlinePublishPending bool
+
+	// Independent grid-load polling shares the MQTT connection and stable entity
+	// identity, but never changes inverter health or measurement timestamps.
+	independentGridLoad bool
+	inverterSnapshot    *model.Snapshot
+	inverterUp          bool
+	inverterDuration    time.Duration
+	inverterPublishedAt string
+	gridLoadSnapshot    *model.Snapshot
+	gridLoadUp          bool
+	gridLoadPublishedAt string
 }
 
 type metricEntity struct {
@@ -90,6 +101,9 @@ type statePayload struct {
 	AlertsActive        bool                `json:"alerts_active"`
 	PollDurationSeconds float64             `json:"poll_duration_seconds"`
 	Meta                map[string]string   `json:"meta,omitempty"`
+	GridLoadUp          *bool               `json:"grid_load_up,omitempty"`
+	GridLoadCollectedAt string              `json:"grid_load_collected_at,omitempty"`
+	GridLoadPublishedAt string              `json:"grid_load_published_at,omitempty"`
 }
 
 func NewPublisher(cfg config.MQTTConfig) (*Publisher, error) {
@@ -337,6 +351,25 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 		return nil
 	}
 
+	if p.independentGridLoad {
+		previous, previousDuration, previousPublishedAt := p.inverterSnapshot, p.inverterDuration, p.inverterPublishedAt
+		p.inverterSnapshot = cloneStreamSnapshot(snapshot)
+		p.inverterUp = true
+		p.inverterDuration = duration
+		p.inverterPublishedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := p.publishIndependentLocked(); err != nil {
+			p.inverterSnapshot, p.inverterDuration, p.inverterPublishedAt = previous, previousDuration, previousPublishedAt
+			p.inverterUp = false
+			return err
+		}
+		return nil
+	}
+	return p.publishSnapshotLocked(snapshot, duration)
+}
+
+// publishSnapshotLocked updates the durable schema and replay cache before
+// writing discovery/state. The caller holds p.mu throughout the transaction.
+func (p *Publisher) publishSnapshotLocked(snapshot *model.Snapshot, duration time.Duration) error {
 	device := p.device(snapshot)
 	stateTopic := p.stateTopic(device.ID)
 
@@ -347,6 +380,17 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 		changed, err := candidate.mergeSnapshot(snapshot, p.primarySource)
 		if err != nil {
 			return err
+		}
+		if p.independentGridLoad && p.gridLoadSnapshot != nil {
+			// The v1 manifest stores all diagnostic metadata keys together. Learn
+			// independently owned Shelly keys even when the inverter is using a
+			// fallback source, without granting that fallback ordinary ownership.
+			gridSchema := &model.Snapshot{Source: p.primarySource, Meta: gridLoadMetadata(p.gridLoadSnapshot.Meta)}
+			gridChanged, err := candidate.mergeSnapshot(gridSchema, p.primarySource)
+			if err != nil {
+				return err
+			}
+			changed = changed || gridChanged
 		}
 		if changed || !p.discoveryStatePersisted {
 			if err := validateDiscoveryState(candidate, p.discoveryState.Binding); err != nil {
@@ -387,6 +431,9 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 	p.cachedStateTopic = stateTopic
 	p.cachedState = append(p.cachedState[:0], payload...)
 	p.lastAvailability = availabilityOnline
+	if p.independentGridLoad && !p.inverterUp && !p.gridLoadUp {
+		p.lastAvailability = availabilityOffline
+	}
 	p.offlinePublishPending = false
 
 	for _, msg := range discoveryMessages {
@@ -395,6 +442,9 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 		}
 		if err := p.publishString(msg.topic, msg.payload, true); err != nil {
 			p.logPublishSkipped(err, msg.topic)
+			if p.independentGridLoad {
+				return err
+			}
 			return nil
 		}
 		p.discoveryPayloads[msg.topic] = msg.payload
@@ -405,10 +455,16 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 
 	if err := p.publishBytes(stateTopic, payload, p.cfg.Retain); err != nil {
 		p.logPublishSkipped(err, stateTopic)
+		if p.independentGridLoad {
+			return err
+		}
 		return nil
 	}
-	if err := p.publishString(p.availabilityTopic, availabilityOnline, p.cfg.Retain); err != nil {
+	if err := p.publishString(p.availabilityTopic, p.lastAvailability, p.cfg.Retain); err != nil {
 		p.logPublishSkipped(err, p.availabilityTopic)
+		if p.independentGridLoad {
+			return err
+		}
 		return nil
 	}
 
@@ -424,6 +480,14 @@ func (p *Publisher) OnPollFailure(sourceName string, err error, duration time.Du
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closing || p.closed {
+		return nil
+	}
+	if p.independentGridLoad {
+		p.inverterUp = false
+		if err := p.publishIndependentLocked(); err != nil {
+			p.markPublicationFailureLocked()
+			return err
+		}
 		return nil
 	}
 	p.lastAvailability = availabilityOffline
@@ -464,6 +528,9 @@ func (p *Publisher) onConnect(_ mqtt.Client) {
 	for _, msg := range p.cachedDiscovery {
 		if err := p.publishString(msg.topic, msg.payload, true); err != nil {
 			log.Warn().Err(err).Str("broker", p.cfg.Broker).Str("topic", msg.topic).Msg("failed to republish MQTT discovery after connect")
+			if p.independentGridLoad {
+				p.markPublicationFailureLocked()
+			}
 			return
 		}
 		p.discoveryPayloads[msg.topic] = msg.payload
@@ -475,6 +542,9 @@ func (p *Publisher) onConnect(_ mqtt.Client) {
 	if p.cachedStateTopic != "" && len(p.cachedState) > 0 {
 		if err := p.publishBytes(p.cachedStateTopic, p.cachedState, p.cfg.Retain); err != nil {
 			log.Warn().Err(err).Str("broker", p.cfg.Broker).Str("topic", p.cachedStateTopic).Msg("failed to republish MQTT state after connect")
+			if p.independentGridLoad {
+				p.markPublicationFailureLocked()
+			}
 			return
 		}
 	}
@@ -487,6 +557,9 @@ func (p *Publisher) onConnect(_ mqtt.Client) {
 	// values look healthy.
 	if err := p.publishString(p.availabilityTopic, availability, p.cfg.Retain); err != nil {
 		log.Warn().Err(err).Str("broker", p.cfg.Broker).Msg("failed to publish MQTT availability after connect")
+		if p.independentGridLoad {
+			p.markPublicationFailureLocked()
+		}
 		return
 	}
 	p.offlinePublishPending = false
@@ -657,6 +730,9 @@ func (p *Publisher) discoveryMessagesForSchema(metrics []model.Metric, metaKeys,
 		}
 		payload := p.baseDiscoveryPayload(device, "Meta "+key, device.ID+"_meta_"+stateKey, stateTopic)
 		payload["value_template"] = "{{ value_json.get('meta', {}).get('" + stateKey + "') }}"
+		if p.independentGridLoad && isGridLoadMetaKey(stateKey) {
+			p.setEntityAvailability(payload, stateTopic, "{{ 'online' if value_json.get('grid_load_up', false) and value_json.get('meta', {}).get('"+stateKey+"') is not none else 'offline' }}")
+		}
 		payload["entity_category"] = "diagnostic"
 		payload["icon"] = "mdi:information"
 		if err := add("sensor", "meta_"+stateKey, payload); err != nil {
@@ -704,6 +780,13 @@ func (p *Publisher) discoveryMessagesForSchema(metrics []model.Metric, metaKeys,
 
 		payload := p.baseDiscoveryPayload(device, metricName(metric), device.ID+"_"+stateKey, stateTopic)
 		payload["value_template"] = "{{ value_json.get('metrics', {}).get('" + stateKey + "') }}"
+		if p.independentGridLoad {
+			flag := "up"
+			if isGridLoadMetric(metric) {
+				flag = "grid_load_up"
+			}
+			p.setEntityAvailability(payload, stateTopic, "{{ 'online' if value_json.get('"+flag+"', false) and value_json.get('metrics', {}).get('"+stateKey+"') is not none else 'offline' }}")
+		}
 		if isAlertMetric(metric) {
 			domains, ok := alertMetricDomains[stateKey]
 			if !ok || len(domains) == 0 {
@@ -762,7 +845,7 @@ func (p *Publisher) discoveryMessagesForSchema(metrics []model.Metric, metaKeys,
 }
 
 func (p *Publisher) baseDiscoveryPayload(device deviceInfo, name string, uniqueID string, stateTopic string) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"name":                  name,
 		"unique_id":             sanitizeID(uniqueID),
 		"state_topic":           stateTopic,
@@ -778,9 +861,16 @@ func (p *Publisher) baseDiscoveryPayload(device deviceInfo, name string, uniqueI
 			"serial_number": device.SerialNumber,
 		},
 	}
+	if p.independentGridLoad {
+		p.setEntityAvailability(payload, stateTopic, "{{ 'online' if value_json.get('up', false) else 'offline' }}")
+	}
+	return payload
 }
 
 func (p *Publisher) setEntityAvailability(payload map[string]any, stateTopic, valueTemplate string) {
+	if p.independentGridLoad && !strings.Contains(valueTemplate, "value_json.get('grid_load_up'") && !strings.Contains(valueTemplate, "value_json.get('up'") {
+		valueTemplate = strings.Replace(valueTemplate, "'online' if ", "'online' if value_json.get('up', false) and ", 1)
+	}
 	delete(payload, "availability_topic")
 	delete(payload, "payload_available")
 	delete(payload, "payload_not_available")
@@ -853,7 +943,7 @@ func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Du
 		}
 	}
 
-	return statePayload{
+	payload := statePayload{
 		Source:              snapshot.Source,
 		DeviceSN:            snapshot.DeviceSN,
 		ParentSN:            snapshot.ParentSN,
@@ -872,6 +962,20 @@ func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Du
 		PollDurationSeconds: duration.Seconds(),
 		Meta:                p.discoveryStateMeta(snapshot.Meta),
 	}
+	if p.independentGridLoad {
+		payload.Up = p.inverterUp
+		payload.PublishedAt = p.inverterPublishedAt
+		if snapshot.CollectedAt.IsZero() {
+			payload.CollectedAt = ""
+		}
+		gridUp := p.gridLoadUp
+		payload.GridLoadUp = &gridUp
+		payload.GridLoadPublishedAt = p.gridLoadPublishedAt
+		if p.gridLoadSnapshot != nil && !p.gridLoadSnapshot.CollectedAt.IsZero() {
+			payload.GridLoadCollectedAt = p.gridLoadSnapshot.CollectedAt.Format(time.RFC3339)
+		}
+	}
+	return payload
 }
 
 func (p *Publisher) metricOwnedByDiscoveryState(source, stateKey string, metric model.Metric) bool {

@@ -636,6 +636,9 @@ func validate(cfg Config) error {
 	}
 
 	if cfg.ShellyGridLoad.Enabled {
+		if cfg.MQTT.Enabled && strings.TrimSpace(cfg.MQTT.DeviceID) == "" {
+			return fmt.Errorf("mqtt-device-id is required with Shelly grid-load collection so Home Assistant identity stays stable when the inverter is unavailable")
+		}
 		if strings.TrimSpace(cfg.ShellyGridLoad.BaseURL) == "" {
 			return fmt.Errorf("shelly-grid-load-url is required when shelly-grid-load-enabled is set")
 		}

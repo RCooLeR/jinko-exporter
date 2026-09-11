@@ -83,8 +83,9 @@ future. These fields are defined by the [Solarman currentData API](https://doc.s
 A successful HTTP response can contain the last cached readings of an inverter
 that has been off for days. Such a response cannot refresh the bridge's last
 successful update or MQTT state. Priority selection tries the next source after
-a rejected snapshot. If every source fails, MQTT publishes `offline`, poll health
-becomes `0`, and readiness fails. Prometheus retains the last accepted readings
+a rejected snapshot. If every inverter source fails, inverter poll health
+becomes `0` and readiness fails. MQTT inverter entities become unavailable;
+independently polled Shelly entities can remain available. Prometheus retains the last accepted readings
 with their original timestamp and an increasing `data_age_seconds`; on a cold
 start with no accepted snapshot, no inverter readings are emitted. Identical
 numeric values alone are not treated as stale: timestamps and device state
@@ -100,12 +101,15 @@ Home Assistant Discovery can persist the corresponding schema independently with
 
 ### Shelly `grid_load` Enrichment
 
-Shelly Pro 3EM support is an optional enrichment source, not an inverter-source
-candidate. After the configured Jinko, Solarman, or Modbus source returns a
-complete snapshot, the bridge reads `EM.GetStatus` and `EMData.GetStatus` from
-the configured Shelly and appends every available value below with group
-`grid_load`. A Shelly error logs a warning and omits the complete enrichment for
-that poll; it does not fail or replace the successful inverter snapshot.
+Shelly Pro 3EM support is an optional independent meter, not an inverter-source
+candidate. In `serve` mode, a separate polling loop reads `EM.GetStatus` and
+`EMData.GetStatus` at `EXPORTER_POLL_INTERVAL`. It continues while inverter
+requests fail or wait for cloud request pacing, including cold starts with the
+inverter off. Every available value below keeps group `grid_load`. Shelly
+success cannot mark the inverter online or refresh its collection timestamp;
+a Shelly failure cannot take a working inverter offline. Each stream has its
+own health and freshness. The one-shot `fetch` command retains sequential
+enrichment after a successful inverter snapshot.
 
 | Surface | Keys | Maximum |
 | --- | --- | ---: |
@@ -120,13 +124,17 @@ with zero. Power is reported in `W`, apparent power in `VA`, voltage in `V`,
 current in `A`, frequency in `Hz`, power factor with an empty unit, and Shelly
 active/returned energy is converted from `Wh` to `kWh`.
 
-The final snapshot keeps the winning inverter source identity. Consequently,
+For compatibility, the displayed grid-load metrics keep the inverter identity. Consequently,
 the Prometheus `source` label on a `grid_load` metric, when enabled, is
 `modbus`, `jinko`, or `solarman`—it is **not** `shelly_grid_load`. The
 `group="grid_load"` label is the stable marker that the value originated from
 the configured Shelly. With `EXPORTER_METRICS_DROP_SOURCE_LABEL=true`, the
-source label is absent as expected. Shelly metrics are appended after priority
-selection and are not canonical fallback projections.
+source label is absent as expected. Before the first inverter response, the
+first configured source and a configured inverter serial (or `unknown`) seed
+these labels; the Shelly IP is never substituted for an inverter serial.
+Shelly metrics are not canonical fallback projections. Use
+`solar_grid_load_up` and `solar_grid_load_data_age_seconds` to determine whether
+they are current, not inverter `solar_up` or `solar_data_age_seconds`.
 
 ### Local Modbus
 

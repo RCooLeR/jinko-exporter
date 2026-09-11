@@ -58,6 +58,10 @@ environment:
 | `<prefix>_polls_total` | Counter | `source`, `result` | Total polls by result. Result is `success` or `error`. |
 | `<prefix>_last_update_timestamp_seconds` | Gauge | `source`, `device_sn` | Upstream data collection timestamp from the current snapshot. |
 | `<prefix>_data_age_seconds` | Gauge | `source`, `device_sn` | Age of the last accepted upstream measurement at scrape time. Omitted before a known collection timestamp; increases even after polls fail. |
+| `<prefix>_grid_load_up` | Gauge | `source`, `device_sn` | Latest independent Shelly poll succeeded. Available when Shelly is enabled; does not change inverter `up`. |
+| `<prefix>_grid_load_data_age_seconds` | Gauge | `source`, `device_sn` | Age of the last accepted Shelly measurement; omitted before the first successful read. |
+| `<prefix>_grid_load_last_update_timestamp_seconds` | Gauge | `source`, `device_sn` | Last accepted Shelly collection time. |
+| `<prefix>_grid_load_last_poll_success_timestamp_seconds` | Gauge | `source`, `device_sn` | Time of the latest successful independent Shelly poll. |
 | `<prefix>_last_poll_success_timestamp_seconds` | Gauge | `source` | Unix timestamp when the exporter last completed a successful poll. |
 | `<prefix>_last_source_sync_timestamp_seconds` | Gauge | `source` | Upstream collection timestamp of the last accepted snapshot, labeled by its selected source. Keeps `source` even when source labels are otherwise dropped. |
 | `<prefix>_poll_duration_seconds` | Gauge | `source` | Duration of the latest poll in seconds. |
@@ -127,6 +131,19 @@ solar_metric{group="electric",key="S_P_T"}
 ```
 
 When source labels are retained, match on `(source, device_sn)` instead.
+
+Shelly grid-load values remain available when the inverter is off. They have
+an independent polling loop, health, and timestamps. Use their own availability
+filter, rather than applying `solar_up` to all metric groups:
+
+```promql
+solar_metric{group="grid_load",key="total_power"}
+  and on (device_sn) (solar_grid_load_up == 1)
+```
+
+Use `(source, device_sn)` when source labels are retained. As with inverter
+telemetry, failed Shelly polls retain the last accepted numbers in Prometheus,
+but `solar_grid_load_up=0` marks them unavailable and their data age increases.
 
 Current solar production:
 

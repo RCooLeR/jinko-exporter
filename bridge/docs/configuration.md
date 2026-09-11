@@ -92,9 +92,11 @@ Solarman token responses must advertise a positive `expires_in` no longer than 3
 
 ## Shelly Grid Load Options
 
-Shelly grid-load collection is an optional enrichment layer for hybrid inverter setups where the inverter does not directly report non-backup/grid-side load. When enabled, the bridge still polls the selected inverter source, then appends `grid_load_*` metrics from a Shelly Pro 3EM Gen2 RPC device.
+Shelly grid-load collection is an optional independent meter for hybrid inverter setups where the inverter does not directly report non-backup/grid-side load. In `serve` mode, its own polling loop reads the Shelly Pro 3EM Gen2 RPC device at `EXPORTER_POLL_INTERVAL`, independently of inverter failures, HTTP timeouts, and cloud request pacing. Existing `grid_load_*` entities and metric labels are preserved.
 
-If the Shelly request fails, the inverter poll remains successful and the Shelly-backed Home Assistant entities are left missing or `null` until the next successful Shelly read.
+If the inverter is unavailable, fresh Shelly readings remain visible. If Shelly fails, only its Home Assistant entities become unavailable; inverter health is unchanged. Prometheus exposes separate `solar_grid_load_up` and freshness metrics. With MQTT enabled, `MQTT_DEVICE_ID` is required so cold starts with only Shelly available reuse the same device and entity identities. For stable Prometheus `device_sn` before an inverter has responded, configure `MODBUS_DEVICE_SN` or `SOLARMAN_DEVICE_SN` for an enabled source; otherwise the label starts as `unknown` until the serial is learned.
+
+The one-shot `fetch` command retains its original merged-snapshot behavior and requires a successful inverter fetch.
 
 | Environment variable | CLI flag | Default | Required when enabled | Description |
 | --- | --- | --- | --- | --- |
