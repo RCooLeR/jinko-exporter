@@ -96,6 +96,12 @@ Shelly grid-load collection is an optional independent meter for hybrid inverter
 
 If the inverter is unavailable, fresh Shelly readings remain visible. If Shelly fails, only its Home Assistant entities become unavailable; inverter health is unchanged. Prometheus exposes separate `solar_grid_load_up` and freshness metrics. With MQTT enabled, `MQTT_DEVICE_ID` is required so cold starts with only Shelly available reuse the same device and entity identities. For stable Prometheus `device_sn` before an inverter has responded, configure `MODBUS_DEVICE_SN` or `SOLARMAN_DEVICE_SN` for an enabled source; otherwise the label starts as `unknown` until the serial is learned.
 
+When supported, `Temperature.GetStatus?id=0` also supplies the optional
+`grid_load_internal_temperature` Home Assistant diagnostic sensor in °C.
+It needs no additional setting and always uses temperature component `0`,
+not `SHELLY_GRID_LOAD_EM_ID`. Failure of this extra request omits only the
+temperature; it does not discard the electrical readings.
+
 The one-shot `fetch` command retains its original merged-snapshot behavior and requires a successful inverter fetch.
 
 | Environment variable | CLI flag | Default | Required when enabled | Description |

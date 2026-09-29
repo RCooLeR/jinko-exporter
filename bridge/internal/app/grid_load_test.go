@@ -36,6 +36,8 @@ func TestShellyKeepsPollingWhileInverterRequestIsBlocked(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 0, "total_act_power": 100 + meterCalls.Add(1), "a_voltage": 230})
 		case "/rpc/EMData.GetStatus":
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 0, "total_act": 1000})
+		case "/rpc/Temperature.GetStatus":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 0, "tC": 51.1})
 		default:
 			t.Errorf("unexpected Shelly RPC %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -80,6 +82,15 @@ func TestShellyKeepsPollingWhileInverterRequestIsBlocked(t *testing.T) {
 	for range 2 {
 		select {
 		case snapshot := <-updates.snapshots:
+			foundTemperature := false
+			for _, metric := range snapshot.Metrics {
+				if metric.Group == "grid_load" && metric.Key == "internal_temperature" && metric.Value == 51.1 {
+					foundTemperature = true
+				}
+			}
+			if !foundTemperature {
+				t.Fatal("blocked inverter prevented fresh Shelly temperature")
+			}
 			if previous != nil && !snapshot.CollectedAt.After(previous.CollectedAt) {
 				t.Fatal("Shelly collection time did not advance independently")
 			}

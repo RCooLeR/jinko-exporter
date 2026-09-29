@@ -70,6 +70,91 @@ func TestIndependentGridLoadColdStartHasNoInventedInverterSuccess(t *testing.T) 
 	}
 }
 
+func TestIndependentGridLoadInternalTemperatureDiscoveryAndAvailability(t *testing.T) {
+	for _, mode := range []string{"memory", "persistent"} {
+		t.Run(mode, func(t *testing.T) {
+			path := ""
+			if mode == "persistent" {
+				path = filepath.Join(t.TempDir(), "discovery.json")
+			}
+			publisher, client := newPersistentPublisher(t, path)
+			defer publisher.Close()
+			observer := publisher.GridLoadObserver()
+			at := time.Now().UTC().Truncate(time.Second)
+			snapshot := gridLoadSnapshotAt(at, 400)
+			snapshot.Metrics = append(snapshot.Metrics, model.Metric{
+				Group: "grid_load", Key: "internal_temperature", Name: "Shelly Internal Temperature", Unit: "\u00b0C", Value: 43.7,
+			})
+			if err := observer.OnPollSuccess(snapshot, time.Second); err != nil {
+				t.Fatal(err)
+			}
+			const key = "grid_load_internal_temperature"
+			const topic = "homeassistant/sensor/stable_inverter_grid_load_internal_temperature/config"
+			discovery := decodeDiscovery(t, publisher.cachedDiscovery, topic)
+			for field, want := range map[string]any{
+				"name":                        "Shelly Internal Temperature",
+				"unique_id":                   "stable_inverter_grid_load_internal_temperature",
+				"state_topic":                 independentStateTopic,
+				"value_template":              "{{ value_json.get('metrics', {}).get('grid_load_internal_temperature') }}",
+				"device_class":                "temperature",
+				"state_class":                 "measurement",
+				"unit_of_measurement":         "\u00b0C",
+				"entity_category":             "diagnostic",
+				"suggested_display_precision": float64(1),
+			} {
+				if got := discovery[field]; got != want {
+					t.Fatalf("temperature discovery %s = %#v, want %#v", field, got, want)
+				}
+			}
+			assertStreamAvailability(t, discovery, "grid_load_up", key)
+			availability := discovery["availability"].([]any)[1].(map[string]any)
+			wantAvailability := "{{ 'online' if value_json.get('grid_load_up', false) and value_json.get('metrics', {}).get('grid_load_internal_temperature') is not none else 'offline' }}"
+			if availability["value_template"] != wantAvailability {
+				t.Fatalf("temperature availability must require its own fresh value: %+v", availability)
+			}
+			power := decodeDiscovery(t, publisher.cachedDiscovery, "homeassistant/sensor/stable_inverter_grid_load_total_power/config")
+			if power["entity_category"] != nil || power["suggested_display_precision"] != nil {
+				t.Fatalf("temperature metadata leaked to power sensor: %+v", power)
+			}
+			state := publishedState(t, client, independentStateTopic)
+			if state.Up || state.GridLoadUp == nil || !*state.GridLoadUp || state.Metrics[key] == nil || *state.Metrics[key] != 43.7 {
+				t.Fatalf("temperature unavailable while inverter is down: %+v", state)
+			}
+			if err := publisher.OnPollFailure("modbus", errors.New("inverter off"), time.Second, 1); err != nil {
+				t.Fatal(err)
+			}
+			state = publishedState(t, client, independentStateTopic)
+			if state.Metrics[key] == nil || *state.Metrics[key] != 43.7 {
+				t.Fatalf("inverter failure hid Shelly temperature: %+v", state)
+			}
+			if err := observer.OnPollSuccess(gridLoadSnapshotAt(at.Add(time.Minute), 500), time.Second); err != nil {
+				t.Fatal(err)
+			}
+			state = publishedState(t, client, independentStateTopic)
+			if state.GridLoadUp == nil || !*state.GridLoadUp || state.Metrics[key] != nil || derefFloat(state.Metrics["grid_load_total_power"]) != 500 {
+				t.Fatalf("missing temperature fabricated a value or disabled electrical readings: %+v", state)
+			}
+			// A real zero must remain available rather than being treated as missing.
+			snapshot.CollectedAt = at.Add(2 * time.Minute)
+			snapshot.Metrics[1].Value = 0
+			if err := observer.OnPollSuccess(snapshot, time.Second); err != nil {
+				t.Fatal(err)
+			}
+			state = publishedState(t, client, independentStateTopic)
+			if state.GridLoadUp == nil || !*state.GridLoadUp || state.Metrics[key] == nil || *state.Metrics[key] != 0 {
+				t.Fatalf("zero temperature did not recover: %+v", state)
+			}
+			if err := observer.OnPollFailure("shelly_grid_load", errors.New("meter off"), time.Second, 1); err != nil {
+				t.Fatal(err)
+			}
+			state = publishedState(t, client, independentStateTopic)
+			if state.GridLoadUp == nil || *state.GridLoadUp || state.Metrics[key] != nil {
+				t.Fatalf("failed meter poll exposed stale temperature: %+v", state)
+			}
+		})
+	}
+}
+
 func TestIndependentGridLoadHealthAndTimestampsSurviveFailuresRecoveryAndReconnect(t *testing.T) {
 	publisher, client := newPersistentPublisher(t, filepath.Join(t.TempDir(), "discovery.json"))
 	defer publisher.Close()

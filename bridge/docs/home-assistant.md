@@ -250,6 +250,16 @@ Primary card-facing sensors:
 
 Shelly `EMData` totals are exposed as kWh energy sensors after converting the Shelly Wh counters.
 
+The bridge also discovers **Shelly Internal Temperature**, with state key
+`grid_load_internal_temperature`, unit `°C`, device class `temperature`, state
+class `measurement`, and entity category `diagnostic`. It appears under the
+same bridge device, with one decimal place suggested for display. It is the
+Shelly's internal sensor, not the inverter temperature or room temperature.
+No extra configuration or custom-card update is required. Like other Shelly
+entities, it stays available with the inverter off. A failed or unavailable
+temperature read makes only this sensor unavailable, not the electrical
+readings; genuine zero is preserved and old temperatures are not replayed.
+
 ### Warning/Alarm/Fault Binary Sensors
 
 If a metric is a warning, alarm, or fault metric, the bridge creates an additional binary sensor.

@@ -1193,6 +1193,11 @@ func metricSensorMeta(metric model.Metric) metricMeta {
 	switch strings.ToLower(strings.TrimSpace(metric.Group)) {
 	case "basic", "version", "status", "state", "alert":
 		meta.EntityCategory = "diagnostic"
+	case "grid_load":
+		if strings.EqualFold(strings.TrimSpace(metric.Key), "internal_temperature") {
+			meta.EntityCategory = "diagnostic"
+			meta.SuggestedDisplayPrecision = new(1)
+		}
 	}
 	if isAlertMetric(metric) {
 		meta.Icon = "mdi:alert-circle"

@@ -102,8 +102,9 @@ Home Assistant Discovery can persist the corresponding schema independently with
 ### Shelly `grid_load` Enrichment
 
 Shelly Pro 3EM support is an optional independent meter, not an inverter-source
-candidate. In `serve` mode, a separate polling loop reads `EM.GetStatus` and
-`EMData.GetStatus` at `EXPORTER_POLL_INTERVAL`. It continues while inverter
+candidate. In `serve` mode, a separate polling loop reads `EM.GetStatus`,
+`EMData.GetStatus`, and optional `Temperature.GetStatus?id=0` at
+`EXPORTER_POLL_INTERVAL`. It continues while inverter
 requests fail or wait for cloud request pacing, including cold starts with the
 inverter off. Every available value below keeps group `grid_load`. Shelly
 success cannot mark the inverter online or refresh its collection timestamp;
@@ -117,12 +118,22 @@ enrichment after a successful inverter snapshot.
 | Whole-meter live values | `neutral_current`, `total_current`, `total_power`, `total_apparent_power` | 4 |
 | Per-phase energy for `l1`, `l2`, and `l3` | `<phase>_energy_total`, `<phase>_returned_energy_total` | 6 |
 | Whole-meter energy | `energy_total`, `returned_energy_total` | 2 |
+| Internal device temperature | `internal_temperature` | 1 |
 
-The maximum surface is 30 metrics. Shelly RPC fields are optional, so a valid
+The maximum surface is 31 metrics. Shelly RPC fields are optional, so a valid
 response can contain fewer; unavailable values are omitted rather than filled
 with zero. Power is reported in `W`, apparent power in `VA`, voltage in `V`,
 current in `A`, frequency in `Hz`, power factor with an empty unit, and Shelly
 active/returned energy is converted from `Wh` to `kWh`.
+
+Internal temperature uses the Celsius `tC` value from
+[`Temperature.GetStatus`](https://shelly-api-docs.shelly.cloud/gen2/ComponentsAndServices/Temperature/)
+for component `temperature:0`, independently of `SHELLY_GRID_LOAD_EM_ID`.
+It measures the Shelly device, not ambient air or the inverter. A missing/null
+value, sensor error, invalid response, unsupported RPC, or failed request omits
+only this diagnostic metric; electrical readings remain available. Each poll
+reads it afresh, without caching or substituting zero. The request uses the
+same `SHELLY_GRID_LOAD_TIMEOUT` limit as the electrical RPC calls.
 
 For compatibility, the displayed grid-load metrics keep the inverter identity. Consequently,
 the Prometheus `source` label on a `grid_load` metric, when enabled, is

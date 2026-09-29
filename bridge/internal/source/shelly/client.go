@@ -20,6 +20,7 @@ import (
 
 const (
 	gridLoadGroup                 = "grid_load"
+	internalTemperatureID         = 0
 	maxShellyRPCResponseBytes int = 64 * 1024
 )
 
@@ -71,6 +72,12 @@ type emDataStatus struct {
 	TotalReturnedEnergyWh  *float64 `json:"total_act_ret"`
 }
 
+type temperatureStatus struct {
+	ID     *int     `json:"id"`
+	TC     *float64 `json:"tC"`
+	Errors []string `json:"errors"`
+}
+
 func NewGridLoadClient(cfg config.ShellyGridLoadConfig) (*GridLoadClient, error) {
 	rawBaseURL := strings.TrimSpace(cfg.BaseURL)
 	if err := config.ValidateShellyGridLoadURL(rawBaseURL); err != nil {
@@ -111,7 +118,7 @@ func (c *GridLoadClient) Name() string {
 
 func (c *GridLoadClient) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	var em emStatus
-	if err := c.getRPC(ctx, "EM.GetStatus", &em); err != nil {
+	if err := c.getRPC(ctx, "EM.GetStatus", c.cfg.EMID, &em); err != nil {
 		return nil, err
 	}
 	if err := em.validate(c.cfg.EMID); err != nil {
@@ -119,7 +126,7 @@ func (c *GridLoadClient) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	}
 
 	var emData emDataStatus
-	if err := c.getRPC(ctx, "EMData.GetStatus", &emData); err != nil {
+	if err := c.getRPC(ctx, "EMData.GetStatus", c.cfg.EMID, &emData); err != nil {
 		return nil, err
 	}
 	if err := emData.validate(c.cfg.EMID); err != nil {
@@ -162,6 +169,15 @@ func (c *GridLoadClient) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	addKWh("l3_returned_energy_total", "Grid Load L3 Returned Energy Total", emData.CTotalReturnedEnergyWh)
 	addKWh("energy_total", "Grid Load Energy Total", emData.TotalActiveEnergyWh)
 	addKWh("returned_energy_total", "Grid Load Returned Energy Total", emData.TotalReturnedEnergyWh)
+
+	// Internal temperature is optional and belongs to temperature:0, not the
+	// configured EM component. An unsupported or failed diagnostic read must
+	// not discard healthy electrical telemetry. Never reuse a previous value.
+	var temperature temperatureStatus
+	if err := c.getRPC(ctx, "Temperature.GetStatus", internalTemperatureID, &temperature); err == nil &&
+		temperature.ID != nil && *temperature.ID == internalTemperatureID && len(temperature.Errors) == 0 {
+		add("internal_temperature", "Shelly Internal Temperature", "\u00b0C", temperature.TC)
+	}
 
 	return &model.Snapshot{
 		Source:      c.Name(),
@@ -232,11 +248,11 @@ func addPhaseMetrics(metrics *[]model.Metric, keyPrefix, label string, voltage, 
 	add(keyPrefix+"_frequency", "Grid Load "+label+" Frequency", "Hz", frequency)
 }
 
-func (c *GridLoadClient) getRPC(ctx context.Context, method string, target any) error {
+func (c *GridLoadClient) getRPC(ctx context.Context, method string, componentID int, target any) error {
 	u := *c.baseURL
 	u.Path = strings.TrimRight(u.Path, "/") + "/rpc/" + method
 	q := u.Query()
-	q.Set("id", strconv.Itoa(c.cfg.EMID))
+	q.Set("id", strconv.Itoa(componentID))
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
