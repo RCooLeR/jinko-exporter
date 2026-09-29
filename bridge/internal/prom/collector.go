@@ -4,8 +4,10 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/buildinfo"
+	"github.com/RCooLeR/jinko-exporter/bridge/internal/model"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/poller"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -13,20 +15,39 @@ import (
 type Collector struct {
 	state           *poller.State
 	dropSourceLabel bool
+	gridLoadState   *poller.State
+	deviceSNSeed    string
 
-	upDesc              *prometheus.Desc
-	buildInfoDesc       *prometheus.Desc
-	pollSuccessDesc     *prometheus.Desc
-	pollCountDesc       *prometheus.Desc
-	lastUpdateDesc      *prometheus.Desc
-	lastPollSuccessDesc *prometheus.Desc
-	lastSourceSyncDesc  *prometheus.Desc
-	pollDurationDesc    *prometheus.Desc
-	errorCountDesc      *prometheus.Desc
-	valueDesc           *prometheus.Desc
+	upDesc                      *prometheus.Desc
+	buildInfoDesc               *prometheus.Desc
+	pollSuccessDesc             *prometheus.Desc
+	pollCountDesc               *prometheus.Desc
+	lastUpdateDesc              *prometheus.Desc
+	dataAgeDesc                 *prometheus.Desc
+	lastPollSuccessDesc         *prometheus.Desc
+	lastSourceSyncDesc          *prometheus.Desc
+	pollDurationDesc            *prometheus.Desc
+	errorCountDesc              *prometheus.Desc
+	valueDesc                   *prometheus.Desc
+	gridLoadUpDesc              *prometheus.Desc
+	gridLoadDataAgeDesc         *prometheus.Desc
+	gridLoadLastUpdateDesc      *prometheus.Desc
+	gridLoadLastPollSuccessDesc *prometheus.Desc
 }
 
-func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Collector {
+type Option func(*Collector)
+
+// WithGridLoad adds an independently polled Shelly stream. Its values retain
+// the existing inverter identity labels, while health and freshness have their
+// own metric families and never change the inverter's status.
+func WithGridLoad(state *poller.State, deviceSN string) Option {
+	return func(c *Collector) {
+		c.gridLoadState = state
+		c.deviceSNSeed = strings.TrimSpace(deviceSN)
+	}
+}
+
+func NewCollector(prefix string, state *poller.State, dropSourceLabel bool, options ...Option) *Collector {
 	prefix = strings.Trim(prefix, "_")
 	sourceLabels := []string{"source"}
 	deviceLabels := []string{"source", "device_sn"}
@@ -38,7 +59,7 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Col
 	}
 	pollCountLabels := append(append([]string{}, sourceLabels...), "result")
 
-	return &Collector{
+	collector := &Collector{
 		state:           state,
 		dropSourceLabel: dropSourceLabel,
 		upDesc: prometheus.NewDesc(
@@ -68,6 +89,12 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Col
 		lastUpdateDesc: prometheus.NewDesc(
 			prefix+"_last_update_timestamp_seconds",
 			"Unix timestamp of the last successful upstream update.",
+			deviceLabels,
+			nil,
+		),
+		dataAgeDesc: prometheus.NewDesc(
+			prefix+"_data_age_seconds",
+			"Age in seconds of the last accepted upstream collection timestamp, including while the device is unavailable.",
 			deviceLabels,
 			nil,
 		),
@@ -101,7 +128,37 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool) *Col
 			valueLabels,
 			nil,
 		),
+		gridLoadUpDesc: prometheus.NewDesc(
+			prefix+"_grid_load_up",
+			"1 if the last independent Shelly grid-load poll succeeded, 0 otherwise.",
+			deviceLabels,
+			nil,
+		),
+		gridLoadDataAgeDesc: prometheus.NewDesc(
+			prefix+"_grid_load_data_age_seconds",
+			"Age in seconds of the last accepted Shelly grid-load measurement, including while the meter is unavailable.",
+			deviceLabels,
+			nil,
+		),
+		gridLoadLastUpdateDesc: prometheus.NewDesc(
+			prefix+"_grid_load_last_update_timestamp_seconds",
+			"Unix timestamp of the last accepted Shelly grid-load measurement.",
+			deviceLabels,
+			nil,
+		),
+		gridLoadLastPollSuccessDesc: prometheus.NewDesc(
+			prefix+"_grid_load_last_poll_success_timestamp_seconds",
+			"Unix timestamp when the exporter last completed a successful independent Shelly grid-load poll.",
+			deviceLabels,
+			nil,
+		),
 	}
+	for _, option := range options {
+		if option != nil {
+			option(collector)
+		}
+	}
+	return collector
 }
 
 func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
@@ -110,11 +167,18 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.pollSuccessDesc
 	ch <- c.pollCountDesc
 	ch <- c.lastUpdateDesc
+	ch <- c.dataAgeDesc
 	ch <- c.lastPollSuccessDesc
 	ch <- c.lastSourceSyncDesc
 	ch <- c.pollDurationDesc
 	ch <- c.errorCountDesc
 	ch <- c.valueDesc
+	if c.gridLoadState != nil {
+		ch <- c.gridLoadUpDesc
+		ch <- c.gridLoadDataAgeDesc
+		ch <- c.gridLoadLastUpdateDesc
+		ch <- c.gridLoadLastPollSuccessDesc
+	}
 }
 
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
@@ -124,7 +188,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	if sourceName == "" {
 		sourceName = "unknown"
 	}
-	deviceSN := "unknown"
+	deviceSN := c.deviceSNSeed
+	if deviceSN == "" {
+		deviceSN = "unknown"
+	}
 	if snapshot != nil {
 		sourceName = snapshot.Source
 		if snapshot.DeviceSN != "" {
@@ -146,22 +213,50 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	if !status.LastSourceSuccessAt.IsZero() {
 		syncTimestamp := float64(status.LastSourceSuccessAt.Unix())
 		ch <- prometheus.MustNewConstMetric(c.lastUpdateDesc, prometheus.GaugeValue, syncTimestamp, c.deviceLabelValues(sourceName, deviceSN)...)
+		ch <- prometheus.MustNewConstMetric(c.dataAgeDesc, prometheus.GaugeValue, max(0, time.Since(status.LastSourceSuccessAt).Seconds()), c.deviceLabelValues(sourceName, deviceSN)...)
 		ch <- prometheus.MustNewConstMetric(c.lastSourceSyncDesc, prometheus.GaugeValue, syncTimestamp, sourceName)
 	}
 	if !status.LastPollSuccessAt.IsZero() {
 		ch <- prometheus.MustNewConstMetric(c.lastPollSuccessDesc, prometheus.GaugeValue, float64(status.LastPollSuccessAt.Unix()), c.sourceLabelValues(sourceName)...)
 	}
 
-	if snapshot == nil {
+	// The independent grid-load stream must still be exported on cold start
+	// and after inverter failures, including while an inverter Fetch is blocked.
+	seenValueLabels := make(map[string]struct{})
+	if snapshot != nil {
+		c.collectValues(ch, snapshot.Metrics, sourceName, deviceSN, false, seenValueLabels)
+	}
+	if c.gridLoadState == nil {
 		return
 	}
+	gridLoad := c.gridLoadState.Status()
+	gridLoadUp := 0.0
+	if gridLoad.Up {
+		gridLoadUp = 1
+	}
+	labelValues := c.deviceLabelValues(sourceName, deviceSN)
+	ch <- prometheus.MustNewConstMetric(c.gridLoadUpDesc, prometheus.GaugeValue, gridLoadUp, labelValues...)
+	if !gridLoad.LastSourceSuccessAt.IsZero() {
+		ch <- prometheus.MustNewConstMetric(c.gridLoadLastUpdateDesc, prometheus.GaugeValue, float64(gridLoad.LastSourceSuccessAt.Unix()), labelValues...)
+		ch <- prometheus.MustNewConstMetric(c.gridLoadDataAgeDesc, prometheus.GaugeValue, max(0, time.Since(gridLoad.LastSourceSuccessAt).Seconds()), labelValues...)
+	}
+	if !gridLoad.LastPollSuccessAt.IsZero() {
+		ch <- prometheus.MustNewConstMetric(c.gridLoadLastPollSuccessDesc, prometheus.GaugeValue, float64(gridLoad.LastPollSuccessAt.Unix()), labelValues...)
+	}
+	if gridLoad.Snapshot != nil {
+		c.collectValues(ch, gridLoad.Snapshot.Metrics, sourceName, deviceSN, true, seenValueLabels)
+	}
+}
 
+func (c *Collector) collectValues(ch chan<- prometheus.Metric, metrics []model.Metric, sourceName, deviceSN string, gridLoad bool, seenValueLabels map[string]struct{}) {
 	// A malformed or projected snapshot can contain the same logical point more
 	// than once. Prometheus rejects an entire scrape when a collector emits two
 	// samples with identical labels, so keep the first sample in snapshot order.
 	// This applies even when the source label is retained.
-	seenValueLabels := make(map[string]struct{}, len(snapshot.Metrics))
-	for _, metric := range snapshot.Metrics {
+	for _, metric := range metrics {
+		if c.gridLoadState != nil && strings.EqualFold(strings.TrimSpace(metric.Group), "grid_load") != gridLoad {
+			continue
+		}
 		if !isFinite(metric.Value) {
 			continue
 		}

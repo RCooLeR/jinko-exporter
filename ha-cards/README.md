@@ -2,6 +2,8 @@
 
 This package contains optional TypeScript Lovelace cards for the Home Assistant MQTT entities created by the bridge.
 
+This stable bundle and the redesigned bundle under `new-ha-cards/` register the same custom-element names. Install exactly one of them in Home Assistant; they are release alternatives, not additive resources.
+
 ## Cards
 
 - `custom:jks-detailed`
@@ -14,15 +16,42 @@ This package contains optional TypeScript Lovelace cards for the Home Assistant 
 - [Card configuration](./docs/cards.md)
 - [Entity resolution](./docs/entity-resolution.md)
 
+## Toolchain
+
+- Node.js `^24.12.0`; the repository pins Node.js 24.20.0 in `.node-version`.
+- npm 11.19.0 with reproducible installs from `package-lock.json`.
+- TypeScript 7 with strict, erasable-syntax, unchecked-index, and side-effect-import checks.
+- Vite 8 producing an ES module for the Baseline Widely Available browser target.
+
+The development server forwards browser console output to the terminal, while production builds use Vite's browser baseline target instead of maintaining a separate browser-version list.
+
 ## Development
 
 ```shell
-npm install
-npm run build
+npm ci
+npm run check
 ```
+
+`npm run check` runs tests, checks both the browser sources and Vite configuration with TypeScript, then creates the production bundle. For interactive work, start the development server with `npm run dev`.
 
 The production bundle is written to:
 
 ```text
 dist/jinko-ha-cards.js
 ```
+
+## Layout preview and regression checks
+
+`npm run dev` opens a static detailed-card fixture, with links for desktop,
+narrow desktop, and mobile widths. `?width=2050` reproduces a wide dashboard.
+The preview entry is not part of the production bundle.
+
+The detailed desktop overlay geometry is measured in original-image pixels
+in `assets/main/desktop_layout_spec.json`. Keep coordinates there, not in
+`src/lib/position-models.ts`, which supplies desktop typography only. Values
+scale with the same scene as the background; long three-phase readings shrink
+to fit their reserved area. SOC and temperature remain centered in their gauges.
+
+`card-layout.test.ts` checks the effective rendered rectangles against the
+painted panels and prevents alignment, hidden-element, and text-fit regressions.
+The mobile artwork and mini-card layout retain their separate specifications.

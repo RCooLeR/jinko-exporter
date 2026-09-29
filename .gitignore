@@ -21,6 +21,8 @@ go.work.sum
 .env
 .env.*
 *.local
+secrets/
+state/
 
 # IDE files
 .idea/

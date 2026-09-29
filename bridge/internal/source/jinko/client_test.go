@@ -1,6 +1,7 @@
 package jinko
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +20,9 @@ import (
 
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/alert"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/config"
+	"github.com/RCooLeR/jinko-exporter/bridge/internal/model"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func TestRandomRequestJitterHandlesBoundaryDurations(t *testing.T) {
@@ -327,7 +332,7 @@ func TestRefreshRequiresDurableStateBeforeConsumingToken(t *testing.T) {
 		cfg := refreshJinkoConfig(t, server.URL, expiredAccess)
 		cfg.TokenStateFile = filepath.Join(t.TempDir(), "missing", "token-state.json")
 		_, err := New(cfg, nil).Fetch(t.Context())
-		if err == nil || !strings.Contains(err.Error(), "prepare Jinko token state") {
+		if err == nil || !strings.Contains(err.Error(), "stage=prepare") {
 			t.Fatalf("Fetch() error = %v, want preflight persistence failure", err)
 		}
 	})
@@ -646,6 +651,69 @@ func TestFutureStateUpdatedAtDoesNotDelayRefreshPastTokenSchedule(t *testing.T) 
 	}
 }
 
+func TestFutureStateUpdatedAtAppliesConservativeFloorToExpiredToken(t *testing.T) {
+	now := time.Now()
+	statePath := filepath.Join(t.TempDir(), "token-state.json")
+	if err := persistTokenState(statePath, tokenState{
+		AccessToken:  testJWT(t, now.Add(-time.Minute), "already-expired"),
+		RefreshToken: "state-refresh",
+		UpdatedAt:    now.AddDate(1, 0, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("persistTokenState() error = %v", err)
+	}
+	cfg := testJinkoConfig("https://detail.example.test")
+	cfg.BearerToken = ""
+	cfg.RefreshToken = ""
+	cfg.TokenURL = "https://token.example.test"
+	cfg.TokenStateFile = statePath
+	cfg.RefreshBefore = time.Minute
+	client := New(cfg, nil)
+
+	due, wait, enabled := client.backgroundRefreshSchedule(now)
+	if !enabled || due {
+		t.Fatalf("schedule enabled/due = %t/%t, want true/false", enabled, due)
+	}
+	if wait < 59*time.Second || wait > 61*time.Second {
+		t.Fatalf("schedule wait = %s, want one conservative interval for future persisted UpdatedAt", wait)
+	}
+}
+
+func TestRuntimeRefreshFloorUsesSteadyClockAcrossWallRollback(t *testing.T) {
+	wallNow := time.Unix(1_800_000_000, 0)
+	steady := &manualSteadyClock{}
+	cfg := testJinkoConfig("https://example.invalid/detail")
+	cfg.TokenURL = "https://example.invalid/token"
+	client := New(cfg, nil)
+	client.tokenMu.Lock()
+	client.steadyNow = steady.Now
+	client.activateTokenStateLocked(tokenState{
+		AccessToken:  testJWT(t, wallNow.Add(-time.Minute), "expired-upstream-response"),
+		RefreshToken: "rotated-refresh",
+		UpdatedAt:    wallNow.UTC(),
+	})
+	client.tokenMu.Unlock()
+
+	// Simulate the wall clock moving backward by an hour while the process's
+	// steady clock advances normally. The floor must retain its real remaining
+	// duration rather than disappear or grow by the wall-clock jump.
+	steady.Advance(30 * time.Second)
+	client.tokenMu.Lock()
+	floorWait := client.backgroundRefreshFloorWaitLocked()
+	client.tokenMu.Unlock()
+	if floorWait != 30*time.Second {
+		t.Fatalf("steady floor wait after rollback = %s, want 30s", floorWait)
+	}
+	due, wait, enabled := client.backgroundRefreshSchedule(wallNow.Add(-time.Hour))
+	if !enabled || due || wait < 30*time.Second {
+		t.Fatalf("after rollback schedule enabled/due/wait = %t/%t/%s, want enabled, not due, and at least the 30s floor", enabled, due, wait)
+	}
+	steady.Advance(30 * time.Second)
+	due, wait, enabled = client.backgroundRefreshSchedule(wallNow)
+	if !enabled || !due || wait != 0 {
+		t.Fatalf("after steady floor schedule enabled/due/wait = %t/%t/%s, want true/true/0", enabled, due, wait)
+	}
+}
+
 func TestConcurrentProactiveRefreshIsSingleFlight(t *testing.T) {
 	fixture := readDetailFixture(t)
 	oldAccess := testJWT(t, time.Now().Add(10*time.Second), "old")
@@ -671,14 +739,12 @@ func TestConcurrentProactiveRefreshIsSingleFlight(t *testing.T) {
 	start := make(chan struct{})
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			<-start
 			_, err := client.Fetch(t.Context())
 			errs <- err
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()
@@ -1111,7 +1177,10 @@ func TestBackgroundKeeperAlertsWhenRefreshedExpiryIsUnknown(t *testing.T) {
 
 func TestBackgroundKeeperNeverReplaysAmbiguousRefreshAndRestartKeepsPause(t *testing.T) {
 	fixture := readDetailFixture(t)
-	oldAccess := testJWT(t, time.Now().Add(10*time.Second), "still-usable-old")
+	// Keep the bearer comfortably outside the expiry window: this test exercises
+	// refresh-outcome uncertainty, not bearer-expiry alerts, and must remain
+	// deterministic across wall-clock corrections in CI/WSL.
+	oldAccess := testJWT(t, time.Now().Add(time.Hour), "still-usable-old")
 	statePath := filepath.Join(t.TempDir(), "token-state.json")
 	var refreshCalls atomic.Int32
 	var detailCalls atomic.Int32
@@ -1151,6 +1220,9 @@ func TestBackgroundKeeperNeverReplaysAmbiguousRefreshAndRestartKeepsPause(t *tes
 	cfg := refreshJinkoConfig(t, server.URL, oldAccess)
 	cfg.TokenStateFile = statePath
 	cfg.RetryAttempts = 5
+	// Make the still-usable one-hour bearer proactively due without relying on a
+	// near-expiry timestamp that can be crossed by a host wall-clock correction.
+	cfg.RefreshBefore = 2 * time.Hour
 	client := New(cfg, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -1162,7 +1234,7 @@ func TestBackgroundKeeperNeverReplaysAmbiguousRefreshAndRestartKeepsPause(t *tes
 	waitForCondition(t, func() bool {
 		return refreshCalls.Load() == 1 && client.hasUncertainRefreshOutcome()
 	})
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		client.notifyMaintenance()
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -1197,7 +1269,14 @@ func TestBackgroundKeeperNeverReplaysAmbiguousRefreshAndRestartKeepsPause(t *tes
 	if _, err := restarted.Fetch(t.Context()); err != nil {
 		t.Fatalf("Fetch() with paused refresh and usable bearer error = %v", err)
 	}
-	waitForCondition(t, func() bool { return len(notifier.Bodies()) == 1 })
+	waitForCondition(t, func() bool {
+		for _, body := range notifier.Bodies() {
+			if strings.Contains(strings.ToLower(body), "uncertain outcome") {
+				return true
+			}
+		}
+		return false
+	})
 	for _, body := range notifier.Bodies() {
 		if strings.Contains(body, oldAccess) || strings.Contains(body, "refresh-old") {
 			t.Fatalf("uncertain-outcome alert leaked credentials: %q", body)
@@ -1231,7 +1310,7 @@ func TestNonSuccessTokenResponseLeavesDurablePauseWithoutReplay(t *testing.T) {
 			if _, err := client.refresh(t.Context(), refreshRequest{reason: refreshProactive}); err == nil || !isRefreshOutcomeUncertainError(err) {
 				t.Fatalf("refresh error = %v, want typed uncertain outcome", err)
 			}
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				if _, err := client.refresh(t.Context(), refreshRequest{reason: refreshProactive}); err != nil {
 					t.Fatalf("paused refresh recheck error = %v", err)
 				}
@@ -1700,10 +1779,7 @@ func TestDetailDoesNotFollowRedirect(t *testing.T) {
 }
 
 func TestFetchRetriesServerErrors(t *testing.T) {
-	fixture, err := os.ReadFile("../../../testdata/jinko_detail_response.json")
-	if err != nil {
-		t.Fatalf("ReadFile fixture error = %v", err)
-	}
+	fixture := readDetailFixture(t)
 
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1738,7 +1814,7 @@ func TestFetchRejectsMetriclessSuccessResponse(t *testing.T) {
 
 	client := New(testJinkoConfig(server.URL), nil)
 	_, err := client.Fetch(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "contained no metrics") {
+	if err == nil || !strings.Contains(err.Error(), "category=no-metrics") {
 		t.Fatalf("Fetch() error = %v, want metricless response error", err)
 	}
 }
@@ -1757,8 +1833,221 @@ func TestFetchRejectsResponseWithoutDeviceSerial(t *testing.T) {
 	defer server.Close()
 
 	_, err := New(testJinkoConfig(server.URL), nil).Fetch(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "no device serial") {
+	if err == nil || !strings.Contains(err.Error(), "category=empty-device-serial") {
 		t.Fatalf("Fetch() error = %v, want missing device serial error", err)
+	}
+}
+
+func TestFetchRejectsUnusableCollectionTimeWithoutRetryingOrRefreshing(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		timestamp string
+		wantError error
+		category  string
+	}{
+		{name: "missing", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "null", timestamp: "null", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "zero", timestamp: "0", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "negative", timestamp: "-1", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "out of range", timestamp: "1e99", wantError: model.ErrInvalidCollectionTime, category: "invalid-collection-time"},
+		{name: "offline cache", timestamp: strconv.FormatInt(now.Add(-48*time.Hour).Unix(), 10), wantError: model.ErrStaleCollectionTime, category: "stale-data"},
+		{name: "future", timestamp: strconv.FormatInt(now.Add(5*time.Minute).Unix(), 10), wantError: model.ErrFutureCollectionTime, category: "future-collection-time"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(readDetailFixture(t), &payload); err != nil {
+				t.Fatal(err)
+			}
+			delete(payload, "collectionTime")
+			if tt.timestamp != "" {
+				payload["collectionTime"] = json.RawMessage(tt.timestamp)
+			}
+			fixture, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var detailCalls, refreshCalls, persistenceCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/detail" {
+					refreshCalls.Add(1)
+					http.Error(w, "unexpected refresh", http.StatusInternalServerError)
+					return
+				}
+				detailCalls.Add(1)
+				_, _ = w.Write(fixture)
+			}))
+			defer server.Close()
+			cfg := refreshJinkoConfig(t, server.URL, testJWT(t, now.Add(2*time.Hour), "valid-access"))
+			client := New(cfg, nil)
+			client.persistState = func(string, tokenState) error {
+				persistenceCalls.Add(1)
+				return nil
+			}
+			snapshot, err := client.Fetch(t.Context())
+			if snapshot != nil || !errors.Is(err, tt.wantError) || !strings.Contains(err.Error(), "category="+tt.category) {
+				t.Fatalf("Fetch() = %#v, %v; want no snapshot and %v", snapshot, err, tt.wantError)
+			}
+			if detailCalls.Load() != 1 || refreshCalls.Load() != 0 || persistenceCalls.Load() != 0 {
+				t.Fatalf("calls = detail %d, refresh %d, persistence %d; want 1, 0, 0", detailCalls.Load(), refreshCalls.Load(), persistenceCalls.Load())
+			}
+			if client.tokenVersion != 1 || client.bearerToken != cfg.BearerToken || client.refreshToken != cfg.RefreshToken {
+				t.Fatal("telemetry rejection changed the credential pair")
+			}
+		})
+	}
+}
+
+func TestFetchRecoversFromStaleCacheAndPreservesCollectionTime(t *testing.T) {
+	collectedAt := time.Now().Add(-3 * time.Minute).Truncate(time.Second)
+	var calls atomic.Int32
+	fixture := readDetailFixture(t)
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(fixture, &payload); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		timestamp := collectedAt
+		if calls.Add(1) == 1 {
+			timestamp = timestamp.Add(-48 * time.Hour)
+		}
+		payload["collectionTime"] = json.RawMessage(strconv.FormatInt(timestamp.Unix(), 10))
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+	client := New(testJinkoConfig(server.URL), nil)
+	if snapshot, err := client.Fetch(t.Context()); snapshot != nil || !errors.Is(err, model.ErrStaleCollectionTime) {
+		t.Fatalf("first Fetch() = %#v, %v; want stale cache rejected", snapshot, err)
+	}
+	snapshot, err := client.Fetch(t.Context())
+	if err != nil {
+		t.Fatalf("fresh Fetch() error = %v", err)
+	}
+	if !snapshot.CollectedAt.Equal(collectedAt) || snapshot.Source != "jinko" || len(snapshot.Metrics) == 0 {
+		t.Fatalf("fresh snapshot = %#v; want original collection time %s and metrics", snapshot, collectedAt)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("detail calls = %d, want one per Fetch", calls.Load())
+	}
+}
+
+func TestFetchUsesConfiguredMaxDataAge(t *testing.T) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(readDetailFixture(t), &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["collectionTime"] = json.RawMessage(strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+	cfg := testJinkoConfig(server.URL)
+	cfg.MaxDataAge = 5 * time.Minute
+	if snapshot, err := New(cfg, nil).Fetch(t.Context()); snapshot != nil || !errors.Is(err, model.ErrStaleCollectionTime) {
+		t.Fatalf("Fetch() = %#v, %v; want configured freshness limit enforced", snapshot, err)
+	}
+	cfg.MaxDataAge = 20 * time.Minute
+	if _, err := New(cfg, nil).Fetch(t.Context()); err != nil {
+		t.Fatalf("Fetch() error = %v, want snapshot accepted within configured limit", err)
+	}
+}
+
+func TestDetailTransportFailurePreservesCauseWithoutExposingSensitiveText(t *testing.T) {
+	logs := captureJinkoLogs(t)
+	transportCause := errors.New("PRIVATE_TRANSPORT_CAUSE_SENTINEL_c38d")
+	notifier := &recordingNotifier{}
+	cfg := testJinkoConfig("https://PRIVATE_DETAIL_ENDPOINT_SENTINEL.invalid/detail")
+	cfg.RetryAttempts = 1
+	cfg.BearerToken = "PRIVATE_BEARER_SENTINEL_7a21"
+	cfg.Cookie = "session=PRIVATE_COOKIE_SENTINEL_d161"
+	client := New(cfg, alert.NewManager(notifier, 0))
+	client.hc = &http.Client{Transport: jinkoRoundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, transportCause
+	})}
+
+	_, err := client.Fetch(t.Context())
+	if err == nil || !errors.Is(err, transportCause) || !strings.Contains(err.Error(), "stage=detail") || !strings.Contains(err.Error(), "category=transport") {
+		t.Fatalf("Fetch() error = %v, want safe typed detail transport error preserving cause", err)
+	}
+	combined := err.Error() + "\n" + logs.String() + "\n" + strings.Join(notifier.Bodies(), "\n")
+	for _, sensitive := range []string{
+		"PRIVATE_DETAIL_ENDPOINT_SENTINEL",
+		transportCause.Error(),
+		"PRIVATE_BEARER_SENTINEL_7a21",
+		"PRIVATE_COOKIE_SENTINEL_d161",
+		"100000001",
+		"200000001",
+	} {
+		if strings.Contains(combined, sensitive) {
+			t.Errorf("transport output exposed sensitive sentinel %q: %q", sensitive, combined)
+		}
+	}
+}
+
+func TestAuthAndExpiryAlertsNeverExposeIdentityEndpointOrUpstreamBody(t *testing.T) {
+	logs := captureJinkoLogs(t)
+	const upstreamBody = "PRIVATE_UPSTREAM_BODY_SENTINEL_91be"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, upstreamBody, http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	notifier := &recordingNotifier{}
+	cfg := testJinkoConfig(server.URL + "/private-detail-path")
+	cfg.BearerToken = testJWT(t, time.Now().Add(-time.Minute), "PRIVATE_JWT_MARKER_5c74")
+	cfg.Cookie = "session=PRIVATE_COOKIE_SENTINEL_b416"
+	_, err := New(cfg, alert.NewManager(notifier, 0)).Fetch(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "status=401") || !strings.Contains(err.Error(), "category=http-status") {
+		t.Fatalf("Fetch() error = %v, want sanitized authentication status", err)
+	}
+	if len(notifier.Bodies()) < 2 {
+		t.Fatalf("ordinary Fetch() alert bodies = %d, want expiry and authentication alerts", len(notifier.Bodies()))
+	}
+
+	combined := err.Error() + "\n" + logs.String() + "\n" + strings.Join(notifier.Bodies(), "\n")
+	for _, sensitive := range []string{
+		server.URL,
+		"private-detail-path",
+		"100000001",
+		"200000001",
+		upstreamBody,
+		cfg.BearerToken,
+		"PRIVATE_COOKIE_SENTINEL_b416",
+	} {
+		if strings.Contains(combined, sensitive) {
+			t.Errorf("authentication output exposed sensitive sentinel %q: %q", sensitive, combined)
+		}
+	}
+}
+
+func TestTokenStateFailurePreservesCauseWithoutExposingPrivatePath(t *testing.T) {
+	logs := captureJinkoLogs(t)
+	var upstreamCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		http.Error(w, "must not be called", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	notifier := &recordingNotifier{}
+	expiredAccess := testJWT(t, time.Now().Add(-time.Minute), "expired-private-path-test")
+	cfg := refreshJinkoConfig(t, server.URL, expiredAccess)
+	privatePath := filepath.Join(t.TempDir(), "PRIVATE_STATE_PATH_SENTINEL_74b2", "state.json")
+	cfg.TokenStateFile = privatePath
+	_, err := New(cfg, alert.NewManager(notifier, 0)).Fetch(t.Context())
+	if err == nil || !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "stage=prepare") {
+		t.Fatalf("Fetch() error = %v, want safe token-state preflight error preserving os.ErrNotExist", err)
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatalf("upstream calls = %d, want none before durable marker", upstreamCalls.Load())
+	}
+
+	combined := err.Error() + "\n" + logs.String() + "\n" + strings.Join(notifier.Bodies(), "\n")
+	for _, sensitive := range []string{privatePath, "PRIVATE_STATE_PATH_SENTINEL_74b2", expiredAccess, "refresh-old"} {
+		if strings.Contains(combined, sensitive) {
+			t.Errorf("token-state output exposed sensitive sentinel %q: %q", sensitive, combined)
+		}
 	}
 }
 
@@ -1831,6 +2120,15 @@ func readDetailFixture(t *testing.T) []byte {
 	if err != nil {
 		t.Fatalf("ReadFile fixture error = %v", err)
 	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(fixture, &payload); err != nil {
+		t.Fatalf("decode fixture error = %v", err)
+	}
+	payload["collectionTime"] = json.RawMessage(strconv.FormatInt(time.Now().Unix(), 10))
+	fixture, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("encode fresh fixture error = %v", err)
+	}
 	return fixture
 }
 
@@ -1844,9 +2142,43 @@ func testJWT(t *testing.T, expiry time.Time, marker string) string {
 	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
 }
 
+type manualSteadyClock struct {
+	mu  sync.Mutex
+	now time.Duration
+}
+
+func (c *manualSteadyClock) Now() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *manualSteadyClock) Advance(duration time.Duration) {
+	c.mu.Lock()
+	c.now += duration
+	c.mu.Unlock()
+}
+
 type recordingNotifier struct {
 	mu     sync.Mutex
 	bodies []string
+}
+
+type jinkoRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f jinkoRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func captureJinkoLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	previous := log.Logger
+	buffer := &bytes.Buffer{}
+	log.Logger = zerolog.New(buffer)
+	t.Cleanup(func() {
+		log.Logger = previous
+	})
+	return buffer
 }
 
 type failOnceNotifier struct {

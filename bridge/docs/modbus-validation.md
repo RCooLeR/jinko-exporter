@@ -18,8 +18,9 @@ without a new target read only when a later section explicitly records the
 missing evidence, two compatible read-only maps agree on the exact field, the
 existing canonical schema has the same raw contract, and production does not
 decode undocumented bits. That exception applies only to Stage 21 below; its
-first target read remains an acceptance task rather than evidence already
-claimed by this ledger.
+offline promotion did not claim a target read. Stage 25 later records repeated
+complete target-fetch acceptance while preserving the narrower outstanding
+raw-word and relay-state correlation task.
 
 The generator zero-domain stage below is deliberately narrower than a normal
 numeric promotion: its exact local words were all zero, consistent with older
@@ -49,7 +50,7 @@ required before any of them can be promoted.
 | `0x02A0 x 8` (`672-679`) | Live/protocol verified, production | Emits PV1/PV2 `DP1`, `DP2`, `DV1`, `DC1`, `DV2`, `DC2`, and aggregate `S_P_T` for the gated 2-MPPT target; PV3/PV4 power words must remain zero. |
 | `0x0202 x 16` (`514-529`) | Live verified, production | Battery/grid/load/PV energy counters. |
 | `0x021C x 2` (`540-541`) | Bracket live/cloud verified, production | DC and AC temperatures; both rows are documented read-only. |
-| `0x0227 x 2` (`551-552`) | Two-map/schema verified, production narrow raw-status contract; first target read pending | Register 551 low-nibble power switch code and register 552 full raw AC relay mask. |
+| `0x0227 x 2` (`551-552`) | Two-map/schema verified; repeated complete target fetches prove transport/decoder acceptance; exact raw/cloud bracket pending | Register 551 low-nibble power switch code and register 552 full raw AC relay mask. |
 | `0x0229 x 6` (`553-558`) | Live zero verified, production raw-only | Warning words 1-2 and fault words 1-4; exact U16 words only, no per-bit interpretation. |
 | `0x0014 x 3` (`20-22`) | 12 kW target live verified; JKS-6/8/10/12/15/20H-EI line specification-gated | Rated power must be one of 6/8/10/12/15/20 kW with exactly 2 MPPT, 3 phases, and raw22 `0x0203`; the unvalidated 25 kW two-MPPT sibling and the separate 29.9/30 kW BM3 three-MPPT variants are rejected. |
 | `0x0085 x 1` (`133`) | Live zero verified, production zero-domain gate | Mutable generator-port mode/configuration word; must remain exactly zero and is re-read on every fetch. |
@@ -57,13 +58,13 @@ required before any of them can be promoted.
 | `0x0295 x 11` (`661-671`) | Live zero verified, production zero-domain only | Emits generator phase voltage/power and total-power canonical keys only as raw-backed zeros; any nonzero word rejects Modbus. |
 | `0x024E x 2` (`590-591`) | Live verified, production | Battery power and Battery-1 current. |
 | `0x0261 x 11` (`609-619`) | Live/cloud verified; frequency and internal currents production, registers 613-619 excluded | `PG_F1` and `G_C_L1..3` are promoted; external CT currents and incomplete power low words remain ignored. |
-| `0x026E x 4` (`622-625`) | Live verified, production with `687-690` | Selected grid phase/total power low words. |
-| `0x02AF x 4` (`687-690`) | Live verified, production with `622-625` | Selected grid phase/total power high words; signed import/export confirmed. |
+| `0x026E x 4` (`622-625`) | Live verified, conservative signed production with `687-690` | Selected grid phase/total power low words; paired values must remain inside the `-32767..32767 W` torn-read coherence envelope. |
+| `0x02AF x 4` (`687-690`) | Live verified, conservative signed production with `622-625` | Selected grid phase/total power high words; signed import/export is confirmed and only canonical sign extension is accepted. |
 | `0x0273 x 12` (`627-638`) | Scalars live verified; active power conservative signed production with `691-694` | Output voltage/current/frequency and gated active-power low words are promoted; apparent candidate 637 remains ignored. |
 | `0x02B3 x 5` (`691-695`) | Positive pairing live correlated; `R691=0xFFFF` later observed; conservative signed production | Active highs 691-694 must be `0x0000` or `0xFFFF` and pair with 633-636 inside the signed coherence envelope; apparent candidate 695 remains ignored. |
 | `0x0280 x 7` (`640-646`) | Load-voltage scalars live/cloud verified, production; power fields excluded | Only load-side L1/L2/L3 voltage at 644-646 is promoted. |
-| `0x028A x 4` (`650-653`) | Positive-domain live/cloud verified, production with `656-659` | Low phase/total direct-load words emit canonical `LPP_A/B/C` and dedicated total `E_Puse_t1`. |
-| `0x028F x 5` (`655-659`) | Load frequency and direct-load high-word pairing production | Register 655 emits frequency; every phase/total high word 656-659 must be zero. |
+| `0x028A x 4` (`650-653`) | Positive live/cloud correlation; `R656=0xFFFF` later observed; conservative signed phases with `656-658` | Low phase words emit canonical signed `LPP_A/B/C` inside the `±32767 W` coherence domain; dedicated total low word emits independent non-negative `E_Puse_t1`. |
+| `0x028F x 5` (`655-659`) | Load frequency and direct-load high-word pairing production | Register 655 emits frequency; phase highs 656-658 must be canonical `0000/FFFF`, while total high 659 must remain zero. |
 
 ## Stage 1: Registers 500-505
 
@@ -344,11 +345,12 @@ export. Registers 622-625 plus 687-690 are production-promoted as one validated
 logical value set read through two fixed FC03 blocks.
 
 The production decoder joins the complete low-first 32-bit word before
-interpreting the sign. It accepts only family-envelope high words `0x0000` or
-`0xFFFF`, but deliberately does not use low-word bit 15 as the sign: synthetic
-`+40000 W` and `-40000 W` fixtures cover both sides of that boundary. Each
-phase and total is constrained to the JKS-family envelope `±65535 W`, followed
-by an exact signed phase-sum check.
+interpreting the sign and accepts only canonical high words `0x0000` or
+`0xFFFF`. Stage 23 supersedes the original broad value envelope after a
+production zero-crossing exposed the two-read coherence risk. Every phase and
+total is now constrained to the conservative `-32767..32767 W` envelope,
+followed by an exact signed phase-sum check. The symmetric boundary is a
+torn-pair guard, not an inverter-rating or pass-through cap.
 
 ## Stage 9: Output Registers 627-638 and 691-695
 
@@ -714,11 +716,11 @@ positive-domain magnitude without assuming perfectly atomic cloud collection.
 A later live same-frame counterexample described below proves that the exact
 phase/total equality in this sample was incidental rather than universal.
 
-Production places the fixed sequence-`0x12` read immediately before the
-sequence-`0x13` read and emits canonical phases `LPP_A/B/C` plus dedicated
-total `E_Puse_t1`. The decoder
-requires exactly four low words and exactly five frequency/high words, then
-applies all of these fail-closed gates:
+At this historical checkpoint, production placed the fixed sequence-`0x12`
+read immediately before the sequence-`0x13` read and emitted canonical phases
+`LPP_A/B/C` plus dedicated total `E_Puse_t1`. The decoder required exactly four
+low words and exactly five frequency/high words, then applied all of these
+fail-closed gates:
 
 - every phase/total high word 656-659 must equal `0x0000`;
 - all four low-first pairs are decoded independently, with no phase-sum gate;
@@ -731,6 +733,10 @@ rejected until a negative value is independently validated. There is no
 and the 40 A/80 A revision/table-layout ambiguity is not safe to encode as a
 per-model rule here. Alternative phase aliases `C_P_L1..3` and all
 inverter-output power aliases remain excluded.
+
+Stage 24 supersedes this historical phase value-domain gate after production
+observed `R656=0xFFFF`. It does not change this stage's positive correlation or
+the dedicated-total contract.
 
 The combined production stage opens one fresh short-lived connection per fetch
 and sends one exact request per fixed block sequentially under one shared
@@ -758,12 +764,16 @@ response, timing between the low/high reads cannot explain the mismatch. This
 is direct target evidence that `650+651+652=653` is not a valid production
 invariant.
 
-Production treats 653/659 as the independent canonical `E_Puse_t1` pair and
-does not compare it with the phase sum. The phase pairs 650/656, 651/657, and
-652/658 are independently exposed as `LPP_A/B/C`. All four high words must
-remain zero for the verified non-negative domain. Regression tests retain a
-sanitized `243 W` versus `251 W` mismatch and prove that arbitrary phase/total
-mismatch is accepted without changing the dedicated total.
+At this historical checkpoint, production treated 653/659 as the independent
+canonical `E_Puse_t1` pair and did not compare it with the phase sum. The phase
+pairs 650/656, 651/657, and 652/658 were independently exposed as `LPP_A/B/C`.
+All four high words had to remain zero for the verified non-negative domain.
+Regression tests retained a sanitized `243 W` versus `251 W` mismatch and
+proved that arbitrary phase/total mismatch was accepted without changing the
+dedicated total.
+
+Stage 24 later changes only the phase sign/coherence domain. The independent
+total and no-phase-sum conclusion remain unchanged.
 
 After that correction, one separately authorized Modbus-only verification
 fetch completed the entire locked first-fetch plan: one fresh TCP connection,
@@ -794,14 +804,19 @@ issue.
 
 The Stage 15 live frame already contained all four low-first direct-load pairs,
 and its immediate cloud bracket independently reported `LPP_A/B/C` with the
-same phase order and magnitude. Production therefore exposes pairs 650/656,
-651/657, and 652/658 as the shared canonical `consumption/LPP_A`, `LPP_B`, and
-`LPP_C` metrics. It retains the Stage 16 correction: the phase sum need not
+same phase order and magnitude. At this historical checkpoint, production
+therefore exposed pairs 650/656, 651/657, and 652/658 as the shared canonical
+`consumption/LPP_A`, `LPP_B`, and
+`LPP_C` metrics. It retained the Stage 16 correction: the phase sum need not
 equal dedicated total 653/659. Each of the four pairs is limited to the exact
 live-verified non-negative domain by requiring its high word to be zero; a
 nonzero word rejects the complete snapshot. Offline tests cover zero, the
 `65535 W` boundary, low-word sign-bit values, arbitrary phase/total mismatch,
 every high-word rejection, and the canonical group/name/unit tuples.
+
+Stage 24 supersedes the historical phase-only `0..65535 W` value domain with
+canonical signed phases inside `-32767..32767 W`; the total remains in its
+verified zero-high non-negative subset.
 
 Register 588 was already decoded and range-checked as SOC `0..100%`. The cloud
 contract exposes that same stored value through both `battery/B_left_cap1`
@@ -991,3 +1006,146 @@ words, exact signed-sum failure, and ignored apparent power. End-to-end client
 tests cover successful signed publication plus fail-closed no-partial-snapshot
 behavior. The independent synthetic signed-high protocol fixture is locked by
 SHA-256 `c7f948fb86ca8dda4365843fc9840bf705574e599056b6dbf91f4b4f4bd420b2`.
+
+## Stage 23: 2026-08-19 Grid-Power Torn-Pair Guard
+
+At `2026-08-19T04:36:31Z`, the production priority chain rejected one Modbus
+snapshot with this decoder error:
+
+```text
+decode grid powers: grid power L1 -65536W exceeds 65535W JKS family validation maximum
+```
+
+Both grid-power FC03 responses had therefore already passed framing, length,
+sequence, identity, byte-count, checksum, and CRC validation. The signed join
+can equal exactly `-65536` only when low register 622 from the first response is
+`0x0000` and high register 687 from the immediately following response is
+`0xFFFF`. No single value in the old accepted `-65535..65535 W` domain has
+that representation: zero uses high `0x0000`, while an in-domain negative
+value uses high `0xFFFF` and a nonzero low word. The evidence does not retain
+the other six words or device-side update timestamps, so it cannot distinguish
+an inter-request zero crossing from a non-atomic internal register-map update.
+It does establish that the two accepted response blocks did not describe one
+coherent in-domain L1 value. Jinko fallback succeeded for that poll and the
+next Modbus poll succeeded, confirming the intended fail-closed priority path.
+
+The old `±65535 W` check was not a complete coherence guard. A sign change can
+produce a torn value that remains inside that envelope, and even the exact
+phase-sum gate need not detect it. The regression fixtures preserve the phase
+sum while exercising both directions:
+
+```text
+positive lows  0001 / 000A / 0014 / 001F
+later highs     FFFF / 0000 / 0000 / FFFF
+torn values   -65535 /   10 /   20 / -65505
+
+negative lows  FFE1 / 000A / 0014 / FFFF
+later highs     0000 / 0000 / 0000 / 0000
+torn values    65505 /   10 /   20 /  65535
+```
+
+Production now uses the same symmetric signed coherence envelope as output
+active power: every joined grid phase and total must be in
+`-32767..32767 W`. If a nonnegative in-domain low word is paired with stale
+`0xFFFF` sign extension, the result is at most `-32769 W`; if a negative
+in-domain low word is paired with stale `0x0000`, the result is at least
+`32769 W`. Both fail before the phase-sum check. Exact `+32767 W` and
+`-32767 W` remain accepted; `+32768 W` and `-32768 W` fail closed.
+
+This correction changes no address, sequence, request order, connection count,
+metric identity, or metric count. A first fetch still performs 24 fixed reads
+on one connection, later fetches perform 22, and there is no retry or reconnect
+inside a fetch. The bound is an acquisition-coherence contract, not a claim
+about rated power or AC pass-through. A future wider grid-power domain requires
+new evidence and a pairing strategy that preserves sign coherence; widening
+the numeric constant alone is not acceptable.
+
+## Stage 24: 2026-08-19 Direct-Load Signed-Phase Coherence Guard
+
+At `2026-08-19T08:50:31Z`, the production priority chain rejected one Modbus
+snapshot with this decoder error:
+
+```text
+decode direct-load powers: direct-load phase A high word register 656 is 0xFFFF; only verified non-negative zero-high-word values are accepted
+```
+
+The exact low-word response `650 x 4` and immediately following
+frequency/high-word response `655 x 5` had already passed framing, sequence,
+logger identity, length, checksum, Modbus byte-count, and CRC checks. The error
+establishes that target register 656 entered the canonical negative sign-word
+shape. It does not retain paired low register 650, the other three high words,
+or a simultaneous cloud value, so this evidence alone does not claim an exact
+negative magnitude. Jinko fallback completed the poll, and the next Modbus poll
+succeeded.
+
+The primary V105.1 map identifies all four low/high pairs 650-653 and 656-659
+as signed halves. The maintained Deye P3 profile has also long decoded all four
+with its signed low-first 32-bit rule. Production now admits that documented
+signed domain only for the three phase metrics `LPP_A/B/C`, under a symmetric
+coherence guard:
+
+- phase high words 656-658 must be canonical `0x0000` or `0xFFFF`;
+- each joined phase must remain inside `-32767..32767 W`;
+- exact `+32767 W` and `-32767 W` are accepted, while both `±32768 W` encodings
+  fail closed;
+- the phases remain independent and are never compared with the dedicated
+  total, because Stage 16 disproved that equality.
+
+For any real phase inside that domain, a low word sampled before a sign change
+and an opposite sign word sampled afterward decodes outside the accepted
+range. The exact synthetic edge `R650=0x0000/R656=0xFFFF` becomes `-65536 W`,
+while the inverse `R650=0xFFFF/R656=0x0000` becomes `+65535 W`; both are
+rejected. A coherent synthetic `R650=0xFFF6/R656=0xFFFF` decodes as `-10 W`
+and is accepted. This envelope is an acquisition-coherence rule, not an
+inverter or pass-through rating.
+
+Dedicated total pair 653/659 deliberately stays in the previously verified
+zero-high non-negative subset. Register 659 must remain `0x0000`, and register
+653 retains the full `0..65535 W` range. The maps describe the wire pair as
+signed, but no target evidence establishes a negative total; keeping the wider
+positive subset also preserves three-phase pass-through headroom. A future
+signed or more strongly coherent total contract needs new raw evidence and an
+acquisition design recorded under MB-009.
+
+An exhaustive production-code inventory found only three emitted telemetry
+families that join halves from separate FC03 responses: direct load, grid
+active power, and inverter output active power. All three phase decoders now
+require canonical sign extension plus the same symmetric `±32767 W` coherence
+domain. Grid and output additionally retain their independently validated exact
+phase-sum gates. Capability words and five lifetime energy counters join halves
+inside one FC03 response; generator production remains zero-only; incomplete
+UPS, CT, and apparent-power pairs are ignored and cannot affect published
+metrics.
+
+This correction changes no address, sequence, request order, connection count,
+metric identity, or metric count. The first fetch remains 24 fixed requests on
+one connection, later fetches remain 22, and the core snapshot remains 80
+metrics. Tests cover mixed and all-negative phases, every phase sign word,
+`±32767` boundaries, `±32768`, both torn directions, noncanonical sign words,
+independent phase/total mismatch, total `65535`, total-negative rejection,
+successful signed publication, and fail-closed no-partial/no-retry behavior.
+
+## Stage 25: 2026-08-19 Register 551-552 Operational Acceptance
+
+Production logs recorded repeated successful Modbus polls with
+`metric_count=109` before and after isolated failover events. For the deployed
+configuration that count is the locked 80-metric core plus 29 optional Shelly
+`grid_load` metrics. A core snapshot is returned only after all 22 steady-state
+FC03 reads on one connection complete and every response passes framing,
+sequence, logger identity, checksum, CRC, length, and decoder validation.
+Therefore each of those successful polls necessarily completed the fixed
+sequence-`0x19` `551 x 2` read and emitted both its source-local register-551
+state and canonical raw `AC` metric.
+
+This closes the Stage-21 first-target transport/decoder acceptance debt. It
+does not reconstruct the exact raw R551/R552 words from aggregate poll logs,
+does not expose register-551 upper bits that production intentionally ignores,
+and does not correlate register 552 with a simultaneous cloud or physical
+relay state. Those narrower evidence tasks remain MB-001. No named bit meaning
+or automatic relay action is promoted from this operational acceptance.
+
+One nearby poll exhausted the shared fetch deadline while the `551 x 2` block
+was current and then fell back successfully to Jinko; the following Modbus poll
+succeeded. Because the deadline covers connection setup and every preceding
+request, that log cannot attribute the delay specifically to either register.
+It changes neither the allowlist nor the no-retry/no-partial-snapshot policy.

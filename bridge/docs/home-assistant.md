@@ -1,6 +1,6 @@
 # Home Assistant MQTT Discovery
 
-The bridge can create a read-only Home Assistant device through MQTT Discovery. It publishes retained discovery configs and a retained JSON state payload after each successful poll.
+The bridge can create a read-only Home Assistant device through MQTT Discovery. Discovery configs are always retained so Home Assistant can restore the entities after its own restart. The bridge publishes a JSON state payload after each successful poll; `MQTT_RETAIN` controls whether that state and the availability value are retained.
 
 ## Requirements
 
@@ -47,6 +47,8 @@ snapshot.source
 jinko_exporter
 ```
 
+Use an explicit, stable `MQTT_DEVICE_ID` for priority failover and whenever `MQTT_DISCOVERY_STATE_FILE` is configured. The manifest is bound to that identity; changing it is a device migration, not a safe way to hide old retained entities.
+
 ## Device Naming
 
 Default Home Assistant device name:
@@ -75,7 +77,7 @@ The Discovery device payload uses:
 
 ## State Payload
 
-The retained state payload looks like this:
+With the default `MQTT_RETAIN=true`, the retained state payload looks like this:
 
 ```json
 {
@@ -107,9 +109,11 @@ The retained state payload looks like this:
 
 Each metric sensor reads from:
 
-```text
-value_json.metrics.<state_key>
+```jinja2
+{{ value_json.get('metrics', {}).get('<state_key>') }}
 ```
+
+The nested lookup is deliberately missing-safe. A metric absent from the current source becomes `unknown` without a Home Assistant template warning. A present numeric `0` remains a real zero.
 
 Each alert binary sensor reads from:
 
@@ -151,9 +155,9 @@ Meta <metadata_key>
 
 Alert binary sensors are missing-safe during source failover. When the current
 snapshot does not contain a previously discovered alert metric, its binary
-sensor becomes unknown rather than incorrectly reporting `OFF`. Aggregate
+sensor becomes `unavailable` rather than incorrectly reporting `OFF`. Aggregate
 problem sensors are source-scoped as well: the Modbus aggregate, for example,
-becomes unknown while Jinko or Solarman supplies the snapshot and can return
+becomes `unavailable` while Jinko or Solarman supplies the snapshot and can return
 to `OFF` only after a complete Modbus snapshot reports its own alert words as
 clear. The bridge publishes a retained empty discovery payload for the older
 cross-source `alarm_or_fault_active` entity so Home Assistant removes that
@@ -162,7 +166,7 @@ entities.
 
 ### Metric Sensors
 
-Every numeric source metric becomes a sensor.
+Without persistent Discovery state, every numeric source metric observed by the current process can become a sensor. With `MQTT_DISCOVERY_STATE_FILE`, ordinary inverter sensors are instead learned only from the configured primary source and retained as a monotonic schema across restarts. Source-local alert sensors and optional Shelly `grid_load` sensors use their own monotonic unions.
 
 Discovery name:
 
@@ -214,11 +218,19 @@ The staged output-power entities use the same canonical discovery surface across
 | Inverter Output Power L3 | `INV_O_P_L3` | `electric_inv_o_p_l3` | `W` |
 | Total Inverter Output Power | `INV_O_P_T` | `electric_inv_o_p_t` | `W` |
 
-The core local Modbus snapshot now contains 80 metrics before optional enrichment, including canonical `consumption/LPP_A..C`, `bms/BMS_SOC`, `bms/BMST`, raw relay mask `status/AC`, eleven `generator` state keys, and the four output-power keys above. The source-local `DEYE_MODBUS_R551_POWER_SWITCH_STATE` is a separate diagnostic entity and does not impersonate a cloud status key. The generator entities are backed by three live-verified all-zero register blocks: any nonzero generator word rejects Modbus and allows priority fallback instead of publishing an unverified decode. Output active power is likewise fail-closed outside its conservative signed domain: a high word other than `0x0000`/`0xFFFF`, a joined value outside `-32767..32767 W`, or an exact signed phase/total mismatch rejects Modbus rather than publishing a misleading entity. In a mixed priority deployment, keep one explicit `MQTT_DEVICE_ID`; with fallback projection enabled, these entities and the PV entities above retain the primary surface's key, group, name, and unit across source changes. The legacy-named `SOLARMAN_CANONICAL_JINKO_METRICS=true` setting additionally filters unknown Solarman-only points; it is not required to canonicalize recognized points. Previously discovered ordinary metrics that are absent from a fallback are published as `null` rather than retaining a stale value. Alert entities remain source-scoped as described above and are never projected into another source's warning/fault domain.
+The core local Modbus snapshot now contains 80 metrics before optional enrichment, including canonical `consumption/LPP_A..C`, `bms/BMS_SOC`, `bms/BMST`, raw relay mask `status/AC`, eleven `generator` state keys, and the four output-power keys above. Direct-load phase gauges preserve signed `LPP_A..C` values inside the conservative `-32767..32767 W` coherence domain; dedicated home-load total `E_Puse_t1` remains independently non-negative and is not derived from the phase sum. The source-local `DEYE_MODBUS_R551_POWER_SWITCH_STATE` is a separate diagnostic entity and does not impersonate a cloud status key. The generator entities are backed by three live-verified all-zero register blocks: any nonzero generator word rejects Modbus and allows priority fallback instead of publishing an unverified decode. Output active power is likewise fail-closed outside its conservative signed domain: a high word other than `0x0000`/`0xFFFF`, a joined value outside `-32767..32767 W`, or an exact signed phase/total mismatch rejects Modbus rather than publishing a misleading entity. In a mixed priority deployment, keep one explicit `MQTT_DEVICE_ID`; with fallback projection enabled, these entities and the PV entities above retain the primary surface's key, group, name, and unit across source changes. The legacy-named `SOLARMAN_CANONICAL_JINKO_METRICS=true` setting additionally filters unknown Solarman-only points; it is not required to canonicalize recognized points. Previously discovered ordinary metrics that are absent from a fallback are published as `null` rather than retaining a stale value. Alert entities remain source-scoped as described above and are never projected into another source's warning/fault domain. With persistent Discovery state and `modbus,jinko,solarman`, Modbus defines the ordinary Home Assistant surface even when the process starts during a Modbus outage: the cold Jinko fallback supplies state and Jinko alerts but cannot add cloud-only ordinary entities.
 
 ### Shelly Grid Load Sensors
 
-When `SHELLY_GRID_LOAD_ENABLED=true`, the bridge appends Shelly Pro 3EM metrics under the `grid_load` group. These entities are useful for hybrid inverter installations where the inverter only measures backup/UPS load and does not expose grid-side load.
+When `SHELLY_GRID_LOAD_ENABLED=true`, the bridge independently polls Shelly Pro 3EM metrics under the `grid_load` group. These entities remain available while the inverter is off, including after a bridge restart, and keep their existing names, unique IDs, and device binding. `MQTT_DEVICE_ID` must be configured for that stable cold-start identity. These entities are useful for hybrid inverter installations where the inverter only measures backup/UPS load and does not expose grid-side load.
+
+In independent mode the shared JSON payload carries `up`, `collected_at`, and
+`published_at` for the inverter, plus `grid_load_up`, `grid_load_collected_at`,
+and `grid_load_published_at` for Shelly. A new Shelly read never advances the
+inverter's timestamps or marks it online. Each entity checks its own stream's
+availability as well as the shared MQTT availability/LWT. Missing optional
+Shelly points are unavailable, not fabricated zeros; real zero readings remain
+valid. Existing retained Discovery configs are updated on the same topics.
 
 Primary card-facing sensors:
 
@@ -237,6 +249,16 @@ Primary card-facing sensors:
 | Grid Load L3 Power | `grid_load_l3_power` | `W` |
 
 Shelly `EMData` totals are exposed as kWh energy sensors after converting the Shelly Wh counters.
+
+The bridge also discovers **Shelly Internal Temperature**, with state key
+`grid_load_internal_temperature`, unit `°C`, device class `temperature`, state
+class `measurement`, and entity category `diagnostic`. It appears under the
+same bridge device, with one decimal place suggested for display. It is the
+Shelly's internal sensor, not the inverter temperature or room temperature.
+No extra configuration or custom-card update is required. Like other Shelly
+entities, it stays available with the inverter off. A failed or unavailable
+temperature read makes only this sensor unavailable, not the electrical
+readings; genuine zero is preserved and old temperatures are not replayed.
 
 ### Warning/Alarm/Fault Binary Sensors
 
@@ -274,6 +296,17 @@ U16 word is non-zero. While Modbus is the current source, `alert_count` counts
 non-zero words rather than individual set bits, and its Modbus aggregate is
 true when any of the six words is non-zero.
 
+Alert entities use two Home Assistant availability conditions in `all` mode:
+the global bridge availability topic and the JSON state topic. A source
+aggregate is available only when the latest successful snapshot has that exact
+`alert_domain` and contains at least one finite alert value. A numeric alert and
+its matching binary sensor are available only when the manifest records that
+state key for the current alert domain and the key is present in
+`alert_metrics`. Consequently, an explicit finite zero is a real `0`/`OFF`, a
+non-zero value is `ON`, and an inactive source, omitted value, or non-finite
+value is `unavailable` rather than `unknown` or a fabricated `OFF`. A global
+poll failure still makes every entity unavailable.
+
 | Register | Numeric state key | Binary sensor state key |
 | --- | --- | --- |
 | `553` | `alert_deye_modbus_r553_warning_word_1_raw` | `alert_deye_modbus_r553_warning_word_1_raw_active` |
@@ -286,6 +319,15 @@ true when any of the six words is non-zero.
 These are source-specific inverter words. They are deliberately separate from
 the Jinko lithium-battery alert entities and have no decoded bit names or
 automatic control action.
+
+The optional direct mobile push is independent of MQTT Discovery. When
+`MODBUS_ALERT_CORRELATION_ENABLED=true`, the first complete non-zero Modbus
+vector sends one detected push and starts bounded Jinko/Solarman evidence
+collection. The cloud completion is logged without creating a second push; a
+later complete all-zero Modbus vector sends the recovery push. Both pushes use
+one privacy-safe per-device tag, so recovery replaces the active notification
+without exposing the device serial. See [Alerts](./alerts.md) for configuration
+and safety boundaries.
 
 ## Device Classes And Units
 
@@ -317,24 +359,53 @@ Availability topic:
 
 Behavior:
 
-- On successful poll, the bridge publishes `online`.
-- On poll failure, the bridge publishes `offline`.
+- Without Shelly, a successful inverter poll publishes `online` and a failed poll publishes `offline`.
+- With independent Shelly enabled, the shared availability is `online` when at least one stream has a successful latest poll. Inverter entities additionally require `up=true`; grid-load entities require `grid_load_up=true`. If both streams fail, global availability becomes `offline`.
+- An offline Solarman response or a cloud snapshot with an invalid/expired
+  collection timestamp fails that source. If no priority source has valid data,
+  and Shelly is disabled, the bridge publishes `offline` without writing a new state payload. Historical
+  retained readings remain unavailable, and their `collected_at`/`published_at`
+  are not advanced. Both cloud age limits default to `15m` and are configurable
+  through `JINKO_MAX_DATA_AGE` and `SOLARMAN_MAX_DATA_AGE`.
 - On clean shutdown, the bridge publishes `offline`.
 - The MQTT will message also uses `offline`.
-- On broker reconnect, the bridge republishes the latest retained discovery messages and state payload, then republishes the last known availability value. If the last poll failed, reconnect keeps availability `offline` until a later successful poll.
+- After the first successful poll in the current process, a broker reconnect republishes the complete owned Discovery schema and latest state payload, then republishes the last known availability value. Without Shelly, before that first success broker-retained configs are left in place and the bridge publishes `offline`. Independent mode can regenerate the persisted schema with both streams unavailable even before either succeeds. Reconnect preserves both stream flags and collection timestamps; it never treats a failed stream as recovered. Failed state/discovery delivery also forces shared availability offline until a later valid publication.
 
-If a source temporarily fails, Home Assistant marks the device entities unavailable until a later successful poll publishes `online` again.
+If a stream temporarily fails, Home Assistant marks its entities unavailable until a later successful poll restores that stream. A healthy independent Shelly stream does not restore inverter entities. Source-scoped alert entities additionally require a matching, known current alert domain on the retained state topic. Switching from Modbus to Jinko therefore makes the Modbus alert entities unavailable and makes only the explicitly reported Jinko alert entities available; switching back reverses that relationship.
 
-## Discovery Refresh
+## Persistent Discovery Schema
 
-Discovery messages are republished when the shape changes:
+For stable retained Discovery across bridge restarts, configure a private manifest in a writable state directory:
 
-- device identity changes
-- state topic changes
-- metric key/name/unit/group set changes
-- metadata keys change
+```yaml
+volumes:
+  - ./state:/var/lib/jinko-bridge
+environment:
+  MQTT_DEVICE_ID: "synthetic_inverter_001"
+  MQTT_DISCOVERY_STATE_FILE: "/var/lib/jinko-bridge/mqtt-discovery-state.json"
+```
 
-Messages are retained by default so Home Assistant can restore entities after restart.
+This option is optional for backward compatibility and strongly recommended for mixed priority. The first item in `EXPORTER_SOURCE_PRIORITY` is the primary schema source; in single-source mode, `EXPORTER_SOURCE` is primary. The behavior is deliberately asymmetric:
+
+- Ordinary inverter metrics are added only by successful primary snapshots and never removed merely because a later primary response omits one.
+- Inverter metadata diagnostics follow the same primary-only monotonic rule. Independently polled `shelly_grid_load_*` metadata is learned from Shelly and uses its own availability.
+- A cold fallback remains usable for live state and availability, but fallback-only ordinary metrics do not expand the schema.
+- Warning/alarm/fault entities form a separate source-scoped union so an important fallback alert is not hidden. The typed per-source ownership in the manifest is also used to regenerate entity-scoped availability templates after restart; alert keys shared by several sources are accepted only with identical metric semantics.
+- Shelly `grid_load` entities form a separate union and become `unavailable` when an optional value or complete Shelly read is unavailable; an inverter failure does not affect their own availability.
+- Previously owned ordinary metrics absent from the current snapshot are included as `null`, and every Discovery template is missing-safe. Missing ordinary telemetry is `unknown` in legacy single-stream mode and `unavailable` in independent mode; missing or inactive source-scoped alerts are `unavailable` in both modes.
+
+The manifest stores a strict ownership binding plus typed ordinary, Shelly, alert, and primary-metadata schemas. The current binary regenerates the exact topics and payloads from that typed state, so template and security fixes also apply to entities learned by an older binary. A missing manifest is created before MQTT connects. An existing manifest is read and validated at startup without being rewritten solely to test writability; keep its parent directory writable by container UID `65532` because a later schema change is committed there as an atomic replacement before the new schema is published. New and atomically replaced manifest files are written with private permissions. A manifest must be used by only one bridge process and must be separate from all secrets and `JINKO_TOKEN_STATE_FILE`.
+
+Manifest validation fails closed. An invalid version, malformed or oversized file, non-regular path, changed device ownership, incompatible discovery prefix, or different configured primary source stops startup rather than silently replacing the manifest or issuing retained deletions. Correct the configuration or perform an explicit migration; do not edit ownership fields merely to bypass the check.
+
+### Migrating Legacy Retained Topics
+
+The first manifest created after an upgrade cannot prove ownership of retained topics published by an older process. It therefore does not discover or delete arbitrary broker topics automatically. Migrate an existing installation in two controlled phases:
+
+1. **Make retained configs safe.** Export the candidate retained configs and verify each payload belongs to this bridge by its exact Discovery topic, `unique_id`, state topic, availability topic, and device identifier. In a reviewed one-time broker migration, republish only that verified set with the missing-safe metric template. Keep the old entities temporarily so dashboards and automations can be checked without a destructive schema change.
+2. **Remove only confirmed stale entities.** After the configured primary schema has been observed and reviewed, publish retained empty payloads only to the exact verified cloud-only ordinary topics that are no longer desired. Preserve source-specific alert topics and Shelly enrichment topics, then keep the committed manifest as the ownership record for future reconciliation.
+
+Never clear `homeassistant/#`, never delete by a partial object-ID prefix, and never change `MQTT_DEVICE_ID` as a cleanup shortcut. If an old topic was not verified or recorded as owned, leave it untouched and investigate it separately.
 
 ## Troubleshooting
 
@@ -361,4 +432,5 @@ Common issues:
 - No device appears: confirm Home Assistant MQTT integration is enabled and discovery prefix is `homeassistant`.
 - Entities unavailable: inspect the availability topic and bridge logs for poll failures.
 - Entity IDs differ from examples: Home Assistant generated a unique slug from the discovery name and existing entity registry state.
-- Old entities remain after renaming a device: remove stale MQTT entities from Home Assistant or clear retained discovery topics manually.
+- Old entities remain from a pre-manifest release: follow the two-phase verified migration above. Do not clear the whole Home Assistant Discovery prefix.
+- Startup reports a discovery-manifest mismatch or corrupt file: stop and reconcile the configured device ID, prefixes, primary source, and state file. The bridge intentionally refuses to overwrite or clean up from untrusted state.

@@ -23,6 +23,16 @@ configured. With `EXPORTER_METRICS_DROP_SOURCE_LABEL=true`, ordinary fallback
 metrics are projected onto the learned primary label surface so a source switch
 does not create duplicate Grafana series. MQTT deployments with multiple
 sources must also set one stable, source-independent `MQTT_DEVICE_ID`.
+For a stable Home Assistant entity surface across process restarts, configure
+`MQTT_DISCOVERY_STATE_FILE` on the same private writable state mount. The
+manifest preserves primary ordinary metrics, Shelly enrichment, and
+source-scoped alert ownership without turning missing fallback values into
+zeros.
+The state directory must be writable by the effective container UID:GID because
+updates use a same-directory atomic replacement. The image and example default
+to `65532:65532`; if a deployment overrides `user` to match NAS ownership,
+provision the directory for that identity. `read_only: true` protects the image
+root filesystem but does not make the explicit state bind mount read-only.
 
 The local source is the narrow, FC03-only
 `jks-6-20h-ei-readonly-v1` profile. It is designed for the
@@ -39,6 +49,11 @@ poll; healthy Modbus does not cause Jinko detail calls. Keep bootstrap tokens in
 `*_FILE` secrets and give `JINKO_TOKEN_STATE_FILE` a dedicated private writable
 mount so rotated state survives container replacement. Never commit tokens,
 credentials, logger serials, device serials, or exported state files.
+
+An optional Modbus alert-correlation worker can capture a non-zero raw warning
+or fault vector, query both cloud sources concurrently for diagnostic evidence,
+and send a dedicated Home Assistant notification. It never writes to the
+inverter or changes source selection.
 
 ## Documentation
 

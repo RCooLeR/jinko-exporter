@@ -66,20 +66,22 @@ validation gates are complete.
 
 ## Open Work
 
-### MB-001 TODO: First Target Read of Registers 551-552
+### MB-001 TODO: Exact Raw/Relay-State Bracket for Registers 551-552
 
-**Status:** acceptance evidence pending; the narrow production decoder remains
-fail-closed.
+**Status:** repeated complete target fetches prove transport and decoder
+acceptance; exact raw-word evidence and a relay-state bracket remain pending.
 
 Two compatible read-only maps and the canonical cloud schema support the
-current offline promotion. A supervised raw read must still capture both
-registers on the target and compare register 552 with the contemporaneous AC
-relay state. The retained evidence must include the complete raw register 551,
-not only the low nibble that normal metric output exposes, so any upper bits are
-visible. Named interpretation of register-552 relay and dry-contact bits needs
-separate observed state transitions; the current raw-U16 contract does not claim
-that every documented bit has been live-proven. The read must not toggle a relay
-or power state.
+current narrow promotion. Repeated production snapshots with the exact 80-core
+Modbus surface could only succeed after the fixed `551 x 2` response passed all
+framing and decoder gates, so the earlier first-read debt is closed. A
+supervised raw capture must still retain both complete words and compare
+register 552 with the contemporaneous AC relay state. It must include the
+complete raw register 551, not only the low nibble that normal metric output
+exposes, so any upper bits are visible. Named interpretation of register-552
+relay and dry-contact bits needs separate observed state transitions; the
+current raw-U16 contract does not claim that every documented bit has been
+live-proven. The read must not toggle a relay or power state.
 
 ### MB-002 TODO: Exact Negative Inverter-Output Capture
 
@@ -167,16 +169,27 @@ all `bms2` fields need addresses and live BMS correlation of their own. Jinko
 lithium-BMS alarm/fault keys are also not aliases for inverter-wide raw warning
 words 553-558.
 
-### MB-009 TODO: Negative Direct-Load Power
+### MB-009 TODO: Wider and Signed-Total Direct-Load Coherence
 
-**Status:** blocked on verified reverse or AC-coupled load-side flow.
+**Status:** signed phases are production-safe inside `-32767..32767 W`; wider
+phases and any signed-total contract remain blocked on raw target evidence and
+an acquisition-coherence design.
 
-Pairs 650/656 through 653/659 currently accept only high word `0x0000` and the
-independent `0..65535 W` domain. Capture a genuine negative condition before
-considering `0xFFFF` sign extension. Preserve all four pairs and compare the
-three phases plus dedicated total; do not add a phase-sum equality gate because
-a live positive sample already disproved that invariant. The pass-through
-current rating is not an inverter-rated-power cap.
+Phase pairs 650/656 through 652/658 accept canonical sign extension and joined
+values inside `-32767..32767 W`; production observation of `R656=0xFFFF`
+established the sign-word shape but did not preserve an exact paired negative
+magnitude. Dedicated total 653/659 remains in its verified zero-high
+`0..65535 W` subset. Capture complete raw low/high words plus a nearby
+cloud/display value before claiming an exact negative magnitude or enabling a
+signed total. Preserve all four independent pairs; do not add a phase-sum
+equality gate because a live positive sample already disproved that invariant.
+
+The non-negative total range is not a complete torn-sign guard if the actual
+total can cross below zero. Full coherence while retaining values above
+`32767 W` requires a target-validated acquisition strategy, such as one
+contiguous block that returns both halves coherently or fixed high/low/high
+bracketing. Do not narrow the total merely to the inverter rating: the
+pass-through current rating is a separate limit.
 
 ### MB-010 TODO: Nonzero Generator Telemetry
 
@@ -261,6 +274,13 @@ convenience metrics are later added. Never merge the four fault words into a
 single `float64` mask, because the combined integer cannot preserve every bit
 exactly.
 
+The optional correlation worker now captures the next non-zero six-word vector,
+queries both configured cloud sources, and records only sanitized comparable
+metrics plus source alert points. Use that evidence together with the inverter
+display and firmware table to close this TODO. Until then, the bridge may alert
+on non-zero raw words but must not attach bit names, acknowledge a fault, or
+perform any automatic control action.
+
 ### MB-017 TODO: Remaining Status and Metadata Keys
 
 **Status:** intentionally excluded unless an exact contract is found.
@@ -270,6 +290,23 @@ or the device-type gate: their code systems and meanings differ. Firmware and
 protocol versions, battery type/state, relay/contact interpretations, and
 similar metadata need exact source contracts. Absence is preferable to a
 numeric alias that only happens to match one fixture.
+
+### MB-018 TODO: Wider Grid-Power Coherence Domain
+
+**Status:** current `-32767..32767 W` domain is fail-closed; wider values need
+an acquisition-coherence design and target evidence.
+
+The 2026-08-19 production event proved that separate low/high grid-power reads
+can straddle a sign transition. Do not restore the former `±65535 W` envelope
+by changing only a numeric constant: phase-sum-preserving torn pairs can pass
+that range. A wider contract requires a fixed, no-retry pairing strategy such
+as high/low/high sign-word bracketing with identical outer high blocks, or a
+single target-validated contiguous read that supplies both halves coherently.
+Either design must retain one connection, fixed request order/count, canonical
+sign extension, exact signed phase sum, no partial snapshot, and priority
+fallback. It also needs boundary values above `32767 W`, both zero-crossing
+directions, protocol golden tests, and redacted target evidence before the
+production domain can widen.
 
 ## Definition of Done for a Backlog Item
 

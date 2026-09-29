@@ -68,7 +68,7 @@ func (s *State) Status() Status {
 func (s *State) Ready(maxAge time.Duration) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.snapshot == nil || s.lastPollSuccessAt.IsZero() {
+	if !s.up || s.snapshot == nil || s.lastPollSuccessAt.IsZero() {
 		return false
 	}
 	if maxAge <= 0 {

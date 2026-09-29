@@ -2,6 +2,18 @@
 
 The bridge is a standalone Go module under `bridge/`.
 
+`master` is the canonical integration and release branch. Start new work from
+`origin/master` and merge changes through pull requests after the required checks
+pass; the older `main` and feature branches are historical, not release targets.
+
+## Toolchain
+
+- Go 1.27.0, as declared by `bridge/go.mod`.
+- Node.js 24.20.0, as pinned by the repository `.node-version`; both card packages support Node.js `^24.12.0` and declare npm 11.19.0 as their package manager.
+- A Docker release with BuildKit support for cache mounts, linked copies, and file-permission flags.
+
+Use the repository-pinned toolchains when reproducing CI or release builds. This keeps local type stripping, package-lock resolution, and Go module selection consistent with automation.
+
 ## Local Commands
 
 Run tests:
@@ -16,10 +28,11 @@ Run the same core Go checks as CI:
 ```shell
 cd bridge
 gofmt -w .
+go mod tidy -diff
 go vet ./...
 go test ./... -cover
-go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
-go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 ```
 
 The CI workflow also runs `go test ./... -race -cover` on Ubuntu. On Windows this requires cgo and a C toolchain.
@@ -66,25 +79,46 @@ Build from the repository root:
 docker build -f bridge/Dockerfile -t rcooler/jinko-exporter:local bridge
 ```
 
+The Docker build uses a Go 1.27.0/Alpine 3.24 builder and an Alpine 3.24.1 runtime. BuildKit caches Go modules and compilation artifacts between builds. The final image contains the statically linked bridge and CA certificates, runs as the fixed non-root user `65532:65532`, and includes the bridge healthcheck.
+
 ## Home Assistant Cards
 
-The optional cards live under `ha-cards/`.
+The card implementations live under `ha-cards/` and `new-ha-cards/`. Each package has its own lockfile and the same validation command. Their bundles register the same Home Assistant custom elements, so consumers must install one implementation at a time.
 
 ```shell
 cd ha-cards
 npm ci
-npm test
-npm run typecheck
-npm run build
+npm run check
 ```
+
+```shell
+cd new-ha-cards
+npm ci
+npm run check
+```
+
+`npm run check` runs the Node test suite, both browser and tooling TypeScript checks, and the Vite production build. Use `npm run dev` in either package for the development server.
 
 ## Continuous Integration
 
-Pull requests and branch pushes run `.github/workflows/ci.yml`.
+Pull requests and branch pushes run `.github/workflows/ci.yml`. The required checks
+for `master` are `bridge`, `docker`, `cards (ha-cards)`, `cards (new-ha-cards)`, and
+`release-config`. Keep these job names stable because branch protection refers to
+them. Branch protection requires an up-to-date branch with passing checks and
+blocks force pushes and branch deletion, including for administrators.
 
 The bridge job checks formatting, `go vet`, race-enabled tests with coverage, `staticcheck`, and `govulncheck`.
 
-The card job installs dependencies with `npm ci`, runs the Node test suite, typechecks the TypeScript sources, and builds the Vite bundle.
+The cards matrix installs both packages with `npm ci`, runs their Node test suites, typechecks application and tooling sources, and builds both Vite bundles. The package-level `check` command provides the same validation sequence locally.
+
+The Docker job validates the Dockerfile and builds the runtime image. The
+release-config job validates GoReleaser and builds a complete, nonpublishing
+snapshot, including both card bundles and multi-architecture container images.
+Pushing or merging `master` does not publish a release or deploy containers.
+
+## Dependency Updates
+
+Dependabot checks Go modules, both npm card packages, bridge Docker images, and GitHub Actions every week. Patch and minor releases are grouped per ecosystem to keep routine updates reviewable; major releases remain separate so their migration impact is explicit.
 
 ## GoReleaser
 
@@ -119,10 +153,11 @@ Repository secrets required for Docker Hub publishing:
 
 Publishing flow:
 
-1. Push a semantic version tag such as `v1.2.3`.
+1. Push a stable semantic version tag such as `v1.2.3` at the current `origin/master` tip.
 2. GitHub Actions checks out the repository and sets up Go from `bridge/go.mod`.
-3. GoReleaser builds Linux `amd64` and `arm64` binaries.
-4. GoReleaser publishes release archives and a multi-arch Docker image to `rcooler/jinko_exporter`.
+3. Both Home Assistant card implementations are built and included under their distinct package paths in every release archive.
+4. GoReleaser builds Linux `amd64` and `arm64` binaries, SBOM-backed container images, and digest metadata.
+5. GoReleaser publishes the archives and multi-arch Docker image to `rcooler/jinko_exporter`; GitHub then attests the archive checksums and image digests.
 
 Stable tags publish Docker tags:
 
@@ -133,4 +168,5 @@ Stable tags publish Docker tags:
 latest
 ```
 
-Pre-release tags publish only the exact version tag.
+The release-policy check rejects prerelease tags and tags that do not point to
+the current `origin/master` commit.

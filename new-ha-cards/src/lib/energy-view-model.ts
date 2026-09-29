@@ -1,5 +1,6 @@
 import fakeEnergyData from "../data/fake-energy-data.json";
 import type { EntityKey } from "./entity-model";
+import { calculateDailyGridBalanceUAH } from "./energy-tariff";
 import { average, first, formatNumber, isFiniteNumber, splitValueUnit, sum } from "./format";
 
 export type EnergyMetricKey = EntityKey | "daily_cost";
@@ -27,7 +28,9 @@ const CRITICAL_KEYS: EntityKey[] = [
   "home_total_power",
   "ups_total_power",
   "battery_power",
-  "battery_soc"
+  "battery_soc",
+  "grid_buy_today",
+  "grid_sell_today"
 ];
 
 export const fakeValueFor: EnergyValueGetter = (key) => {
@@ -85,7 +88,7 @@ export const buildEnergyViewModel = (valueFor: EnergyValueGetter, options: Energ
   const batterySoc = v("battery_soc");
   const inverterOutputPower = first(v("inverter_total_power"), upsTotalPower, sum(inverterPhases.map((phase) => phase.power)));
   const inverterDcPower = pvTotalPower;
-  const dailyCost = first(v("daily_cost"), estimateDailyCost(v("grid_buy_today"), v("grid_sell_today")));
+  const dailyCost = first(v("daily_cost"), calculateDailyGridBalanceUAH(v("grid_buy_today"), v("grid_sell_today")));
   const now = options.now ?? new Date();
 
   const batteryCharging =
@@ -238,13 +241,6 @@ export const buildEnergyViewModel = (valueFor: EnergyValueGetter, options: Energ
   return { values, flags, missing };
 };
 
-const estimateDailyCost = (buyToday: number | null, sellToday: number | null): number | null => {
-  if (!isFiniteNumber(buyToday) && !isFiniteNumber(sellToday)) return null;
-  const buy = buyToday ?? 0;
-  const sell = sellToday ?? 0;
-  return sell > buy ? (sell - buy) * 6.515 : -((buy - sell) * 4.32);
-};
-
 const meaningful = (value: number | null | undefined, epsilon: number): value is number => isFiniteNumber(value) && Math.abs(value) >= epsilon;
 
 const preciseEnergy = (value: number | null | undefined): string => (isFiniteNumber(value) ? `${formatNumber(value, 2)} kWh` : "--");
@@ -252,7 +248,9 @@ const preciseEnergy = (value: number | null | undefined): string => (isFiniteNum
 const energyParts = (value: number | null | undefined): { value: string; unit: string } => splitValueUnit(preciseEnergy(value));
 
 const costParts = (value: number | null | undefined): { value: string; unit: string } =>
-  isFiniteNumber(value) ? { value: formatNumber(Math.abs(value), 2), unit: "грн" } : { value: "--", unit: "" };
+  isFiniteNumber(value)
+    ? { value: `${value > 0 ? "+" : ""}${formatNumber(value, 2)}`, unit: "грн" }
+    : { value: "--", unit: "" };
 
 const percentParts = (value: number | null | undefined): { value: string; unit: string } =>
   isFiniteNumber(value) ? { value: formatNumber(value, value >= 10 ? 0 : 1), unit: "%" } : { value: "--", unit: "" };

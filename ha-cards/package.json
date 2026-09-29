@@ -3,15 +3,21 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "npm@11.19.0",
+  "engines": {
+    "node": "^24.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test \"src/lib/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.node.json --noEmit",
+    "check": "npm test && npm run typecheck && npm run build"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "vite": "^7.1.11"
+    "@types/node": "~24.13.3",
+    "typescript": "~7.0.2",
+    "vite": "~8.2.2"
   }
 }

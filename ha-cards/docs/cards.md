@@ -89,6 +89,8 @@ The detailed card uses these internal groups:
 
 The card displays `--` when a value is missing or effectively zero for fields where zero means offline.
 
+Shelly-backed grid-side load is independent of inverter availability. The detailed card uses Shelly's own phase voltage, current, and power; the mini card uses its measured load power. Live zero readings remain visible as zero, even while every inverter sensor is unavailable. Missing meter readings remain `--`; Shelly does not provide replacement PV, battery, UPS, or inverter totals.
+
 ## Values Used By The Mini Card
 
 The mini card uses:

@@ -43,6 +43,8 @@ func TestGridLoadClientFetch(t *testing.T) {
 				"total_act":6000,
 				"total_act_ret":60
 			}`)
+		case "/private-proxy/rpc/Temperature.GetStatus":
+			_, _ = fmt.Fprint(w, `{"id":0,"tC":51.1,"tF":124.0}`)
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -74,6 +76,124 @@ func TestGridLoadClientFetch(t *testing.T) {
 	assertMetric(t, snapshot.Metrics, "grid_load", "l3_power", 770, "W")
 	assertMetric(t, snapshot.Metrics, "grid_load", "energy_total", 6, "kWh")
 	assertMetric(t, snapshot.Metrics, "grid_load", "returned_energy_total", 0.06, "kWh")
+	assertMetric(t, snapshot.Metrics, "grid_load", "internal_temperature", 51.1, "\u00b0C")
+}
+
+func TestGridLoadClientOptionalInternalTemperature(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		statusCode int
+		want       *float64
+	}{
+		{name: "measured zero", body: `{"id":0,"tC":0}`, want: new(float64(0))},
+		{name: "negative temperature", body: `{"id":0,"tC":-5.2}`, want: new(float64(-5.2))},
+		{name: "missing Celsius", body: `{"id":0,"tF":124}`},
+		{name: "null Celsius", body: `{"id":0,"tC":null}`},
+		{name: "missing component id", body: `{"tC":51.1}`},
+		{name: "wrong component id", body: `{"id":1,"tC":51.1}`},
+		{name: "sensor read error", body: `{"id":0,"tC":51.1,"errors":["read"]}`},
+		{name: "sensor out of range", body: `{"id":0,"tC":51.1,"errors":["out_of_range"]}`},
+		{name: "empty error list", body: `{"id":0,"tC":51.1,"errors":[]}`, want: new(float64(51.1))},
+		{name: "unsupported RPC", body: `{"code":404,"message":"No handler"}`},
+		{name: "HTTP failure", body: `unavailable`, statusCode: http.StatusServiceUnavailable},
+		{name: "invalid JSON", body: `{`},
+		{name: "wrong value type", body: `{"id":0,"tC":"51.1"}`},
+		{name: "nonfinite value", body: `{"id":0,"tC":NaN}`},
+		{name: "overflow", body: `{"id":0,"tC":1e1000}`},
+		{name: "trailing data", body: `{"id":0,"tC":51.1} {}`},
+		{name: "oversized response", body: strings.Repeat(" ", maxShellyRPCResponseBytes+1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/rpc/EM.GetStatus", "/rpc/EMData.GetStatus":
+					if got := r.URL.Query().Get("id"); got != "2" {
+						t.Errorf("EM component id = %q, want 2", got)
+					}
+					_, _ = fmt.Fprint(w, `{"id":2,"total_act_power":100,"total_act":1000}`)
+				case "/rpc/Temperature.GetStatus":
+					if got := r.URL.Query().Get("id"); got != "0" {
+						t.Errorf("temperature component id = %q, want 0 independently of EM id", got)
+					}
+					if tt.statusCode != 0 {
+						w.WriteHeader(tt.statusCode)
+					}
+					_, _ = fmt.Fprint(w, tt.body)
+				default:
+					t.Errorf("unexpected path %q", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			client, err := NewGridLoadClient(config.ShellyGridLoadConfig{BaseURL: server.URL, EMID: 2, Timeout: time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := client.Fetch(t.Context())
+			if err != nil {
+				t.Fatalf("optional temperature discarded electrical readings: %v", err)
+			}
+			assertMetric(t, snapshot.Metrics, "grid_load", "total_power", 100, "W")
+			assertMetric(t, snapshot.Metrics, "grid_load", "energy_total", 1, "kWh")
+			if tt.want != nil {
+				assertMetric(t, snapshot.Metrics, "grid_load", "internal_temperature", *tt.want, "\u00b0C")
+			} else {
+				for _, metric := range snapshot.Metrics {
+					if metric.Key == "internal_temperature" {
+						t.Fatalf("invalid temperature was published: %+v", metric)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGridLoadClientTemperatureFailureDoesNotReusePreviousValue(t *testing.T) {
+	var reads int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rpc/EM.GetStatus", "/rpc/EMData.GetStatus":
+			_, _ = fmt.Fprint(w, `{"id":0,"total_act_power":100,"total_act":1000}`)
+		case "/rpc/Temperature.GetStatus":
+			reads++
+			if reads == 1 {
+				_, _ = fmt.Fprint(w, `{"id":0,"tC":51.1}`)
+			} else if reads == 2 {
+				<-r.Context().Done()
+			} else {
+				_, _ = fmt.Fprint(w, `{"id":0,"tC":52.2}`)
+			}
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := NewGridLoadClient(config.ShellyGridLoadConfig{BaseURL: server.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range 3 {
+		snapshot, err := client.Fetch(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertMetric(t, snapshot.Metrics, "grid_load", "total_power", 100, "W")
+		switch index {
+		case 0:
+			assertMetric(t, snapshot.Metrics, "grid_load", "internal_temperature", 51.1, "\u00b0C")
+		case 1:
+			for _, metric := range snapshot.Metrics {
+				if metric.Key == "internal_temperature" {
+					t.Fatalf("failed read reused previous temperature: %+v", metric)
+				}
+			}
+		case 2:
+			assertMetric(t, snapshot.Metrics, "grid_load", "internal_temperature", 52.2, "\u00b0C")
+		}
+	}
 }
 
 func TestNewGridLoadClientRejectsURLWithoutHost(t *testing.T) {

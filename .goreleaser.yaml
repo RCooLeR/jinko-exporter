@@ -39,9 +39,16 @@ archives:
       - bridge/docs/*.md
       - ha-cards/README.md
       - ha-cards/docs/*.md
+      - ha-cards/dist/jinko-ha-cards.js
+      - new-ha-cards/README.md
+      - new-ha-cards/dist/jinko-ha-cards.js
 
 checksum:
   name_template: checksums.txt
+
+release:
+  preflight:
+    fail_on_error: true
 
 dockers_v2:
   - id: dockerhub
@@ -58,12 +65,19 @@ dockers_v2:
     labels:
       org.opencontainers.image.title: jinko-exporter
       org.opencontainers.image.description: Read-only Prometheus and Home Assistant bridge for Jinko, Solarman, and locked local Modbus telemetry
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.documentation: "https://github.com/RCooLeR/jinko-exporter"
+      org.opencontainers.image.licenses: MIT
       org.opencontainers.image.source: "{{ .GitURL }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.version: "{{ .Version }}"
+    sbom: true
     platforms:
       - linux/amd64
       - linux/arm64
+
+docker_digest:
+  name_template: digests.txt
 
 changelog:
   sort: asc

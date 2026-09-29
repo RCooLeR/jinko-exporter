@@ -57,8 +57,13 @@ environment:
 | `<prefix>_poll_success` | Gauge | `source` | `1` when the latest source poll succeeded, `0` otherwise. |
 | `<prefix>_polls_total` | Counter | `source`, `result` | Total polls by result. Result is `success` or `error`. |
 | `<prefix>_last_update_timestamp_seconds` | Gauge | `source`, `device_sn` | Upstream data collection timestamp from the current snapshot. |
+| `<prefix>_data_age_seconds` | Gauge | `source`, `device_sn` | Age of the last accepted upstream measurement at scrape time. Omitted before a known collection timestamp; increases even after polls fail. |
+| `<prefix>_grid_load_up` | Gauge | `source`, `device_sn` | Latest independent Shelly poll succeeded. Available when Shelly is enabled; does not change inverter `up`. |
+| `<prefix>_grid_load_data_age_seconds` | Gauge | `source`, `device_sn` | Age of the last accepted Shelly measurement; omitted before the first successful read. |
+| `<prefix>_grid_load_last_update_timestamp_seconds` | Gauge | `source`, `device_sn` | Last accepted Shelly collection time. |
+| `<prefix>_grid_load_last_poll_success_timestamp_seconds` | Gauge | `source`, `device_sn` | Time of the latest successful independent Shelly poll. |
 | `<prefix>_last_poll_success_timestamp_seconds` | Gauge | `source` | Unix timestamp when the exporter last completed a successful poll. |
-| `<prefix>_last_source_sync_timestamp_seconds` | Gauge | `source` | Unix timestamp of latest successful poll by source. Keeps `source` even when source labels are otherwise dropped. |
+| `<prefix>_last_source_sync_timestamp_seconds` | Gauge | `source` | Upstream collection timestamp of the last accepted snapshot, labeled by its selected source. Keeps `source` even when source labels are otherwise dropped. |
 | `<prefix>_poll_duration_seconds` | Gauge | `source` | Duration of the latest poll in seconds. |
 | `<prefix>_request_errors_total` | Counter | `source` | Total failed polls since process start. |
 | `<prefix>_metric` | Gauge | `source`, `device_sn`, `group`, `key`, `name`, `unit` | Numeric telemetry values from the current snapshot. |
@@ -109,6 +114,36 @@ Jinko, recognized Solarman points, and Modbus use identical key/group/name/unit 
 `device_sn` intentionally remains on telemetry. In a mixed priority chain, `MODBUS_DEVICE_SN` is therefore required and must be the same inverter serial returned by Jinko/Solarman. Once the primary surface has been learned, projection rejects a fallback with a different non-empty serial and tries the next source instead of mixing another inverter into the same logical series. `MQTT_DEVICE_ID` stabilizes Home Assistant topics only; it does not replace the Prometheus `device_sn` label.
 
 ## Query Examples
+
+Failed polls retain the last accepted numeric readings and their original
+collection timestamp for diagnosis. `solar_up=0` and `solar_poll_success=0`
+mark them unavailable; `solar_data_age_seconds` reports their actual age.
+Cloud data must pass the configured age and source validity checks before a
+poll counts as successful. Repeated retrieval of cached cloud data cannot
+advance the upstream timestamp.
+
+For live dashboards with `EXPORTER_METRICS_DROP_SOURCE_LABEL=true`, filter
+readings by device availability:
+
+```promql
+solar_metric{group="electric",key="S_P_T"}
+  and on (device_sn) (solar_up == 1)
+```
+
+When source labels are retained, match on `(source, device_sn)` instead.
+
+Shelly grid-load values remain available when the inverter is off. They have
+an independent polling loop, health, and timestamps. Use their own availability
+filter, rather than applying `solar_up` to all metric groups:
+
+```promql
+solar_metric{group="grid_load",key="total_power"}
+  and on (device_sn) (solar_grid_load_up == 1)
+```
+
+Use `(source, device_sn)` when source labels are retained. As with inverter
+telemetry, failed Shelly polls retain the last accepted numbers in Prometheus,
+but `solar_grid_load_up=0` marks them unavailable and their data age increases.
 
 Current solar production:
 
@@ -167,7 +202,7 @@ time() - solar_last_poll_success_timestamp_seconds > 600
 Upstream data has not refreshed in more than 1 hour:
 
 ```promql
-time() - solar_last_update_timestamp_seconds > 3600
+solar_data_age_seconds > 3600
 ```
 
 ## Grafana Notes

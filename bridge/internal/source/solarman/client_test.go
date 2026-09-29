@@ -1,10 +1,12 @@
 package solarman
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/alert"
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/config"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -68,6 +72,7 @@ func TestReadResponseBodyRejectsOversizedBody(t *testing.T) {
 
 func TestFetchWithDeviceSNObtainsTokenAndParsesCurrentData(t *testing.T) {
 	var tokenRequest map[string]string
+	collectedAt := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/account/v1.0/token":
@@ -85,13 +90,15 @@ func TestFetchWithDeviceSNObtainsTokenAndParsesCurrentData(t *testing.T) {
 			if r.URL.Query().Get("appId") != "app-id" || r.URL.Query().Get("language") != "en" {
 				t.Fatalf("currentData query = %s, want appId/language", r.URL.RawQuery)
 			}
-			_, _ = w.Write([]byte(`{
+			_, _ = fmt.Fprintf(w, `{
 				"success": true,
+				"deviceState": 1,
+				"collectionTime": %d,
 				"dataList": [
 					{"key": "DP1", "name": "DC Power PV1", "unit": "W", "value": 321},
-					{"key": "BMS_SOC", "name": "BMS_SOC", "unit": "%", "value": "88.5"}
+					{"key": "BMS_SOC", "name": "BMS_SOC", "unit": "%%", "value": "88.5"}
 				]
-			}`))
+			}`, collectedAt.Unix())
 		default:
 			http.NotFound(w, r)
 		}
@@ -109,6 +116,9 @@ func TestFetchWithDeviceSNObtainsTokenAndParsesCurrentData(t *testing.T) {
 	}
 	if snapshot.Source != "solarman" || snapshot.DeviceSN != "DEVICE_SN" {
 		t.Fatalf("snapshot source/device = %q/%q", snapshot.Source, snapshot.DeviceSN)
+	}
+	if !snapshot.CollectedAt.Equal(collectedAt) {
+		t.Fatalf("snapshot.CollectedAt = %s, want cloud measurement time %s", snapshot.CollectedAt, collectedAt)
 	}
 	if snapshot.ParentSN != "" || snapshot.DeviceID != "" || snapshot.SiteID != "" {
 		t.Fatalf("optional identity = parent %q device %q site %q, want empty", snapshot.ParentSN, snapshot.DeviceID, snapshot.SiteID)
@@ -137,7 +147,7 @@ func TestFetchDiscoversDeviceSNFromDeviceListItems(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&currentDataRequest); err != nil {
 				t.Fatalf("decode currentData body: %v", err)
 			}
-			_, _ = w.Write([]byte(`{"success":true,"dataList":[{"key":"DP1","name":"DC Power PV1","unit":"W","value":123}]}`))
+			writeCurrentDataFixture(w, `[{"key":"DP1","name":"DC Power PV1","unit":"W","value":123}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -172,7 +182,7 @@ func TestFetchRetriesTransientSolarmanError(t *testing.T) {
 				http.Error(w, "temporary failure", http.StatusBadGateway)
 				return
 			}
-			_, _ = w.Write([]byte(`{"success":true,"dataList":[{"key":"DP1","name":"DC Power PV1","unit":"W","value":456}]}`))
+			writeCurrentDataFixture(w, `[{"key":"DP1","name":"DC Power PV1","unit":"W","value":456}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -198,7 +208,7 @@ func TestFetchRejectsMetriclessCurrentData(t *testing.T) {
 		case "/account/v1.0/token":
 			_, _ = w.Write([]byte(`{"success":true,"access_token":"access-token","token_type":"Bearer","expires_in":"3600"}`))
 		case "/device/v1.0/currentData":
-			_, _ = w.Write([]byte(`{"success":true,"dataList":[{"key":"DP1","value":"NaN"}]}`))
+			writeCurrentDataFixture(w, `[{"key":"DP1","value":"NaN"}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -206,7 +216,7 @@ func TestFetchRejectsMetriclessCurrentData(t *testing.T) {
 	defer server.Close()
 
 	_, err := New(testSolarmanConfig(server.URL), nil).Fetch(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "contained no numeric metrics") {
+	if err == nil || !strings.Contains(err.Error(), "category=no-numeric-metrics") {
 		t.Fatalf("Fetch() error = %v, want empty metric error", err)
 	}
 }
@@ -232,7 +242,7 @@ func TestFetchRejectsDiscoveredEmptyDeviceSerial(t *testing.T) {
 	cfg.DeviceSN = ""
 	cfg.StationID = 42
 	_, err := New(cfg, nil).Fetch(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "empty device serial") {
+	if err == nil || !strings.Contains(err.Error(), "category=empty-device-serial") {
 		t.Fatalf("Fetch() error = %v, want empty device serial error", err)
 	}
 	if got := currentDataCalls.Load(); got != 0 {
@@ -375,8 +385,8 @@ func TestFetchReturnsSolarmanBusinessError(t *testing.T) {
 
 	client := New(testSolarmanConfig(server.URL), nil)
 	_, err := client.Fetch(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "quota exhausted") {
-		t.Fatalf("Fetch() error = %v, want quota exhausted business error", err)
+	if err == nil || !strings.Contains(err.Error(), "category=api-rejected") || strings.Contains(err.Error(), "quota exhausted") {
+		t.Fatalf("Fetch() error = %v, want sanitized API-rejected category", err)
 	}
 }
 
@@ -523,6 +533,171 @@ func TestTokenResponseFailuresNeverExposeSecrets(t *testing.T) {
 	}
 }
 
+func TestCurrentDataFailuresNeverExposeSensitiveText(t *testing.T) {
+	const upstreamMessage = "UPSTREAM_MESSAGE_SENTINEL_320b"
+	tests := []struct {
+		name         string
+		status       int
+		body         string
+		wantCategory string
+	}{
+		{
+			name:         "HTTP status body",
+			status:       http.StatusTeapot,
+			body:         fmt.Sprintf(`{"success":false,"msg":%q,"access_token":%q}`, upstreamMessage+" "+testEmailSecret, testAccessSecret),
+			wantCategory: "http-status",
+		},
+		{
+			name:         "API rejection message",
+			status:       http.StatusOK,
+			body:         fmt.Sprintf(`{"success":false,"msg":%q}`, upstreamMessage+" "+testDeviceSecret),
+			wantCategory: "api-rejected",
+		},
+		{
+			name:         "malformed response",
+			status:       http.StatusOK,
+			body:         fmt.Sprintf(`{"success":true,"dataList":[],"msg":%q`, upstreamMessage+" "+testRefreshSecret),
+			wantCategory: "decode",
+		},
+		{
+			name:         "malformed collection time",
+			status:       http.StatusOK,
+			body:         fmt.Sprintf(`{"success":true,"deviceState":1,"collectionTime":%q}`, upstreamMessage+" "+testDeviceSecret),
+			wantCategory: "decode",
+		},
+		{
+			name:         "offline cached response",
+			status:       http.StatusOK,
+			body:         fmt.Sprintf(`{"success":true,"deviceState":3,"collectionTime":%d,"msg":%q}`, time.Now().Unix(), upstreamMessage+" "+testDeviceSecret),
+			wantCategory: "device-offline",
+		},
+		{
+			name:         "stale cached response",
+			status:       http.StatusOK,
+			body:         fmt.Sprintf(`{"success":true,"deviceState":1,"collectionTime":%d,"msg":%q}`, time.Now().Add(-48*time.Hour).Unix(), upstreamMessage+" "+testDeviceSecret),
+			wantCategory: "stale-data",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := captureSolarmanLogs(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/account/v1.0/token":
+					_, _ = w.Write([]byte(`{"success":true,"access_token":"short-lived-access","token_type":"Bearer","expires_in":"3600"}`))
+				case "/device/v1.0/currentData":
+					w.WriteHeader(tt.status)
+					_, _ = w.Write([]byte(tt.body))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			notifier := &recordingAlertNotifier{}
+			cfg := testSolarmanConfig(server.URL)
+			cfg.AppID = "APP_ID_SENTINEL_72dd"
+			cfg.AppSecret = testAppSecret
+			cfg.Email = testEmailSecret
+			cfg.PasswordSHA256 = testPasswordSecret
+			cfg.DeviceSN = testDeviceSecret
+			cfg.StationID = 91929394
+			_, err := New(cfg, alert.NewManager(notifier, 0)).Fetch(t.Context())
+			if err == nil || !strings.Contains(err.Error(), "stage=currentData") || !strings.Contains(err.Error(), "category="+tt.wantCategory) {
+				t.Fatalf("Fetch() error = %v, want sanitized currentData/%s failure", err, tt.wantCategory)
+			}
+			if notifier.joined() == "" {
+				t.Fatal("ordinary Fetch() did not emit its configured generic alert")
+			}
+
+			combined := err.Error() + "\n" + logs.String() + "\n" + notifier.joined()
+			for _, sensitive := range []string{
+				server.URL,
+				"APP_ID_SENTINEL_72dd",
+				testAppSecret,
+				testPasswordSecret,
+				testEmailSecret,
+				testDeviceSecret,
+				"91929394",
+				testAccessSecret,
+				testRefreshSecret,
+				upstreamMessage,
+			} {
+				if strings.Contains(combined, sensitive) {
+					t.Errorf("failure output exposed sensitive sentinel %q: %q", sensitive, combined)
+				}
+			}
+		})
+	}
+}
+
+func TestDiscoveryLogsNeverExposeStationOrDeviceIdentity(t *testing.T) {
+	logs := captureSolarmanLogs(t)
+	const (
+		stationID   = int64(71727374)
+		stationName = "STATION_NAME_SENTINEL_006e"
+		deviceSN    = "DISCOVERED_DEVICE_SENTINEL_f4aa"
+		appID       = "APP_ID_SENTINEL_a85c"
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/account/v1.0/token":
+			_, _ = w.Write([]byte(`{"success":true,"access_token":"access-token","token_type":"Bearer","expires_in":"3600"}`))
+		case "/station/v1.0/list":
+			_, _ = fmt.Fprintf(w, `{"stationList":[{"id":%d,"name":%q}]}`, stationID, stationName)
+		case "/station/v1.0/device":
+			_, _ = fmt.Fprintf(w, `{"deviceListItems":[{"deviceSn":%q}]}`, deviceSN)
+		case "/device/v1.0/currentData":
+			writeCurrentDataFixture(w, `[{"key":"DP1","name":"PV1","unit":"W","value":12}]`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := testSolarmanConfig(server.URL)
+	cfg.DeviceSN = ""
+	cfg.StationID = 0
+	cfg.AppID = appID
+	snapshot, err := New(cfg, nil).Fetch(t.Context())
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if snapshot.DeviceSN != deviceSN {
+		t.Fatalf("snapshot device serial = %q, want discovered identity retained in data model", snapshot.DeviceSN)
+	}
+	for _, sensitive := range []string{server.URL, appID, strconv.FormatInt(stationID, 10), stationName, deviceSN} {
+		if strings.Contains(logs.String(), sensitive) {
+			t.Errorf("discovery log exposed sensitive sentinel %q: %q", sensitive, logs.String())
+		}
+	}
+}
+
+func TestTransportFailurePreservesCauseWithoutStringifyingIt(t *testing.T) {
+	logs := captureSolarmanLogs(t)
+	transportCause := errors.New("PRIVATE_TRANSPORT_CAUSE_SENTINEL_17c2")
+	notifier := &recordingAlertNotifier{}
+	cfg := testSolarmanConfig("https://PRIVATE_ENDPOINT_SENTINEL.invalid")
+	cfg.DeviceSN = testDeviceSecret
+	client := New(cfg, alert.NewManager(notifier, 0))
+	client.token = tokenResponse{AccessToken: "access-token", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)}
+	client.hc = &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, transportCause
+	})}
+
+	_, err := client.Fetch(t.Context())
+	if err == nil || !errors.Is(err, transportCause) || !strings.Contains(err.Error(), "category=transport") {
+		t.Fatalf("Fetch() error = %v, want safe typed transport error preserving cause", err)
+	}
+	combined := err.Error() + "\n" + logs.String() + "\n" + notifier.joined()
+	for _, sensitive := range []string{"PRIVATE_ENDPOINT_SENTINEL", transportCause.Error(), testDeviceSecret} {
+		if strings.Contains(combined, sensitive) {
+			t.Errorf("transport failure output exposed sensitive sentinel %q: %q", sensitive, combined)
+		}
+	}
+}
+
 func TestTokenRefreshFailureNeverIncludesTokenOrUnauthorizedResponse(t *testing.T) {
 	unauthorizedSecret := "UNAUTHORIZED_RESPONSE_SENTINEL_b218"
 	var tokenCalls atomic.Int32
@@ -568,6 +743,23 @@ type recordingAlertNotifier struct {
 	messages []string
 }
 
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func captureSolarmanLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	previous := log.Logger
+	buffer := &bytes.Buffer{}
+	log.Logger = zerolog.New(buffer)
+	t.Cleanup(func() {
+		log.Logger = previous
+	})
+	return buffer
+}
+
 func (n *recordingAlertNotifier) Notify(_ context.Context, subject string, body string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -593,4 +785,8 @@ func testSolarmanConfig(baseURL string) config.SolarmanConfig {
 		PasswordSHA256: "password-sha",
 		DeviceSN:       "DEVICE_SN",
 	}
+}
+
+func writeCurrentDataFixture(w http.ResponseWriter, points string) {
+	_, _ = fmt.Fprintf(w, `{"success":true,"deviceState":1,"collectionTime":%d,"dataList":%s}`, time.Now().Unix(), points)
 }

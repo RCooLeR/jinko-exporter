@@ -120,7 +120,7 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 	assertSnapshot(t, second, expectedSnapshotMetrics(
 		193,
 		[3]float64{235.4, 240.1, 235.8}, 50,
-		[3]float64{}, 0,
+		[3]float64{-10, 20, 30}, 45,
 		[3]float64{250.5, 241.2, 236.9},
 		49.95, [3]float64{0.53, 0.66, 1.55},
 		[4]float64{-777, -780, -774, -2331},
@@ -786,6 +786,28 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 			wantWrites: 9,
 		},
 		{
+			name: "torn direct-load phase pair",
+			responses: func(t *testing.T) [][]byte {
+				lows := liveDirectLoadPowerLowWords()
+				lows[0] = 0
+				highs := liveLoadFrequencyWords()
+				highs[1] = 0xFFFF
+				return [][]byte{
+					makeReadResponse(t, deviceTypeRead, []uint16{0x0006}),
+					makeReadResponse(t, capabilityRead, []uint16{0xD4C0, 0x0001, 0x0203}),
+					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
+					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
+					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
+					makeReadResponse(t, upsPowerRead, []uint16{192}),
+					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, directLoadPowerLowRead, lows),
+					makeReadResponse(t, loadFrequencyRead, highs),
+				}
+			},
+			wantError:  "direct-load phase A registers 650/656 decode to -65536W",
+			wantWrites: 9,
+		},
+		{
 			name: "grid power phase sum",
 			responses: func(t *testing.T) [][]byte {
 				return [][]byte{
@@ -804,6 +826,27 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 				}
 			},
 			wantError:  "phase sum",
+			wantWrites: 12,
+		},
+		{
+			name: "observed torn grid power pair",
+			responses: func(t *testing.T) [][]byte {
+				return [][]byte{
+					makeReadResponse(t, deviceTypeRead, []uint16{0x0006}),
+					makeReadResponse(t, capabilityRead, []uint16{0xD4C0, 0x0001, 0x0203}),
+					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
+					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
+					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
+					makeReadResponse(t, upsPowerRead, []uint16{192}),
+					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
+					makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
+					makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
+					makeReadResponse(t, gridPowerLowRead, make([]uint16, 4)),
+					makeReadResponse(t, gridPowerHighRead, []uint16{0xFFFF, 0, 0, 0xFFFF}),
+				}
+			},
+			wantError:  "grid power L1 -65536W",
 			wantWrites: 12,
 		},
 		{
@@ -1359,7 +1402,7 @@ func liveLoadFrequencyWords() []uint16 {
 }
 
 func nightLoadFrequencyWords() []uint16 {
-	return []uint16{5000, 0, 0, 0, 0}
+	return []uint16{5000, 0xFFFF, 0, 0, 0}
 }
 
 func liveDirectLoadPowerLowWords() []uint16 {
@@ -1367,7 +1410,9 @@ func liveDirectLoadPowerLowWords() []uint16 {
 }
 
 func nightDirectLoadPowerLowWords() []uint16 {
-	return []uint16{0, 0, 0, 0}
+	// Synthetic coherent negative-phase fixture. Production has observed the
+	// R656=0xFFFF sign extension but did not retain the paired low word.
+	return []uint16{0xFFF6, 20, 30, 45}
 }
 
 func liveGridFrequencyCurrentWords() []uint16 {

@@ -47,3 +47,25 @@ export const formatPercent = (value: number | null | undefined): string =>
 
 export const formatTemperature = (value: number | null | undefined): string =>
   isFiniteNumber(value) ? `${formatNumber(value, 0)} C` : "--";
+
+// A live meter can report zero load. Only unavailable phases become dashes.
+export const formatMeasuredPhases = (
+  kind: "voltage" | "current" | "power",
+  phases: Array<number | null> | undefined,
+  fallback: number | null,
+  compact = false
+): string => {
+  const readings = phases?.filter(isFiniteNumber) ?? [];
+  if (!readings.length) {
+    return kind === "voltage" ? formatVoltage(fallback) : kind === "current" ? formatCurrent(fallback) : formatPower(fallback, true);
+  }
+  const useKw = kind === "power" && readings.some((value) => Math.abs(value) >= 1000);
+  const unit = kind === "voltage" ? "V" : kind === "current" ? "A" : useKw ? "kW" : "W";
+  const formatted = phases!.map((value) => {
+    if (!isFiniteNumber(value)) return "--";
+    if (kind === "voltage") return formatNumber(value, 0);
+    if (kind === "current") return formatNumber(value, Math.abs(value) >= 10 ? 1 : 2);
+    return useKw ? formatNumber(value / 1000, Math.abs(value) >= 10000 ? 1 : 2) : formatNumber(value, Math.abs(value) >= 100 ? 0 : 1);
+  });
+  return `${formatted.join(compact ? "/" : " / ")} ${unit}`;
+};

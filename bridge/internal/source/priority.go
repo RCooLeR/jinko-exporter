@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/model"
 	"github.com/rs/zerolog/log"
@@ -15,6 +16,9 @@ type Priority struct {
 	sources                []Source
 	projectFallbackMetrics bool
 	primarySurface         *metricSurface
+	sourceGates            []*sourceFetchGate
+	correlationMu          sync.RWMutex
+	alertCorrelation       *alertCorrelationWorker
 }
 
 type metricSurface struct {
@@ -33,10 +37,23 @@ func NewPriority(sources []Source, projectFallbackMetrics bool) *Priority {
 		}
 		names = append(names, src.Name())
 	}
+	gates := make([]*sourceFetchGate, len(sources))
+	for index, src := range sources {
+		for priorIndex := range index {
+			if sameSourceInstance(src, sources[priorIndex]) {
+				gates[index] = gates[priorIndex]
+				break
+			}
+		}
+		if gates[index] == nil {
+			gates[index] = newSourceFetchGate()
+		}
+	}
 	return &Priority{
 		name:                   strings.Join(names, ","),
 		sources:                sources,
 		projectFallbackMetrics: projectFallbackMetrics,
+		sourceGates:            gates,
 	}
 }
 
@@ -49,7 +66,11 @@ func (p *Priority) RunBackground(ctx context.Context) {
 }
 
 func (p *Priority) backgroundMaintainers() []BackgroundMaintainer {
-	return collectBackgroundMaintainers(p.sources)
+	maintainers := collectBackgroundMaintainers(p.sources)
+	if correlation := p.correlationWorker(); correlation != nil {
+		maintainers = append(maintainers, correlation)
+	}
+	return maintainers
 }
 
 func (p *Priority) Fetch(ctx context.Context) (*model.Snapshot, error) {
@@ -59,7 +80,7 @@ func (p *Priority) Fetch(ctx context.Context) (*model.Snapshot, error) {
 			errs = append(errs, errors.New("nil priority source"))
 			continue
 		}
-		snapshot, err := src.Fetch(ctx)
+		snapshot, err := p.sourceGates[idx].fetchNormal(ctx, src)
 		if err == nil && snapshot != nil {
 			if p.projectFallbackMetrics {
 				if idx == 0 {
@@ -78,6 +99,13 @@ func (p *Priority) Fetch(ctx context.Context) (*model.Snapshot, error) {
 				// preserved when telemetry overlaps, but cannot make an otherwise
 				// incompatible fallback count as a successful telemetry poll.
 			} else {
+				// Correlate only a snapshot that passed every Priority acceptance
+				// check. In particular, a mismatched Modbus fallback must not
+				// trigger cloud diagnostics for a device learned from another
+				// source.
+				if correlation := p.correlationWorker(); correlation != nil {
+					correlation.observe(snapshot)
+				}
 				if len(errs) > 0 {
 					log.Warn().
 						Str("source", src.Name()).

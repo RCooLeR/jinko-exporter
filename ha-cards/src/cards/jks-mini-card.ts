@@ -1,8 +1,10 @@
 import desktopLayout from "../../assets/overview/desktop_layout_spec.json";
 import mobileLayout from "../../assets/overview/mobile_layout_spec.json";
 import { setClassNameIfChanged, setHiddenIfChanged, setStyleIfChanged, setTextContentIfChanged } from "../lib/dom";
+import { calculateDailyGridBalanceUAH } from "../lib/energy-tariff";
 import { clamp, first, formatEnergy, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber, sum } from "../lib/format";
 import { ENTITY_KEYS, resolveEntities, valueFor, type EntityKey, type EntityOverrides, type ResolvedEntityMap } from "../lib/entity-model";
+import { measuredGridLoadFor } from "../lib/grid-load";
 import { MINI_CARD_POSITIONS, type PositionBoxModel, type PositionMode } from "../lib/position-models";
 import type { HomeAssistant, LovelaceCardConfig } from "../types/home-assistant";
 
@@ -324,9 +326,8 @@ class JksMiniCard extends HTMLElement {
       this._value("grid_total_power"),
       sum([this._value("grid_l1_power"), this._value("grid_l2_power"), this._value("grid_l3_power")])
     );
-    const homeTotalPower = first(
-      this._value("grid_load_total_power"),
-      sum([this._value("grid_load_l1_power"), this._value("grid_load_l2_power"), this._value("grid_load_l3_power")]),
+    const measuredGridLoad = measuredGridLoadFor((key) => this._value(key));
+    const homeTotalPower = measuredGridLoad.available ? measuredGridLoad.power : first(
       this._value("home_total_power"),
       sum([this._value("home_l1_power"), this._value("home_l2_power"), this._value("home_l3_power")])
     );
@@ -341,7 +342,7 @@ class JksMiniCard extends HTMLElement {
       grid_offline: !this._isMeaningfulPower(gridTotalPower),
       battery_offline: !this._isMeaningfulPower(batteryPower),
       gen_offline: !this._isMeaningfulPower(generatorTotalPower),
-      load_offline: !this._isMeaningfulPower(homeTotalPower)
+      load_offline: !measuredGridLoad.available && !this._isMeaningfulPower(homeTotalPower)
     };
 
     for (const layer of DESKTOP_LAYERS) {
@@ -458,9 +459,8 @@ class JksMiniCard extends HTMLElement {
       sum([this._value("grid_l1_power"), this._value("grid_l2_power"), this._value("grid_l3_power")])
     );
     const pvTotalPower = first(this._value("pv_total_power"), sum([this._value("pv1_power"), this._value("pv2_power")]));
-    const homeTotalPower = first(
-      this._value("grid_load_total_power"),
-      sum([this._value("grid_load_l1_power"), this._value("grid_load_l2_power"), this._value("grid_load_l3_power")]),
+    const measuredGridLoad = measuredGridLoadFor((key) => this._value(key));
+    const homeTotalPower = measuredGridLoad.available ? measuredGridLoad.power : first(
       this._value("home_total_power"),
       sum([this._value("home_l1_power"), this._value("home_l2_power"), this._value("home_l3_power")])
     );
@@ -491,18 +491,9 @@ class JksMiniCard extends HTMLElement {
   }
 
   private _formatCosts(buyToday: number | null, sellToday: number | null): string {
-    if (!isFiniteNumber(buyToday) && !isFiniteNumber(sellToday)) {
-      return "--";
-    }
-
-    const buy = buyToday ?? 0;
-    const sell = sellToday ?? 0;
-
-    if (sell > buy) {
-      return `${formatNumber((sell - buy) * 6.515, 1).replace(".", ",")}\u20B4`;
-    }
-
-    return `-${formatNumber((buy - sell) * 4.32, 1).replace(".", ",")}\u20B4`;
+    const balance = calculateDailyGridBalanceUAH(buyToday, sellToday);
+    if (!isFiniteNumber(balance)) return "--";
+    return `${balance > 0 ? "+" : ""}${formatNumber(balance, 2).replace(".", ",")}\u20B4`;
   }
 
   private _applyTextBox(

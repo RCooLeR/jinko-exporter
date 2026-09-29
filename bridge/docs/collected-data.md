@@ -54,6 +54,10 @@ The Jinko parser reads:
 
 For each field, the bridge prefers `orgValue`, falls back to `value`, parses the result as a number, and skips the field when parsing fails.
 
+`collected_at` is the upstream `collectionTime`, never the time an HTTP response
+arrived. Missing or invalid timestamps are rejected. Jinko fetches reject data
+older than `JINKO_MAX_DATA_AGE` (default `15m`) or over one minute in the future.
+
 Jinko metric keys are normalized this way:
 
 - `storageName` is preferred as the metric `key`.
@@ -69,20 +73,44 @@ The Solarman parser reads `dataList` from `/device/v1.0/currentData` and accepts
 - unit: `unit` or `dataUnit`
 - value: `value` or `val`
 
+The response must include a successful result, `collectionTime` as Unix seconds,
+and `deviceState`. Online (`1`) and alarm (`2`) data can be accepted; offline (`3`),
+missing, or unknown states are rejected. The bridge preserves `collectionTime`
+as `collected_at` and rejects timestamps older than `SOLARMAN_MAX_DATA_AGE`
+(default `15m`), missing/invalid timestamps, or timestamps over one minute in the
+future. These fields are defined by the [Solarman currentData API](https://doc.solarmanpv.com/en/Device%20interface/3.3Real-time%20device%20data).
+
+A successful HTTP response can contain the last cached readings of an inverter
+that has been off for days. Such a response cannot refresh the bridge's last
+successful update or MQTT state. Priority selection tries the next source after
+a rejected snapshot. If every inverter source fails, inverter poll health
+becomes `0` and readiness fails. MQTT inverter entities become unavailable;
+independently polled Shelly entities can remain available. Prometheus retains the last accepted readings
+with their original timestamp and an increasing `data_age_seconds`; on a cold
+start with no accepted snapshot, no inverter readings are emitted. Identical
+numeric values alone are not treated as stale: timestamps and device state
+determine validity, so valid zero production at night remains valid.
+
 Solarman groups are inferred from the key and name, but every point recognized by the shared Jinko metric dictionary is always canonicalized to that dictionary's key, group, name, and unit. Unrecognized Solarman-only points remain available in compatibility mode. `SOLARMAN_CANONICAL_JINKO_METRICS=true` is the legacy-named strict-surface switch: it filters those unknown points and keeps only metrics in the shared dictionary. If the option is not set, it defaults to `EXPORTER_METRICS_DROP_SOURCE_LABEL`.
 
 For the two-MPPT PV surface, Jinko, known Solarman points, and local Modbus use the same canonical identities: `DP1`/`DP2` (`electric`, `DC Power PV1`/`DC Power PV2`, `W`), `DV1`/`DV2` (`electric`, `DC Voltage PV1`/`DC Voltage PV2`, `V`), `DC1`/`DC2` (`electric`, `DC Current PV1`/`DC Current PV2`, `A`), and `S_P_T` (`electric`, `Total Solar Power`, `W`). This shared key/group/name/unit contract is what lets one Home Assistant entity set and one Prometheus label set survive source failover.
 
 For a source-independent priority deployment, set `EXPORTER_METRICS_DROP_SOURCE_LABEL=true`. Unless explicitly overridden, that setting also enables `EXPORTER_SOURCE_PROJECT_FAILOVER_METRICS` and strict shared-dictionary filtering through `SOLARMAN_CANONICAL_JINKO_METRICS`. After the primary surface has been learned, a matching fallback metric is published with the primary surface's group, key, name, and unit; fallback-only ordinary telemetry is omitted. Together, stable labels and removal of the `source` label prevent separate source-specific Prometheus series from appearing as duplicate lines in Grafana. Warning/alarm/fault metrics are not projected onto the primary telemetry surface and retain their source-local domains.
 
+Home Assistant Discovery can persist the corresponding schema independently with `MQTT_DISCOVERY_STATE_FILE`. The configured first-priority source contributes a monotonic ordinary metric surface; a cold fallback cannot add fallback-only ordinary entities. Source-local warning/alarm/fault metrics and Shelly `grid_load` metrics form separate monotonic unions. Ordinary values missing from the current snapshot are explicitly `null`, and missing-safe templates make those entities `unknown` without treating absence as zero or producing template warnings. Alert entities instead combine global bridge availability with an exact manifest-derived source/key condition: a finite zero remains `0`/`OFF`, a non-zero value is active, and an inactive source, missing key, or non-finite value is `unavailable`. This persistence changes only retained MQTT entity ownership and state shaping; it does not change the normalized snapshot returned by `fetch` or the source-selection behavior used by Prometheus.
+
 ### Shelly `grid_load` Enrichment
 
-Shelly Pro 3EM support is an optional enrichment source, not an inverter-source
-candidate. After the configured Jinko, Solarman, or Modbus source returns a
-complete snapshot, the bridge reads `EM.GetStatus` and `EMData.GetStatus` from
-the configured Shelly and appends every available value below with group
-`grid_load`. A Shelly error logs a warning and omits the complete enrichment for
-that poll; it does not fail or replace the successful inverter snapshot.
+Shelly Pro 3EM support is an optional independent meter, not an inverter-source
+candidate. In `serve` mode, a separate polling loop reads `EM.GetStatus`,
+`EMData.GetStatus`, and optional `Temperature.GetStatus?id=0` at
+`EXPORTER_POLL_INTERVAL`. It continues while inverter
+requests fail or wait for cloud request pacing, including cold starts with the
+inverter off. Every available value below keeps group `grid_load`. Shelly
+success cannot mark the inverter online or refresh its collection timestamp;
+a Shelly failure cannot take a working inverter offline. Each stream has its
+own health and freshness. The one-shot `fetch` command retains sequential
+enrichment after a successful inverter snapshot.
 
 | Surface | Keys | Maximum |
 | --- | --- | ---: |
@@ -90,24 +118,38 @@ that poll; it does not fail or replace the successful inverter snapshot.
 | Whole-meter live values | `neutral_current`, `total_current`, `total_power`, `total_apparent_power` | 4 |
 | Per-phase energy for `l1`, `l2`, and `l3` | `<phase>_energy_total`, `<phase>_returned_energy_total` | 6 |
 | Whole-meter energy | `energy_total`, `returned_energy_total` | 2 |
+| Internal device temperature | `internal_temperature` | 1 |
 
-The maximum surface is 30 metrics. Shelly RPC fields are optional, so a valid
+The maximum surface is 31 metrics. Shelly RPC fields are optional, so a valid
 response can contain fewer; unavailable values are omitted rather than filled
 with zero. Power is reported in `W`, apparent power in `VA`, voltage in `V`,
 current in `A`, frequency in `Hz`, power factor with an empty unit, and Shelly
 active/returned energy is converted from `Wh` to `kWh`.
 
-The final snapshot keeps the winning inverter source identity. Consequently,
+Internal temperature uses the Celsius `tC` value from
+[`Temperature.GetStatus`](https://shelly-api-docs.shelly.cloud/gen2/ComponentsAndServices/Temperature/)
+for component `temperature:0`, independently of `SHELLY_GRID_LOAD_EM_ID`.
+It measures the Shelly device, not ambient air or the inverter. A missing/null
+value, sensor error, invalid response, unsupported RPC, or failed request omits
+only this diagnostic metric; electrical readings remain available. Each poll
+reads it afresh, without caching or substituting zero. The request uses the
+same `SHELLY_GRID_LOAD_TIMEOUT` limit as the electrical RPC calls.
+
+For compatibility, the displayed grid-load metrics keep the inverter identity. Consequently,
 the Prometheus `source` label on a `grid_load` metric, when enabled, is
 `modbus`, `jinko`, or `solarman`—it is **not** `shelly_grid_load`. The
 `group="grid_load"` label is the stable marker that the value originated from
 the configured Shelly. With `EXPORTER_METRICS_DROP_SOURCE_LABEL=true`, the
-source label is absent as expected. Shelly metrics are appended after priority
-selection and are not canonical fallback projections.
+source label is absent as expected. Before the first inverter response, the
+first configured source and a configured inverter serial (or `unknown`) seed
+these labels; the Shelly IP is never substituted for an inverter serial.
+Shelly metrics are not canonical fallback projections. Use
+`solar_grid_load_up` and `solar_grid_load_data_age_seconds` to determine whether
+they are current, not inverter `solar_up` or `solar_data_age_seconds`.
 
 ### Local Modbus
 
-The target-locked local profile is intentionally smaller than the cloud sources. It exposes only documented, reviewed read-only values through fixed FC03 requests and field-specific validation. Evidence differs by range: most production fields have target-live validation, while the narrow register 551-552 raw-status contract is map/schema verified with its first target read still pending. The exact evidence status and accepted domain for every range are recorded in the [Modbus validation ledger](./modbus-validation.md); hardware- and condition-dependent gaps are tracked in the [Modbus validation backlog](./modbus-backlog.md). Register numbers below are zero-based **decimal** addresses; hexadecimal equivalents are included to make the wire ranges unambiguous.
+The target-locked local profile is intentionally smaller than the cloud sources. It exposes only documented, reviewed read-only values through fixed FC03 requests and field-specific validation. Evidence differs by range: most production fields have target-live validation, while repeated complete target fetches prove transport and narrow decoder acceptance for registers 551-552 without yet retaining their exact raw words or a simultaneous relay-state bracket. The exact evidence status and accepted domain for every range are recorded in the [Modbus validation ledger](./modbus-validation.md); hardware- and condition-dependent gaps are tracked in the [Modbus validation backlog](./modbus-backlog.md). Register numbers below are zero-based **decimal** addresses; hexadecimal equivalents are included to make the wire ranges unambiguous.
 
 | Decimal register read | Hex register read | Metric key(s) | Conversion |
 | --- | --- | --- |
@@ -123,14 +165,23 @@ The target-locked local profile is intentionally smaller than the cloud sources.
 | `590-591` | `0x024E-0x024F` | `B_P1`, `B_C1` | signed 16-bit power `× 10 W` and signed 16-bit current `× 0.01 A` |
 | `598-600` | `0x0256-0x0258` | `G_V_L1`, `G_V_L2`, `G_V_L3` | unsigned register value multiplied by `0.1 V` |
 | `609-619` | `0x0261-0x026B` | `PG_F1`, `G_C_L1`, `G_C_L2`, `G_C_L3` | only register 609 is emitted as `U16 × 0.01 Hz` and internal currents 610-612 as `S16 × 0.01 A`; values are bounded to `0..100 Hz` and `±100 A`; external-CT currents and incomplete power low words 613-619 are ignored |
-| `622-625` and `687-690` | `0x026E-0x0271` and `0x02AF-0x02B2` | `G_P_L1`, `G_P_L2`, `G_P_L3`, `PG_Pt1` | true signed 32-bit, low-word-first values in W; positive is import and negative is export; each high word must be `0x0000` or `0xFFFF`, the full joined value—not low-word bit 15—determines sign, the JKS-family envelope is `±65535 W`, and the phase sum must equal the total |
+| `622-625` and `687-690` | `0x026E-0x0271` and `0x02AF-0x02B2` | `G_P_L1`, `G_P_L2`, `G_P_L3`, `PG_Pt1` | true signed 32-bit, low-word-first values in W; positive is import and negative is export; each high word must be `0x0000` or `0xFFFF`, the full joined value—not low-word bit 15—determines sign, every value must remain inside the conservative `-32767..32767 W` torn-pair coherence envelope, and the phase sum must equal the total |
 | `627-638` and `691-695` | `0x0273-0x027E` and `0x02B3-0x02B7` | `AV1`, `AV2`, `AV3`, `AC1`, `AC2`, `AC3`, `A_Fo1`, `INV_O_P_L1`, `INV_O_P_L2`, `INV_O_P_L3`, `INV_O_P_T` | voltage is `U16 × 0.1 V`, current `S16 × 0.01 A`, and frequency `U16 × 0.01 Hz`; active words pair low-first as signed 32-bit values, require high words `0x0000` or `0xFFFF`, remain inside the conservative `-32767..32767 W` coherence envelope, and require the exact signed phase sum to equal the total; apparent candidate 637/695 is ignored |
 | `643` | `0x0283` | `UPS_P` | this separate one-register request emits register 643 as an unsigned U16 value in W; no high word or phase semantics are inferred |
 | `640-646` | `0x0280-0x0286` | `C_V_L1`, `C_V_L2`, `C_V_L3` | this block's voltage decoder emits only registers 644-646 as `U16 × 0.1 V`; it ignores registers 640-643. Register 643 is independently requested and emitted as `UPS_P` by the preceding row; full phase/total power pairing with candidate high words 696-699 remains backlog work |
-| `650-653` and `656-659` | `0x028A-0x028D` and `0x0290-0x0293` | `LPP_A`, `LPP_B`, `LPP_C`, `E_Puse_t1` | low-first signed-32 pairs 650/656 through 653/659 in W, restricted to the live-verified non-negative domain by requiring every high word to equal zero; each value accepts `0..65535 W`, no phase-sum equality or `Pr1`-derived cap is imposed, and `C_P_L1..3` aliases remain excluded |
-| `655-659` | `0x028F-0x0293` | `L_F` | register 655 is `U16 × 0.01 Hz`; registers 656-659 are additionally consumed as the required zero high words for the preceding three phase powers and dedicated total |
+| `650-653` and `656-659` | `0x028A-0x028D` and `0x0290-0x0293` | `LPP_A`, `LPP_B`, `LPP_C`, `E_Puse_t1` | phase pairs 650/656 through 652/658 are low-first signed 32-bit W with canonical `0000/FFFF` sign extension and a conservative `-32767..32767 W` torn-pair coherence envelope; dedicated total 653/659 remains independently in the zero-high, numerically U16 `0..65535 W` subset of its documented signed wire pair; no phase-sum equality is imposed and `C_P_L1..3` aliases remain excluded |
+| `655-659` | `0x028F-0x0293` | `L_F` | register 655 is `U16 × 0.01 Hz`; registers 656-658 are additionally consumed as canonical signed phase high words, while dedicated-total high word 659 must remain zero |
 | `661-671` | `0x0295-0x029F` | `GEN_P_L1`, `GEN_P_L2`, `GEN_P_L3`, `GEN_V_L1`, `GEN_V_L2`, `GEN_V_L3`, `EG_P_CT1`, `GEN_P_T` | exact zero-domain only: all eleven raw words must remain zero and the eight canonical values are emitted as zero; `EG_P_CT1` is a zero-only compatibility view of the same observed total as `GEN_P_T`, with no nonzero equivalence inferred |
 | `672-679` | `0x02A0-0x02A7` | `DP1`, `DP2`, `DV1`, `DC1`, `DV2`, `DC2`, `S_P_T` | for gated type `0x0006`/2-MPPT: registers 672/673 are PV1/PV2 power at `10 W/count`, 676/678 are PV1/PV2 voltage at `0.1 V/count`, and 677/679 are PV1/PV2 current at `0.1 A/count`; registers 674-675 are the PV3/PV4 power words and must both remain zero; each channel and `S_P_T=(register 672 + register 673) × 10 W` are bounded to twice rated power, voltage to `1000 V`, and current to `100 A` |
+
+Registers 553-558 are interpreted only as a six-word raw alert vector: a
+complete valid Modbus snapshot with all six words equal to zero explicitly
+reports no Modbus alert, while any non-zero word activates the Modbus alert
+domain. The optional correlation worker sends the detected/recovered Home
+Assistant notification and queries Jinko and Solarman only for bounded,
+sanitized comparison evidence. Cloud results never clear the Modbus alert,
+change the winning telemetry source, or assign unverified meanings to bits;
+only a later complete Modbus snapshot containing six zeros resolves it.
 
 Before telemetry, the client performs two profile gates together and caches them only after both succeed: decimal register `0` (`0x0000`) must contain device type `0x0006`, and decimal registers `20-22` (`0x0014-0x0016`) must decode to one official JKS-6/8/10/12/15/20H-EI rating (`6000`, `8000`, `10000`, `12000`, `15000`, or `20000 W`), exactly `2 MPPT`, `3 phases`, and raw register 22 `0x0203`. The 12 kW target is the only member with live-confirmed raw gate values; the other accepted ratings come from the official line specification and have not been individually live-correlated. The unvalidated 25 kW two-MPPT sibling is outside `jks-6-20h-ei-readonly-v1`; the structurally separate 29.9/30 kW BM3 three-MPPT variants also fail closed. Rated power is emitted as canonical `Pr1` in every snapshot and all three capabilities are retained in snapshot metadata. Registers `20-22` are read-only inherent properties; the unrelated R/W clock registers at decimal `62-64` are excluded. The device-type code is metadata, not Jinko `INV_MOD1`, because those fields use different code systems.
 
@@ -144,7 +195,7 @@ The run-state and register-551 power-switch metrics are deliberately source-loca
 
 For register 609, the two primary protocol maps establish the read-only address and grid-frequency meaning; the `0.01 Hz` scale comes from the maintained Deye P3 profile and the reviewed live/cloud correlation (`4995` raw against approximately `50.00 Hz`). Registers 610-612 are the documented internal grid-current triplet and correlated more closely than the external-CT triplet. Arbitrary changes in ignored registers 613-619 do not change any emitted value.
 
-The direct-load decoder promotes the phase pairs 650/656, 651/657, and 652/658 as canonical `LPP_A/B/C`, plus dedicated total pair 653/659 as `E_Puse_t1`. An earlier reviewed positive sample had low words `19/34/248/301` and four zero high words. A later same-frame read produced a phase-word sum of `243 W` while dedicated total register 653 was `251 W`; that live counterexample proves phase-sum equality is not a valid production invariant, so all four values are independent and the sum is never a gate. Until a negative pair is independently verified, any nonzero high word—including `0xFFFF` sign extension—is rejected. Zero and `65535 W` are accepted for every pair. No inverter-rated-power cap is applied: the model-dependent pass-through limit is separate from `Pr1`, and official revision/table-layout ambiguity around 40 A versus 80 A prevents encoding a safe per-model split. `C_P_L1..3` aliases are not emitted. Register 588 likewise supplies both canonical SOC keys, `B_left_cap1` and `BMS_SOC`, with identical validated values. Register 586 supplies both canonical temperature keys, `B_T1` and `BMST`; neither alias is synthesized as zero.
+The direct-load decoder promotes the phase pairs 650/656, 651/657, and 652/658 as canonical `LPP_A/B/C`, plus dedicated total pair 653/659 as `E_Puse_t1`. An earlier reviewed positive sample had low words `19/34/248/301` and four zero high words. A later same-frame read produced a phase-word sum of `243 W` while dedicated total register 653 was `251 W`; that live counterexample proves phase-sum equality is not a valid production invariant, so all four values are independent and the sum is never a gate. A later production poll observed `R656=0xFFFF`, proving that phase-A sign extension occurs, although the error log did not retain the paired low word or the remaining high words. Production therefore accepts each phase only with canonical high `0x0000`/`0xFFFF` and a joined value inside `-32767..32767 W`. This symmetric phase envelope rejects both directions of an in-domain zero-crossing tear. Dedicated total remains deliberately narrower in meaning but wider in non-negative magnitude: R659 must be zero and R653 accepts `0..65535 W`. Thus no unverified signed-total contract or `Pr1`-derived cap is introduced, and pass-through total headroom is preserved. `C_P_L1..3` aliases are not emitted. Register 588 likewise supplies both canonical SOC keys, `B_left_cap1` and `BMS_SOC`, with identical validated values. Register 586 supplies both canonical temperature keys, `B_T1` and `BMST`; neither alias is synthesized as zero.
 
 Output active power has a separate, stricter signed contract. The positive live pair was `879/883/1092/2854 W` in registers 633-636 with active high words 691-694 all zero, and the phase sum was exact. A later production failure recorded `R691=0xFFFF`, establishing that the target does enter the negative sign-extension domain; that log did not preserve the paired low words or the other active high words, so no exact negative magnitude is claimed from it. Production reads `627 x 12` and `691 x 5` consecutively, joins active pairs low-word-first as signed 32-bit values, accepts high words only when they are `0x0000` or `0xFFFF`, limits every joined phase and total to `-32767..32767 W`, and requires the exact signed phase sum to equal the dedicated total. The symmetric `0x7FFF` guard is not a rated-power cap: it makes a low word and stale sign-extension word decode outside the accepted envelope if the adjacent reads straddle zero. Any failed gate rejects the complete Modbus snapshot for priority fallback. Registers 637/695 remain ignored and `O_P` is not synthesized.
 

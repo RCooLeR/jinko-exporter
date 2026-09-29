@@ -1,15 +1,19 @@
-FROM alpine:3.24
+# syntax=docker/dockerfile:1
+
+FROM alpine:3.24.1
 
 ARG TARGETPLATFORM
 
 RUN apk add --no-cache ca-certificates \
-    && adduser -D -H -u 65532 appuser
+    && addgroup -S -g 65532 appuser \
+    && adduser -S -D -H -u 65532 -G appuser appuser
 
-COPY ${TARGETPLATFORM}/jinko-exporter /usr/bin/jinko-exporter
+COPY --chown=65532:65532 --chmod=0555 ${TARGETPLATFORM}/jinko-exporter /usr/bin/jinko-exporter
 
 EXPOSE 9876
 
-USER appuser
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/bin/jinko-exporter", "healthcheck"]
+USER 65532:65532
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --start-interval=2s --retries=3 CMD ["/usr/bin/jinko-exporter", "healthcheck"]
 ENTRYPOINT ["/usr/bin/jinko-exporter"]
 CMD ["serve"]

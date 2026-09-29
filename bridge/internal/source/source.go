@@ -87,12 +87,10 @@ func runBackgroundMaintainers(ctx context.Context, maintainers []BackgroundMaint
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(len(maintainers))
 	for _, maintainer := range maintainers {
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			maintainer.RunBackground(ctx)
-		}()
+		})
 	}
 	wg.Wait()
 }
