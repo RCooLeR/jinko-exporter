@@ -39,3 +39,19 @@ The production bundle is written to:
 ```text
 dist/jinko-ha-cards.js
 ```
+
+## Layout preview and regression checks
+
+`npm run dev` opens a static detailed-card fixture, with links for desktop,
+narrow desktop, and mobile widths. `?width=2050` reproduces a wide dashboard.
+The preview entry is not part of the production bundle.
+
+The detailed desktop overlay geometry is measured in original-image pixels
+in `assets/main/desktop_layout_spec.json`. Keep coordinates there, not in
+`src/lib/position-models.ts`, which supplies desktop typography only. Values
+scale with the same scene as the background; long three-phase readings shrink
+to fit their reserved area. SOC and temperature remain centered in their gauges.
+
+`card-layout.test.ts` checks the effective rendered rectangles against the
+painted panels and prevents alignment, hidden-element, and text-fit regressions.
+The mobile artwork and mini-card layout retain their separate specifications.

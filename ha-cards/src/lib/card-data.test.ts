@@ -42,7 +42,7 @@ test("cards display independent Shelly readings with the inverter offline", asyn
   const server = await createServer({
     configFile: false,
     root: fileURLToPath(new URL("../..", import.meta.url)),
-    server: { middlewareMode: true, hmr: false },
+    server: { middlewareMode: true, hmr: false, ws: false },
     appType: "custom"
   });
   try {

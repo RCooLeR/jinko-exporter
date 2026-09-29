@@ -98,7 +98,7 @@ const MOBILE_LAYOUT = mobileLayout as LayoutSpec;
 const MOBILE_BREAKPOINT = 960;
 const DETAILED_CARD_MOBILE_REFERENCE_WIDTH = 420;
 const DETAILED_CARD_DESKTOP_REFERENCE_WIDTH = 1200;
-const DETAILED_CARD_DESKTOP_METRIC_FONT_SIZE = 15;
+const DETAILED_CARD_DESKTOP_METRIC_FONT_SIZE = 20;
 const DETAILED_CARD_MOBILE_METRIC_FONT_SIZE = 6.5;
 const VOLTAGE_EPSILON = 1;
 const CURRENT_EPSILON = 0.01;
@@ -196,10 +196,6 @@ class JksDetailedCard extends HTMLElement {
     if (this._resizeObserver) return;
 
     this._resizeObserver = new ResizeObserver((entries) => {
-      if (this._config.static && this._hasRendered) {
-        return;
-      }
-
       const width = entries[0]?.contentRect.width ?? this.clientWidth ?? DESKTOP_LAYOUT.canvas.width;
       const nextMode = width <= MOBILE_BREAKPOINT;
       if (nextMode !== this._isMobile) {
@@ -846,6 +842,7 @@ class JksDetailedCard extends HTMLElement {
 
     const node = document.createElement("div");
     node.className = className;
+    node.dataset.overlayKey = key;
     this._overlayNodes.set(key, node);
     this._sceneEl?.append(node);
     return node;
@@ -867,11 +864,15 @@ class JksDetailedCard extends HTMLElement {
     const top = options.topPercent ?? (adjustedY / layout.canvas.height) * 100;
     const widthPct = options.widthPercent ?? (width / layout.canvas.width) * 100;
     const heightPct = options.heightPercent ?? (height / layout.canvas.height) * 100;
-    const responsiveFont = className.includes("value--primary-metric")
-      ? `${this._fixedMetricFontSize()}px`
-      : this._responsiveFontForTextBox(layout, box, text, options);
-    const textAlign = options.textAlign ?? "right";
-    const justifyContent = options.justifyContent ?? "flex-end";
+    const primaryMetric = className.includes("value--primary-metric");
+    const responsiveFont = primaryMetric && this._isMobile
+      ? `${DETAILED_CARD_MOBILE_METRIC_FONT_SIZE}px`
+      : this._responsiveFontForTextBox(layout, box, text, primaryMetric
+        ? { ...options, fontSizePx: options.fontSizePx ?? DETAILED_CARD_DESKTOP_METRIC_FONT_SIZE }
+        : options);
+    const centered = className.includes("value--soc") || className.includes("value--temp") || className.includes("value--status");
+    const textAlign = options.textAlign ?? (centered ? "center" : "right");
+    const justifyContent = options.justifyContent ?? (centered ? "center" : "flex-end");
 
     setClassNameIfChanged(node, className);
     setHiddenIfChanged(node, !visible);
@@ -885,14 +886,18 @@ class JksDetailedCard extends HTMLElement {
     setStyleIfChanged(node, "justify-content", justifyContent);
   }
 
-  private _fixedMetricFontSize(): number {
-    return this._isMobile ? DETAILED_CARD_MOBILE_METRIC_FONT_SIZE : DETAILED_CARD_DESKTOP_METRIC_FONT_SIZE;
-  }
-
   private _responsiveFontForTextBox(layout: LayoutSpec, box: [number, number, number, number], text: string, options: PositionBoxModel = {}): string {
     const [, , width, height] = box;
     const widthPct = options.widthPercent ?? (width / layout.canvas.width) * 100;
     const baseFontSize = options.fontSizePx ?? height * 0.62;
+    if (!this._isMobile) {
+      // Scale with the artwork, not the viewport or a fixed CSS-pixel floor.
+      // Reserve width for long three-phase readings before they hit the label.
+      const sourceWidth = (widthPct / 100) * layout.canvas.width;
+      const fittingFontSize = sourceWidth * 0.94 / Math.max(text.trim().length * 0.6, 1);
+      const fontSize = Math.min(baseFontSize * (options.fontScale ?? 1), fittingFontSize, height * 0.9);
+      return `${((fontSize / layout.canvas.width) * 100).toFixed(4)}cqw`;
+    }
     const lengthScale = text.includes("/") ? 0.74 : text.length > 16 ? 0.84 : 1;
     const referenceWidth = this._isMobile ? DETAILED_CARD_MOBILE_REFERENCE_WIDTH : DETAILED_CARD_DESKTOP_REFERENCE_WIDTH;
     const sourceWidth = (widthPct / 100) * layout.canvas.width;
@@ -1004,6 +1009,10 @@ class JksDetailedCard extends HTMLElement {
       :host {
         display: block;
         container-type: inline-size;
+      }
+
+      [hidden] {
+        display: none !important;
       }
 
       ha-card {
