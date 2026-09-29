@@ -2,6 +2,10 @@
 
 The bridge is a standalone Go module under `bridge/`.
 
+`master` is the canonical integration and release branch. Start new work from
+`origin/master` and merge changes through pull requests after the required checks
+pass; the older `main` and feature branches are historical, not release targets.
+
 ## Toolchain
 
 - Go 1.27.0, as declared by `bridge/go.mod`.
@@ -97,11 +101,20 @@ npm run check
 
 ## Continuous Integration
 
-Pull requests and branch pushes run `.github/workflows/ci.yml`.
+Pull requests and branch pushes run `.github/workflows/ci.yml`. The required checks
+for `master` are `bridge`, `docker`, `cards (ha-cards)`, `cards (new-ha-cards)`, and
+`release-config`. Keep these job names stable because branch protection refers to
+them. Branch protection requires an up-to-date branch with passing checks and
+blocks force pushes and branch deletion, including for administrators.
 
 The bridge job checks formatting, `go vet`, race-enabled tests with coverage, `staticcheck`, and `govulncheck`.
 
 The cards matrix installs both packages with `npm ci`, runs their Node test suites, typechecks application and tooling sources, and builds both Vite bundles. The package-level `check` command provides the same validation sequence locally.
+
+The Docker job validates the Dockerfile and builds the runtime image. The
+release-config job validates GoReleaser and builds a complete, nonpublishing
+snapshot, including both card bundles and multi-architecture container images.
+Pushing or merging `master` does not publish a release or deploy containers.
 
 ## Dependency Updates
 
@@ -140,7 +153,7 @@ Repository secrets required for Docker Hub publishing:
 
 Publishing flow:
 
-1. Push a semantic version tag such as `v1.2.3`.
+1. Push a stable semantic version tag such as `v1.2.3` at the current `origin/master` tip.
 2. GitHub Actions checks out the repository and sets up Go from `bridge/go.mod`.
 3. Both Home Assistant card implementations are built and included under their distinct package paths in every release archive.
 4. GoReleaser builds Linux `amd64` and `arm64` binaries, SBOM-backed container images, and digest metadata.
@@ -155,4 +168,5 @@ Stable tags publish Docker tags:
 latest
 ```
 
-Pre-release tags publish only the exact version tag.
+The release-policy check rejects prerelease tags and tags that do not point to
+the current `origin/master` commit.
