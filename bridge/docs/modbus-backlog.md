@@ -48,11 +48,11 @@ device type `0x0006`, two MPPTs, three phases, and one of the allowlisted
 Each fetch uses one fresh connection and fixed FC03 reads under one absolute
 deadline. It has no write or arbitrary-register path.
 
-The current 87-metric core comprises 76 shared canonical metrics and eleven
+The current 91-metric core comprises 80 shared canonical metrics and eleven
 Modbus-local fields: the register-500 run state, the register-551 power
 switch state, six raw warning/fault words, and three external-CT currents.
-The bounded CT promotion is an explicitly accepted evidence exception recorded
-in validation Stage 26; its outstanding live checks remain MB-006 below.
+The bounded CT and internal-power promotions record their evidence limits in
+validation Stages 26-27; outstanding live checks remain MB-006/MB-007 below.
 When Modbus establishes the
 primary failover surface, ordinary cloud-only fields are intentionally omitted
 after fallback rather than invented or emitted with competing labels. Shelly
@@ -65,8 +65,9 @@ out-of-contract states so priority fallback can run. MB-001 is an explicit
 acceptance-evidence debt rather than an unbounded decoder: its current
 map/schema-backed status handling is narrow, read-only, and fail-closed. Any
 implementation that claims one of the open domains is blocked until that item's
-validation gates are complete, except for the explicitly recorded Stage-26 CT
-acceptance. This exception does not admit wider CT power values or other groups.
+validation gates are complete, except for the explicitly bounded Stage-26 CT
+and Stage-27 internal-power acceptance. These exceptions do not admit wider
+power values or other groups.
 
 ## Open Work
 
@@ -160,27 +161,27 @@ and target evidence; do not widen a constant or cap it by inverter rated power.
 
 ### MB-007 TODO: Internal and Reactive Power Surfaces
 
-**Status:** internal active-power read plan prepared; target capture/correlation
-pending. Reactive-power mapping and discriminating conditions remain missing.
+**Status:** internal active-power publication implemented after positive target
+correlation; exact negative-flow capture remains acceptance-evidence debt.
+Reactive-power mapping and discriminating conditions remain missing.
 
-The next narrow candidate is internal active power only: FC03 `604 x 4` for
-the low words and `700 x 4` for the high words, one connection and one request
-per block. V104-2 printed pages 32/37 and the SG01-HP3-AM2 HV map printed pages
-33/38 agree on read-only signed low-first `1 W/count` pairs 604/700 through
-607/703. High words start at **700**, not 701; reserved apparent-power
-candidates 608/704 are excluded. The isolated offline-by-default probe has
-exact frame/CRC/checksum/order and failure-path tests. This preparation does
-not add either block to production or claim a target read.
+Stage 27 records the supervised fixed FC03 `604 x 4`, then `700 x 4` read.
+V104-2 printed pages 32/37 and the SG01-HP3-AM2 HV map printed pages 33/38 agree
+on read-only signed low-first `1 W/count` pairs 604/700 through 607/703. High
+words start at **700**, not 701; reserved apparent-power candidates 608/704
+remain excluded. Production preserves the four independent `GS_*` values with
+canonical sign extension and the `-32767..32767 W` coherence envelope.
 
-The owner's 2026-10-07 `17:00:26Z` browser export distinguishes internal
-`99/86/164 W`, total `349 W`, from external CT `103/99/170 W`, total `372 W`.
-Obtain a fresh timestamped export/display bracket before the supervised read;
-an older reference cannot establish a precise match. Preserve the independently
-measured total and validate direction/coherence rather than copying an alias
-or assuming a phase-sum rule. Follow the normal validation gates before promotion.
+Local powers `98/86/148 W`, total `332 W`, closely matched the owner's fresh
+`17:31:27Z` cloud `98/84/148 W`, total `330 W`, during a reported stable load.
+The sample is positive with all-zero high words, not proof of a negative raw
+pair or wide power domain. Retain a naturally occurring negative-flow capture
+with the corresponding cloud/display values; wider power needs coherent
+acquisition evidence. Do not infer a universal phase-sum equality or an alias
+between internal, external CT, and selected grid power.
 
 Cloud keys `GS_A`, `GS_B`, `GS_C`, and `GS_T` represent internal power, not the
-already supported grid phase/total powers. Reactive keys `G16`, `A_RP_PG`,
+selected grid phase/total powers. Reactive keys `G16`, `A_RP_PG`,
 `B_RP_PG`, `C_RP_PG`, `A_RP_INV`, `B_RP_INV`, and `C_RP_INV` likewise require
 their own documented register pairs, signs, scales, and totals. Validation needs
 a sample with material reactive power; zeros or near-unity power factor cannot

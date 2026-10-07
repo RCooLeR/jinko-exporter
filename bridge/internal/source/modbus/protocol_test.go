@@ -133,6 +133,18 @@ func TestBuildReadRequestGoldenFrames(t *testing.T) {
 			wantSHA256: "dd46ae1ef1ed03f155d76e74e907f8077e046bdab6e890a981466207d5d258ea",
 		},
 		{
+			name:       "internal-grid power low words",
+			id:         internalGridPowerLowRead,
+			wantHex:    "a5170010451b00785634120200000000000000000000000000000103025c000485a32b15",
+			wantSHA256: "c43f91a420cdfc995e88859f00aef4bf127be80a13dcb364e9520d23289ed45d",
+		},
+		{
+			name:       "internal-grid power high words",
+			id:         internalGridPowerHighRead,
+			wantHex:    "a5170010451c0078563412020000000000000000000000000000010302bc000484553d15",
+			wantSHA256: "45d663698b4828e27a39788aced0d32dff6b51ba525edd28cb8f8a4b7aa8b7d7",
+		},
+		{
 			name:       "grid power low words",
 			id:         gridPowerLowRead,
 			wantHex:    "a5170010450c00785634120200000000000000000000000000000103026e0004246c9615",
@@ -367,6 +379,27 @@ func TestParseIndependentSanitizedPromotedResponseFixtures(t *testing.T) {
 			},
 		},
 		{
+			// Retained 2026-10-07 low/high payloads, with a synthetic logger
+			// identity and zeroed metadata. The signed fixture is synthetic,
+			// not evidence of a negative internal-grid live capture.
+			name: "internal-grid observed low words", id: internalGridPowerLowRead,
+			frameHex:   "a51b0010151b00785634120201000000000000000000000000010308006200560094014cdf948a15",
+			want:       []uint16{98, 86, 148, 332},
+			wantSHA256: "b8f657c8c73e31890c9cfeb25b845e7fa42f6d8d7a48c16af0692f628edf62f1",
+		},
+		{
+			name: "internal-grid observed high words", id: internalGridPowerHighRead,
+			frameHex:   "a51b0010151c00785634120201000000000000000000000000010308000000000000000095d7eb15",
+			want:       []uint16{0, 0, 0, 0},
+			wantSHA256: "40e28373e26642a4bddeb6538b58d57fcf8276b2d5776ac031cdfd99798b9f2f",
+		},
+		{
+			name: "internal-grid synthetic signed high words", id: internalGridPowerHighRead,
+			frameHex:   "a51b0010151c00785634120201000000000000000000000000010308ffff0000ffffffffd4489515",
+			want:       []uint16{0xFFFF, 0, 0xFFFF, 0xFFFF},
+			wantSHA256: "a713013b7519ff7b56510eaa094abfcfaf10a322175c7531fdd41bad9dec50f6",
+		},
+		{
 			// The signed mix is synthetic and logger identity is sanitized. A
 			// production log independently observed R691=0xFFFF, but did not retain
 			// the remaining words, so this fixture is a protocol boundary oracle,
@@ -476,6 +509,8 @@ func TestParseIndependentSanitizedPromotedExceptionFixtures(t *testing.T) {
 		{id: runStateRead, frameHex: "a5130010150457785634120201000000000000000000000000018302c0f1e115"},
 		{id: gridFrequencyCurrentRead, frameHex: "a5130010150b00785634120201000000000000000000000000018302c0f19115"},
 		{id: externalCTPowerHighRead, frameHex: "a5130010151a00785634120201000000000000000000000000018302c0f1a015"},
+		{id: internalGridPowerLowRead, frameHex: "a5130010151b00785634120201000000000000000000000000018302c0f1a115", wantSHA256: "2a6ab1f3502174e0e0d8636d3c51c568b5c6c96a7aaac00d4e171ca4e06b2edd"},
+		{id: internalGridPowerHighRead, frameHex: "a5130010151c00785634120201000000000000000000000000018302c0f1a215", wantSHA256: "5053a187721c7af4821cef26fac31d3c37fd86499a7d4616aac28a3eb7cbef6c"},
 	}
 	for _, tt := range tests {
 		frame, err := hex.DecodeString(tt.frameHex)

@@ -36,7 +36,9 @@ Stage 26 records a separate, owner-accepted bounded CT promotion: two-map signed
 semantics, a successful complete positive capture, and nearby but non-synchronous
 cloud values support publication. Exact negative-flow and independent CT-current
 live correlation remain explicit acceptance-evidence debt, not completed gates.
-This exception does not extend to other fields or a wider CT power domain.
+Stage 27 separately records positive internal-power correlation and bounded
+map-backed signed handling, with exact negative-flow correlation still open.
+Neither exception extends to other fields or wider power domains.
 
 This ledger records completed or explicitly bounded production evidence. See
 the [Modbus validation backlog](./modbus-backlog.md) for open acceptance reads,
@@ -65,6 +67,7 @@ required before any of them can be promoted.
 | `0x024E x 2` (`590-591`) | Live verified, production | Battery power and Battery-1 current. |
 | `0x0261 x 11` (`609-619`) | Frequency/internal currents live verified; external CT bounded promotion, Stage 26 | `PG_F1`, `G_C_L1..3`, separate external currents 613-615, and CT active-power low words 616-619 paired with 705-708. |
 | `0x02C1 x 4` (`705-708`) | Positive raw capture verified; signed map-backed production, Stage 26 | External CT power high words; canonical sign extension and conservative `-32767..32767 W` per-value coherence envelope, independent total. Exact export/current correlation remains MB-006. |
+| `0x025C x 4` (`604-607`) and `0x02BC x 4` (`700-703`) | Positive target/cloud correlation; bounded signed map-backed production, Stage 27 | Internal active power `GS_A/B/C/T`, signed low-first W, canonical sign extension, `-32767..32767 W` per-value coherence envelope and independent total. Exact negative-flow capture remains MB-007. |
 | `0x026E x 4` (`622-625`) | Live verified, conservative signed production with `687-690` | Selected grid phase/total power low words; paired values must remain inside the `-32767..32767 W` torn-read coherence envelope. |
 | `0x02AF x 4` (`687-690`) | Live verified, conservative signed production with `622-625` | Selected grid phase/total power high words; signed import/export is confirmed and only canonical sign extension is accepted. |
 | `0x0273 x 12` (`627-638`) | Scalars live verified; active power conservative signed production with `691-694` | Output voltage/current/frequency and gated active-power low words are promoted; apparent candidate 637 remains ignored. |
@@ -1226,3 +1229,62 @@ References:
 
 - [Three-phase LV/HV V104-2, printed pages 33 and 37-38](https://hybrydaplus.pl/wp-content/uploads/2024/09/MODBUS.RTU_3PLV_HV_Protocol_V104-2.pdf)
 - [SG01-HP3-AM2 HV V104.3.1, printed pages 33 and 38](https://forum.iobroker.net/assets/uploads/files/1706097675773-modbusrtu%E4%B8%89%E7%9B%B8%E9%AB%98%E5%8E%8B%E5%82%A8%E8%83%BD%E9%80%9A%E4%BF%A1%E8%A7%84%E7%BA%A6v104-%E9%AB%98%E5%8E%8B-3-1-1111_sg01-hp3-am2.pdf)
+
+## Stage 27: 2026-10-07 Internal Grid Active Power
+
+Following the CT expansion, the owner requested the next group, refreshed the
+browser detail export, and reported that the load was practically unchanged.
+The two maps cited in Stage 26 agree on internal active-power low words 604-607
+and high words 700-703 (V104-2 printed pages 32/37; HV map pages 33/38): four
+read-only signed low-first 32-bit pairs, `1 W/count`. Register 700 is the first
+high word; neither reserved apparent-power word 608 nor 704 is included.
+
+With the normal bridge still stopped, the offline-tested and independently
+reviewed probe sent exactly unit-1 FC03 `604 x 4` (sequence `1B`), then
+`700 x 4` (sequence `1C`) on one connection under one six-second absolute
+deadline. Both complete 40-byte responses passed V5 framing, identity, sequence,
+status, checksum, nested Modbus byte count and CRC validation. No retry,
+reconnect, scan, settings write, or service restart occurred.
+
+Capture interval: `2026-10-07T17:36:54.5475214Z` to
+`2026-10-07T17:36:54.7889831Z`. Identity-bearing frames remain private; complete
+redacted telemetry words are:
+
+```text
+604=0062 605=0056 606=0094 607=014C
+700=0000 701=0000 702=0000 703=0000
+```
+
+| Canonical key | Local power (W) | Cloud power (W) |
+| --- | ---: | ---: |
+| `GS_A` | 98 | 98 |
+| `GS_B` | 86 | 84 |
+| `GS_C` | 148 | 148 |
+| `GS_T` | 332 | 330 |
+
+The matching-identity cloud sample was collected at `17:31:27Z`, five minutes
+and 27 seconds earlier. Only L2 and total differ, by `2 W`. The owner confirmed
+a stable load, but this is still a non-atomic comparison, not simultaneous
+sampling. That same cloud sample had external CT powers `102/98/154 W`, total
+`354 W`, independently supporting the distinction between internal and CT
+surfaces. Internal currents remain their existing 610-612 fields.
+
+Production adds only these two fixed reads after the existing CT high-word
+read and emits canonical `grid/GS_A`, `GS_B`, `GS_C`, and `GS_T` in W. Each
+power preserves the documented sign and accepts only canonical `0000/FFFF`
+high words and joined values inside `-32767..32767 W`. This is an acquisition
+coherence guard, not an inverter or pass-through rating. Total remains an
+independent measurement: no equality gate or calculated replacement is added.
+A bad pair or response rejects the entire snapshot for configured fallback.
+
+Positive address/scale/phase/total correlation is supported by this capture.
+Signed extension is map-backed and offline-tested; a live negative pair was
+not observed. That narrower acceptance-evidence debt remains MB-007, together
+with any future wider-domain acquisition work. It is not a claim that reactive
+power, apparent power, or all operating conditions have been validated.
+
+The complete core now contains **91 metrics: 80 canonical and 11 source-local**.
+The first fetch sends **27** fixed requests, subsequent fetches **25**, still
+one connection and one absolute deadline each. Golden protocol, signed-boundary,
+independent-total, exact read-order/count, terminal-failure and downstream
+publication tests cover the new group.

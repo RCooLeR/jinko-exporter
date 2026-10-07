@@ -44,6 +44,8 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		makeReadResponse(t, runStateRead, []uint16{2, 0x0001, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF}),
 		makeReadResponse(t, gridFrequencyCurrentRead, liveGridFrequencyCurrentWords()),
 		makeReadResponse(t, externalCTPowerHighRead, []uint16{0, 0, 0, 0}),
+		makeReadResponse(t, internalGridPowerLowRead, []uint16{98, 86, 148, 332}),
+		makeReadResponse(t, internalGridPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
@@ -67,6 +69,8 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		makeReadResponse(t, runStateRead, []uint16{5, 5, 4, 3, 2, 1}),
 		makeReadResponse(t, gridFrequencyCurrentRead, syntheticSignedExternalCTWords()),
 		makeReadResponse(t, externalCTPowerHighRead, []uint16{0xFFFF, 0, 0xFFFF, 0xFFFF}),
+		makeReadResponse(t, internalGridPowerLowRead, []uint16{0xFFF6, 20, 0xFFE2, 0xFFEB}),
+		makeReadResponse(t, internalGridPowerHighRead, []uint16{0xFFFF, 0, 0xFFFF, 0xFFFF}),
 	}}
 	client, err := newClient(testModbusConfig(), dialer.DialContext)
 	if err != nil {
@@ -101,6 +105,7 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		[6]uint16{},
 		2,
 		externalCTReadings{currentsA: [3]float64{0.53, 0.63, 1.57}, powersW: [4]float64{100, 102, 120, 322}},
+		[4]float64{98, 86, 148, 332},
 	))
 	if got := dialer.connectionCount(); got != 1 {
 		t.Fatalf("first Fetch connections = %d, want 1", got)
@@ -109,11 +114,11 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 	if firstDeadline.IsZero() {
 		t.Fatal("first Fetch connection deadline is zero")
 	}
-	if got := len(dialer.connection(0).writes); got != 25 {
-		t.Fatalf("first Fetch writes = %d, want 25", got)
+	if got := len(dialer.connection(0).writes); got != 27 {
+		t.Fatalf("first Fetch writes = %d, want 27", got)
 	}
-	if got := dialer.responseCount(); got != 25 {
-		t.Fatalf("first Fetch responses consumed = %d, want 25", got)
+	if got := dialer.responseCount(); got != 27 {
+		t.Fatalf("first Fetch responses consumed = %d, want 27", got)
 	}
 
 	second, err := client.Fetch(context.Background())
@@ -139,6 +144,7 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		[6]uint16{1, 2, 3, 4, 0x8000, 0xFFFF},
 		5,
 		externalCTReadings{currentsA: [3]float64{-0.01, -327.68, 327.67}, powersW: [4]float64{-10, 20, -30, -21}},
+		[4]float64{-10, 20, -30, -21},
 	))
 	if got := dialer.connectionCount(); got != 2 {
 		t.Fatalf("total connections = %d, want 2 (one per Fetch)", got)
@@ -150,11 +156,11 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 	if secondDeadline.IsZero() || secondDeadline.Before(firstDeadline) {
 		t.Fatalf("second Fetch deadline = %s, want a non-regressing deadline relative to %s", secondDeadline, firstDeadline)
 	}
-	if got := len(dialer.connection(1).writes); got != 23 {
-		t.Fatalf("second Fetch writes = %d, want 23 (profile gates cached; generator mode uncached)", got)
+	if got := len(dialer.connection(1).writes); got != 25 {
+		t.Fatalf("second Fetch writes = %d, want 25 (profile gates cached; generator mode uncached)", got)
 	}
-	if got := dialer.responseCount(); got != 48 {
-		t.Fatalf("total responses consumed = %d, want 48", got)
+	if got := dialer.responseCount(); got != 52 {
+		t.Fatalf("total responses consumed = %d, want 52", got)
 	}
 
 	expectedReads := []readID{
@@ -163,17 +169,19 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		upsPowerRead, loadVoltageRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
 		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
 		externalCTPowerHighRead,
+		internalGridPowerLowRead, internalGridPowerHighRead,
 		generatorPortModeRead, generatorEnergyRead, generatorElectricalRead,
 		upsPowerRead, loadVoltageRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
 		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
 		externalCTPowerHighRead,
+		internalGridPowerLowRead, internalGridPowerHighRead,
 	}
 	for index, id := range expectedReads {
 		connIndex := 0
 		writeIndex := index
-		if index >= 25 {
+		if index >= 27 {
 			connIndex = 1
-			writeIndex = index - 25
+			writeIndex = index - 27
 		}
 		conn := dialer.connection(connIndex)
 		want, err := buildReadRequest(testLoggerSerial, modbusUnitID, id)
@@ -216,6 +224,8 @@ func TestClientFetchAcceptsTwentyKilowattJKSFamilyMemberEndToEnd(t *testing.T) {
 		makeReadResponse(t, runStateRead, []uint16{2, 0, 0, 0, 0, 0}),
 		makeReadResponse(t, gridFrequencyCurrentRead, liveGridFrequencyCurrentWords()),
 		makeReadResponse(t, externalCTPowerHighRead, []uint16{0, 0, 0, 0}),
+		makeReadResponse(t, internalGridPowerLowRead, []uint16{98, 86, 148, 332}),
+		makeReadResponse(t, internalGridPowerHighRead, []uint16{0, 0, 0, 0}),
 	}}
 	client, err := newClient(testModbusConfig(), dialer.DialContext)
 	if err != nil {
@@ -257,6 +267,7 @@ func TestClientFetchAcceptsTwentyKilowattJKSFamilyMemberEndToEnd(t *testing.T) {
 		upsPowerRead, loadVoltageRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
 		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
 		externalCTPowerHighRead,
+		internalGridPowerLowRead, internalGridPowerHighRead,
 	}
 	if dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 		t.Fatalf("connections/attempts = %d/%d, want 1/1", dialer.connectionCount(), dialer.attemptCount())
@@ -305,6 +316,8 @@ func TestClientFetchCapabilityMismatchStopsAndDoesNotCacheDeviceCanary(t *testin
 		makeReadResponse(t, runStateRead, []uint16{2, 0, 0, 0, 0, 0}),
 		makeReadResponse(t, gridFrequencyCurrentRead, liveGridFrequencyCurrentWords()),
 		makeReadResponse(t, externalCTPowerHighRead, []uint16{0, 0, 0, 0}),
+		makeReadResponse(t, internalGridPowerLowRead, []uint16{98, 86, 148, 332}),
+		makeReadResponse(t, internalGridPowerHighRead, []uint16{0, 0, 0, 0}),
 	}}
 	client, err := newClient(testModbusConfig(), dialer.DialContext)
 	if err != nil {
@@ -328,8 +341,8 @@ func TestClientFetchCapabilityMismatchStopsAndDoesNotCacheDeviceCanary(t *testin
 	if got := dialer.connectionCount(); got != 2 {
 		t.Fatalf("total connections = %d, want 2 (both gates rerun on the second session)", got)
 	}
-	if got := len(dialer.connection(1).writes); got != 25 {
-		t.Fatalf("second Fetch writes = %d, want 25", got)
+	if got := len(dialer.connection(1).writes); got != 27 {
+		t.Fatalf("second Fetch writes = %d, want 27", got)
 	}
 }
 
@@ -1119,8 +1132,8 @@ func assertSnapshot(t *testing.T, snapshot *model.Snapshot, want map[string]floa
 	if len(snapshot.Metrics) != len(want) {
 		t.Fatalf("metrics = %d, want %d", len(snapshot.Metrics), len(want))
 	}
-	if len(snapshot.Metrics) != 87 {
-		t.Fatalf("metrics = %d, want exact 87-key Modbus surface", len(snapshot.Metrics))
+	if len(snapshot.Metrics) != 91 {
+		t.Fatalf("metrics = %d, want exact 91-key Modbus surface", len(snapshot.Metrics))
 	}
 	wantAlertNames := map[string]string{
 		"DEYE_MODBUS_R553_WARNING_WORD_1_RAW": "Deye Inverter Warning Word 1 (Raw U16)",
@@ -1308,6 +1321,7 @@ func expectedSnapshotMetrics(
 	warningFaultWords [6]uint16,
 	runState uint16,
 	externalCT externalCTReadings,
+	internalGridPowers [4]float64,
 ) map[string]float64 {
 	result := map[string]float64{
 		"Pr1":                                 12000,
@@ -1335,6 +1349,10 @@ func expectedSnapshotMetrics(
 		"CT2_P_E":                             externalCT.powersW[1],
 		"CT3_P_E":                             externalCT.powersW[2],
 		"CT_T_E":                              externalCT.powersW[3],
+		"GS_A":                                internalGridPowers[0],
+		"GS_B":                                internalGridPowers[1],
+		"GS_C":                                internalGridPowers[2],
+		"GS_T":                                internalGridPowers[3],
 		"AV1":                                 outputVoltages[0],
 		"AV2":                                 outputVoltages[1],
 		"AV3":                                 outputVoltages[2],

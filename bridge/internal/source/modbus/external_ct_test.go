@@ -165,7 +165,11 @@ func TestClientExternalCTFailureDoesNotPublishPartialSnapshotOrRetry(t *testing.
 }
 
 func TestClientExternalCTMetricDefinitionsStayDistinctFromInternalGrid(t *testing.T) {
-	responses := append(responsesThroughExternalCTLow(t), makeReadResponse(t, externalCTPowerHighRead, []uint16{0, 0, 0, 0}))
+	responses := append(responsesThroughExternalCTLow(t),
+		makeReadResponse(t, externalCTPowerHighRead, []uint16{0, 0, 0, 0}),
+		makeReadResponse(t, internalGridPowerLowRead, []uint16{98, 86, 148, 332}),
+		makeReadResponse(t, internalGridPowerHighRead, []uint16{0, 0, 0, 0}),
+	)
 	dialer := &scriptedDialer{responses: responses}
 	client, err := newClient(testModbusConfig(), dialer.DialContext)
 	if err != nil {
@@ -191,8 +195,8 @@ func TestClientExternalCTMetricDefinitionsStayDistinctFromInternalGrid(t *testin
 		"G_C_L3":  {"Grid\u00a0Current\u00a0L3", "A", 3.45},
 		"PG_Pt1":  {"Total Grid Power", "W", 316},
 	}
-	if len(snapshot.Metrics) != 87 {
-		t.Fatalf("metric count = %d, want 87", len(snapshot.Metrics))
+	if len(snapshot.Metrics) != 91 {
+		t.Fatalf("metric count = %d, want 91", len(snapshot.Metrics))
 	}
 	for _, metric := range snapshot.Metrics {
 		definition, ok := want[metric.Key]

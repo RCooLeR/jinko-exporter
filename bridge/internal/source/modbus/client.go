@@ -312,6 +312,18 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode external-CT currents and powers: %w", err)
 	}
+	internalGridPowerLowWords, err := session.readApproved(internalGridPowerLowRead)
+	if err != nil {
+		return nil, fmt.Errorf("read internal-grid power low words: %w", err)
+	}
+	internalGridPowerHighWords, err := session.readApproved(internalGridPowerHighRead)
+	if err != nil {
+		return nil, fmt.Errorf("read internal-grid power high words: %w", err)
+	}
+	internalGridPowers, err := decodeInternalGridPowers(internalGridPowerLowWords, internalGridPowerHighWords)
+	if err != nil {
+		return nil, fmt.Errorf("decode internal-grid powers: %w", err)
+	}
 
 	metricValues := []metricValue{
 		{key: "Pr1", value: c.capabilities.ratedPowerW},
@@ -339,6 +351,10 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		{key: "CT2_P_E", value: externalCT.powersW[1]},
 		{key: "CT3_P_E", value: externalCT.powersW[2]},
 		{key: "CT_T_E", value: externalCT.powersW[3]},
+		{key: "GS_A", value: internalGridPowers[0]},
+		{key: "GS_B", value: internalGridPowers[1]},
+		{key: "GS_C", value: internalGridPowers[2]},
+		{key: "GS_T", value: internalGridPowers[3]},
 		{key: "AV1", value: output.voltages[0]},
 		{key: "AV2", value: output.voltages[1]},
 		{key: "AV3", value: output.voltages[2]},

@@ -40,6 +40,8 @@ const (
 	outputPowerHighRead
 	relayStatusRead
 	externalCTPowerHighRead
+	internalGridPowerLowRead
+	internalGridPowerHighRead
 )
 
 // approvedReadSpec is the immutable compile-time allowlist. Every range is
@@ -92,6 +94,10 @@ func approvedReadSpec(id readID) (readSpec, bool) {
 		return readSpec{name: "grid-frequency-current-block", sequence: 0x0B, start: 0x0261, quantity: 11}, true
 	case externalCTPowerHighRead:
 		return readSpec{name: "external-ct-power-high-words", sequence: 0x1A, start: 0x02C1, quantity: 4}, true
+	case internalGridPowerLowRead:
+		return readSpec{name: "internal-grid-power-low-words", sequence: 0x1B, start: 0x025C, quantity: 4}, true
+	case internalGridPowerHighRead:
+		return readSpec{name: "internal-grid-power-high-words", sequence: 0x1C, start: 0x02BC, quantity: 4}, true
 	case generatorPortModeRead:
 		return readSpec{name: "generator-port-mode", sequence: 0x16, start: 0x0085, quantity: 1}, true
 	case generatorEnergyRead:

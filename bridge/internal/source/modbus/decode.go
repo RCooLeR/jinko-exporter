@@ -14,18 +14,19 @@ const (
 	maximumTemperatureC   = 100.0
 	maximumVoltageV       = 1000.0
 
-	maximumGridPowerCoherenceW       = int64(0x7FFF)
-	maximumExternalCTPowerCoherenceW = int64(0x7FFF)
-	maximumDirectLoadPhaseCoherenceW = int64(0x7FFF)
-	maximumOutputPowerCoherenceW     = int64(0x7FFF)
-	maximumOutputPhaseVoltageV       = 500.0
-	maximumAbsoluteOutputAmps        = 100.0
-	maximumOutputFrequencyHz         = 100.0
-	maximumLoadPhaseVoltageV         = 500.0
-	maximumLoadFrequencyHz           = 100.0
-	maximumGridFrequencyHz           = 100.0
-	maximumAbsoluteGridAmps          = 100.0
-	maximumPVToRatedPowerRatio       = 2.0
+	maximumGridPowerCoherenceW         = int64(0x7FFF)
+	maximumExternalCTPowerCoherenceW   = int64(0x7FFF)
+	maximumInternalGridPowerCoherenceW = int64(0x7FFF)
+	maximumDirectLoadPhaseCoherenceW   = int64(0x7FFF)
+	maximumOutputPowerCoherenceW       = int64(0x7FFF)
+	maximumOutputPhaseVoltageV         = 500.0
+	maximumAbsoluteOutputAmps          = 100.0
+	maximumOutputFrequencyHz           = 100.0
+	maximumLoadPhaseVoltageV           = 500.0
+	maximumLoadFrequencyHz             = 100.0
+	maximumGridFrequencyHz             = 100.0
+	maximumAbsoluteGridAmps            = 100.0
+	maximumPVToRatedPowerRatio         = 2.0
 	// The supported family spans several ratings and hardware revisions. Keep
 	// the PV-current guard deliberately above their model-specific input-current
 	// limits, using the same broad 100 A telemetry envelope as the validated AC
@@ -572,6 +573,32 @@ func decodeExternalCT(gridWords, highWords []uint16) (externalCTReadings, error)
 	}
 	// The total is its own register pair; never require it to equal a sum of
 	// independently sampled phase values or replace it with a derived sum.
+	return result, nil
+}
+
+func decodeInternalGridPowers(lowWords, highWords []uint16) ([4]float64, error) {
+	if err := requireWordCount("internal-grid power low-word registers 604-607", lowWords, 4); err != nil {
+		return [4]float64{}, err
+	}
+	if err := requireWordCount("internal-grid power high-word registers 700-703", highWords, 4); err != nil {
+		return [4]float64{}, err
+	}
+	result := [4]float64{}
+	for index, high := range highWords {
+		if high != 0x0000 && high != 0xFFFF {
+			return [4]float64{}, fmt.Errorf("internal-grid power high word register %d is 0x%04X; expected signed extension 0x0000 or 0xFFFF", 700+index, high)
+		}
+		// Maps pair 604-607 with 700-703 as signed low-word-first watts.
+		// The symmetric 0x7FFF bound rejects a torn sign transition between
+		// the separate reads; it is a coherence guard, not an equipment rating.
+		raw := int32(uint32(lowWords[index]) | uint32(high)<<16)
+		if int64(raw) < -maximumInternalGridPowerCoherenceW || int64(raw) > maximumInternalGridPowerCoherenceW {
+			return [4]float64{}, fmt.Errorf("internal-grid power registers %d/%d decode to %dW; safe signed coherence range is -%d..%dW", 604+index, 700+index, raw, maximumInternalGridPowerCoherenceW, maximumInternalGridPowerCoherenceW)
+		}
+		result[index] = float64(raw)
+	}
+	// Dedicated internal-grid total is independent: neither require phase-sum
+	// equality nor replace it with selected-grid or external-CT power.
 	return result, nil
 }
 
