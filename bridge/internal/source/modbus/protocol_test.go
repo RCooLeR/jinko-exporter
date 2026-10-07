@@ -25,10 +25,10 @@ func TestBuildReadRequestGoldenFrames(t *testing.T) {
 			wantSHA256: "3455245dcace59ac9ce4ab27e09faddf8533155c3fc83e4066fda1d3b159ea0d",
 		},
 		{
-			name:       "UPS load power",
-			id:         upsPowerRead,
-			wantHex:    "a517001045020078563412020000000000000000000000000000010302830001745adc15",
-			wantSHA256: "879b44a8bc8ba80a2d725f851bf781b7033844eb4ccaf264938233083a607aa7",
+			name:       "UPS load power high words",
+			id:         upsPowerHighRead,
+			wantHex:    "a5170010451e0078563412020000000000000000000000000000010302b80004c594bb15",
+			wantSHA256: "6a5376704c16066e83e452690eb70562ba9c711672c50fc27a96266c749d0dc4",
 		},
 		{
 			name:       "load phase voltages block",
@@ -222,7 +222,7 @@ func TestBuildReadRequestRejectsAnythingOutsideAllowlist(t *testing.T) {
 }
 
 func TestValidateReadRequestRejectsFC06AndChangedRangeWithValidChecksums(t *testing.T) {
-	base, err := buildReadRequest(testLoggerSerial, modbusUnitID, upsPowerRead)
+	base, err := buildReadRequest(testLoggerSerial, modbusUnitID, upsPowerHighRead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestValidateReadRequestRejectsFC06AndChangedRangeWithValidChecksums(t *test
 			rtu[len(rtu)-2] = byte(crc)
 			rtu[len(rtu)-1] = byte(crc >> 8)
 			refreshOuterChecksum(frame)
-			if err := validateReadRequest(frame, testLoggerSerial, modbusUnitID, upsPowerRead); err == nil {
+			if err := validateReadRequest(frame, testLoggerSerial, modbusUnitID, upsPowerHighRead); err == nil {
 				t.Fatal("validateReadRequest() accepted mutated request")
 			}
 		})
@@ -322,6 +322,31 @@ func TestParseIndependentSanitizedPromotedResponseFixtures(t *testing.T) {
 			name: "load phase voltage block", id: loadVoltageRead,
 			frameHex: "a521001015105778563412020100000000000000000000000001030e00000001ffff123408fd08fe08ff2674c715",
 			want:     []uint16{0x0000, 0x0001, 0xFFFF, 0x1234, 2301, 2302, 2303},
+		},
+		{
+			// Synthetic combined production-size frame: only the first four
+			// words come from the 2026-10-07 UPS probe, which requested 640x4.
+			// Voltages came from an earlier read. Identity/metadata are synthetic.
+			name: "UPS low words combined with earlier voltage sample", id: loadVoltageRead,
+			frameHex:   "a521001015100078563412020100000000000000000000000001030e002200480127019109550969093a1ef1c515",
+			want:       []uint16{34, 72, 295, 401, 2389, 2409, 2362},
+			wantSHA256: "e88208f577d2249f58776421a65c0460f509d6d8735abe9e403575788cdefeb1",
+		},
+		{
+			// Preserve the observed 696-699 zero words, with synthetic identity
+			// and zeroed logger-owned metadata; this is not full U32 evidence.
+			name: "UPS observed high words", id: upsPowerHighRead,
+			frameHex:   "a51b0010151e00785634120201000000000000000000000000010308000000000000000095d7ed15",
+			want:       []uint16{0, 0, 0, 0},
+			wantSHA256: "ee181f48b09ddfe9993fd6030cfb1fd6520577997b12213509b3f9e0b53eb209",
+		},
+		{
+			// Synthetic parser-only oracle. The UPS decoder rejects every
+			// nonzero high word, rather than interpreting 0xFFFF as a sign.
+			name: "UPS synthetic unsupported high words", id: upsPowerHighRead,
+			frameHex:   "a51b0010151e0078563412020100000000000000000000000001030800018000ffff00021b324f15",
+			want:       []uint16{1, 0x8000, 0xFFFF, 2},
+			wantSHA256: "0decfd760c0de240f05214c43e4f01a655d594065849b80c55497639eed4e93b",
 		},
 		{
 			// The payload preserves the reviewed live low words. Logger identity
@@ -500,6 +525,7 @@ func TestParseIndependentSanitizedPromotedExceptionFixtures(t *testing.T) {
 		{id: outputScalarRead, frameHex: "a5130010150e57785634120201000000000000000000000000018302c0f1eb15"},
 		{id: outputPowerHighRead, frameHex: "a5130010150f57785634120201000000000000000000000000018302c0f1ec15"},
 		{id: loadVoltageRead, frameHex: "a5130010151057785634120201000000000000000000000000018302c0f1ed15"},
+		{id: upsPowerHighRead, frameHex: "a5130010151e00785634120201000000000000000000000000018302c0f1a415", wantSHA256: "b0f46d4e7523f0b76fe55d1a58b07305f71cadb1f88c72f9abb86ef4643a342b"},
 		{id: directLoadPowerLowRead, frameHex: "a5130010151200785634120201000000000000000000000000018302c0f19815", wantSHA256: "9014c5904584b0439103e3f04910a934d7dd33d0e313b569c60ab6de1f72840c"},
 		{id: loadFrequencyRead, frameHex: "a5130010151357785634120201000000000000000000000000018302c0f1f015"},
 		{id: pvInputRead, frameHex: "a5130010150757785634120201000000000000000000000000018302c0f1e415"},
@@ -563,20 +589,20 @@ func TestParseReadResponseRejectsMutations(t *testing.T) {
 }
 
 func TestParseReadResponseRejectsModbusException(t *testing.T) {
-	frame := makeExceptionResponse(t, upsPowerRead, 0x02)
-	_, err := parseReadResponse(frame, testLoggerSerial, modbusUnitID, upsPowerRead)
+	frame := makeExceptionResponse(t, upsPowerHighRead, 0x02)
+	_, err := parseReadResponse(frame, testLoggerSerial, modbusUnitID, upsPowerHighRead)
 	if err == nil || !strings.Contains(err.Error(), "modbus exception 0x02") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestModbusCRCVector(t *testing.T) {
-	raw, err := hex.DecodeString("010302830001")
+	raw, err := hex.DecodeString("010302b80004")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := modbusCRC(raw); got != 0x5A74 {
-		t.Fatalf("CRC = 0x%04X, want 0x5A74", got)
+	if got := modbusCRC(raw); got != 0x94C5 {
+		t.Fatalf("CRC = 0x%04X, want 0x94C5", got)
 	}
 }
 

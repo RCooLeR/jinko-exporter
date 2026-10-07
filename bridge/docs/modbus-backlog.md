@@ -48,7 +48,7 @@ device type `0x0006`, two MPPTs, three phases, and one of the allowlisted
 Each fetch uses one fresh connection and fixed FC03 reads under one absolute
 deadline. It has no write or arbitrary-register path.
 
-The current 91-metric core comprises 80 shared canonical metrics and eleven
+The current 94-metric core comprises 83 shared canonical metrics and eleven
 Modbus-local fields: the register-500 run state, the register-551 power
 switch state, six raw warning/fault words, and three external-CT currents.
 The bounded CT and internal-power promotions record their evidence limits in
@@ -100,19 +100,30 @@ verified negative output, preserve all four low/high pairs, and compare
 evidence may confirm the current `-32767..32767 W` domain; it must not
 automatically widen that coherence envelope.
 
-### MB-003 TODO: Full UPS/Backup-Load Power
+### MB-003 TODO: Wider UPS/Backup-Load Power Domain
 
-**Status:** blocked on a discriminating load sample and complete pair evidence.
+**Status:** phase/total publication is implemented in Stage 28; nonzero high
+words remain unsupported.
 
-Production currently reads register 643 separately and emits only its unsigned
-U16 value as canonical `UPS_P`. Within the `640 x 7` block, registers 640-643
-are not decoded as phase/total power; only voltage registers 644-646 are used.
-Compatible-map candidates pair low words 640-643 with high words 696-699, but
-the sign convention, phase order, relationship between register 643 and the
-joined total, and relationship to cloud `C_P_L1..3`/`UPS_P` must all be proven.
-Validation needs a nontrivial, preferably unbalanced backup-load sample plus
-zero and boundary tests. Until then, the separate U16 `UPS_P` is the entire
-supported UPS-power contract.
+Two compatible maps define unsigned low-first pairs 640/696, 641/697,
+642/698, and 643/699 at `1 W/count`. A complete supervised capture measured
+`34/72/295 W`, total `401 W`, with all four high words zero. The nearby
+identity-matched Solarman sample measured `34/71/292 W`, total `397 W`;
+the exact four-minute-32-second offset is recorded in Stage 28.
+
+Production reuses the existing `640 x 7` block and immediately reads
+`696 x 4`, replacing the redundant `643 x 1` scalar request. It emits distinct
+canonical `C_P_L1..3` and preserves the existing `UPS_P` identity. Every high
+word must remain zero; each low word retains its unsigned `0..65535 W`
+domain, including the previous total's full range. Total is its own measured
+pair, not a phase sum or an alias for `E_Puse_t1`.
+
+This is a bounded subset of the documented U32 format, not validation of
+nonzero high words or an atomic acquisition guarantee. Any nonzero high word
+rejects the complete Modbus snapshot for configured fallback. Wider-domain
+support requires independent nonzero-high correlation and an appropriate
+low/high acquisition-coherence strategy; do not increase load or change
+inverter settings merely to manufacture such a sample.
 
 ### MB-004 TODO: Lifetime PV Production (`Et_ge0`)
 

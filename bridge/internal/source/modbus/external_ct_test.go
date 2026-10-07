@@ -195,8 +195,8 @@ func TestClientExternalCTMetricDefinitionsStayDistinctFromInternalGrid(t *testin
 		"G_C_L3":  {"Grid\u00a0Current\u00a0L3", "A", 3.45},
 		"PG_Pt1":  {"Total Grid Power", "W", 316},
 	}
-	if len(snapshot.Metrics) != 91 {
-		t.Fatalf("metric count = %d, want 91", len(snapshot.Metrics))
+	if len(snapshot.Metrics) != 94 {
+		t.Fatalf("metric count = %d, want 94", len(snapshot.Metrics))
 	}
 	for _, metric := range snapshot.Metrics {
 		definition, ok := want[metric.Key]

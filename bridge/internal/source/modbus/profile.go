@@ -16,7 +16,7 @@ type readID byte
 
 const (
 	deviceTypeRead readID = iota + 1
-	upsPowerRead
+	upsPowerHighRead
 	gridVoltageRead
 	capabilityRead
 	batteryTemperatureRead
@@ -52,8 +52,8 @@ func approvedReadSpec(id readID) (readSpec, bool) {
 	switch id {
 	case deviceTypeRead:
 		return readSpec{name: "device-type", sequence: 0x01, start: 0x0000, quantity: 1}, true
-	case upsPowerRead:
-		return readSpec{name: "ups-load-power", sequence: 0x02, start: 0x0283, quantity: 1}, true
+	case upsPowerHighRead:
+		return readSpec{name: "ups-load-power-high-words", sequence: 0x1E, start: 0x02B8, quantity: 4}, true
 	case gridVoltageRead:
 		return readSpec{name: "grid-phase-voltages", sequence: 0x03, start: 0x0256, quantity: 3}, true
 	case capabilityRead:

@@ -148,10 +148,10 @@ func TestDecodeBatteryTelemetryScalesAndSignedValues(t *testing.T) {
 	}
 }
 
-func TestDecodeUPSPowerAcceptsFullU16Boundary(t *testing.T) {
-	got, err := decodeUPSPower([]uint16{0xFFFF})
-	if err != nil || got != 65535 {
-		t.Fatalf("decodeUPSPower(0xFFFF) = %v/%v, want 65535/nil", got, err)
+func TestDecodeUPSPowersAcceptsFullUnsignedLowWordBoundary(t *testing.T) {
+	got, err := decodeUPSPowers(boundaryUPSLoadWords(), []uint16{0, 0, 0, 0})
+	if err != nil || got != ([4]float64{65535, 32768, 32767, 65535}) {
+		t.Fatalf("decodeUPSPowers() = %v/%v, want full unsigned U16 boundaries", got, err)
 	}
 }
 

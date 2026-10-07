@@ -162,11 +162,27 @@ func isSupportedJKSFamilyRatedPowerRaw(raw uint32) bool {
 	}
 }
 
-func decodeUPSPower(values []uint16) (float64, error) {
-	if err := requireWordCount("UPS load power register 643", values, 1); err != nil {
-		return 0, err
+func decodeUPSPowers(loadWords, highWords []uint16) ([4]float64, error) {
+	if err := requireWordCount("UPS power/voltage registers 640-646", loadWords, 7); err != nil {
+		return [4]float64{}, err
 	}
-	return float64(values[0]), nil
+	if err := requireWordCount("UPS power high-word registers 696-699", highWords, 4); err != nil {
+		return [4]float64{}, err
+	}
+	result := [4]float64{}
+	for index, high := range highWords {
+		// Both maps describe unsigned low-word-first U32 watts. Only the
+		// observed zero-high subset is promoted: preserve the entire U16 low
+		// domain, including 0x8000/0xFFFF, and fail closed on any nonzero high.
+		// This is a support boundary, not a rating or atomic coherence claim.
+		if high != 0 {
+			return [4]float64{}, fmt.Errorf("UPS power high word register %d is 0x%04X; only the verified zero-high-word unsigned domain is accepted", 696+index, high)
+		}
+		result[index] = float64(uint32(loadWords[index]) | uint32(high)<<16)
+	}
+	// The dedicated UPS total is not a sum gate or an alias of direct-load
+	// power. Return the register pair unchanged even when the phase sum differs.
+	return result, nil
 }
 
 func decodeLoadVoltages(values []uint16) ([3]float64, error) {
@@ -176,7 +192,8 @@ func decodeLoadVoltages(values []uint16) ([3]float64, error) {
 
 	result := [3]float64{}
 	for index := range result {
-		// Registers 640-643 are intentionally ignored incomplete power words.
+		// Registers 640-643 are consumed separately by decodeUPSPowers together
+		// with high words 696-699; they do not affect this voltage decoder.
 		result[index] = float64(values[index+4]) / 10
 		if result[index] > maximumLoadPhaseVoltageV {
 			return [3]float64{}, fmt.Errorf("load voltage L%d %.1fV exceeds %.1fV validation maximum", index+1, result[index], maximumLoadPhaseVoltageV)

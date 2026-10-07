@@ -140,15 +140,6 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode generator voltage and power: %w", err)
 	}
 
-	upsWords, err := session.readApproved(upsPowerRead)
-	if err != nil {
-		return nil, fmt.Errorf("read UPS load power: %w", err)
-	}
-	upsPower, err := decodeUPSPower(upsWords)
-	if err != nil {
-		return nil, fmt.Errorf("decode UPS load power: %w", err)
-	}
-
 	loadVoltageWords, err := session.readApproved(loadVoltageRead)
 	if err != nil {
 		return nil, fmt.Errorf("read load phase voltages: %w", err)
@@ -156,6 +147,14 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	loadVoltages, err := decodeLoadVoltages(loadVoltageWords)
 	if err != nil {
 		return nil, fmt.Errorf("decode load phase voltages: %w", err)
+	}
+	upsPowerHighWords, err := session.readApproved(upsPowerHighRead)
+	if err != nil {
+		return nil, fmt.Errorf("read UPS load power high words: %w", err)
+	}
+	upsPowers, err := decodeUPSPowers(loadVoltageWords, upsPowerHighWords)
+	if err != nil {
+		return nil, fmt.Errorf("decode UPS load powers: %w", err)
 	}
 
 	directLoadPowerLowWords, err := session.readApproved(directLoadPowerLowRead)
@@ -327,7 +326,10 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 
 	metricValues := []metricValue{
 		{key: "Pr1", value: c.capabilities.ratedPowerW},
-		{key: "UPS_P", value: upsPower},
+		{key: "UPS_P", value: upsPowers[3]},
+		{key: "C_P_L1", value: upsPowers[0]},
+		{key: "C_P_L2", value: upsPowers[1]},
+		{key: "C_P_L3", value: upsPowers[2]},
 		{key: "C_V_L1", value: loadVoltages[0]},
 		{key: "C_V_L2", value: loadVoltages[1]},
 		{key: "C_V_L3", value: loadVoltages[2]},

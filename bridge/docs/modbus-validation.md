@@ -51,7 +51,7 @@ required before any of them can be promoted.
 | --- | --- | --- |
 | `0x0000 x 1` | Live verified, production canary | Device type must be `0x0006`. |
 | `0x0256 x 3` | Live verified, production | Grid L1/L2/L3 voltage. |
-| `0x0283 x 1` (`643`) | Live verified, production narrow scalar | A separate one-register read emits `UPS_P` as unsigned U16 watts. It is not treated as a low word in production; full phase/total pairing remains backlog work. |
+| `0x0283 x 1` (`643`) | Historical verified scalar; retired in Stage 28 | The redundant scalar request is no longer allowlisted. `UPS_P` keeps its identity and unsigned range, now using 643 from `640 x 7` paired with 699. |
 | `0x01F4 x 6` (`500-505`) | Live verified; register 500 production, registers 501-505 excluded | Run state is promoted source-locally; the energy/time meanings remain rejected after failing cloud correlation. |
 | `0x024B x 2` (`587-588`) | Live verified, production | Battery-1 voltage and SOC; the validated SOC is exposed as both canonical `B_left_cap1` and `BMS_SOC`. |
 | `0x024A x 1` (`586`) | Live verified, production | Battery-1 temperature; one decoded value supplies canonical `B_T1` and `BMST`. |
@@ -72,7 +72,8 @@ required before any of them can be promoted.
 | `0x02AF x 4` (`687-690`) | Live verified, conservative signed production with `622-625` | Selected grid phase/total power high words; signed import/export is confirmed and only canonical sign extension is accepted. |
 | `0x0273 x 12` (`627-638`) | Scalars live verified; active power conservative signed production with `691-694` | Output voltage/current/frequency and gated active-power low words are promoted; apparent candidate 637 remains ignored. |
 | `0x02B3 x 5` (`691-695`) | Positive pairing live correlated; `R691=0xFFFF` later observed; conservative signed production | Active highs 691-694 must be `0x0000` or `0xFFFF` and pair with 633-636 inside the signed coherence envelope; apparent candidate 695 remains ignored. |
-| `0x0280 x 7` (`640-646`) | Load-voltage scalars live/cloud verified, production; power fields excluded | Only load-side L1/L2/L3 voltage at 644-646 is promoted. |
+| `0x0280 x 7` (`640-646`) | Load-voltage scalars verified; UPS phase/total power promoted in Stage 28 | 644-646 emit load voltage; 640-643 pair with 696-699 as unsigned UPS power, only with zero high words. |
+| `0x02B8 x 4` (`696-699`) | Complete zero-high target capture and nearby cloud correlation, Stage 28 | UPS high words immediately follow `640 x 7`. All must be zero; each phase and independent total accepts `0..65535 W`. Nonzero highs remain MB-003. |
 | `0x028A x 4` (`650-653`) | Positive live/cloud correlation; `R656=0xFFFF` later observed; conservative signed phases with `656-658` | Low phase words emit canonical signed `LPP_A/B/C` inside the `±32767 W` coherence domain; dedicated total low word emits independent non-negative `E_Puse_t1`. |
 | `0x028F x 5` (`655-659`) | Load frequency and direct-load high-word pairing production | Register 655 emits frequency; phase highs 656-658 must be canonical `0000/FFFF`, while total high 659 must remain zero. |
 
@@ -552,7 +553,9 @@ selected scalars were compared with fresh cloud/display values.
   `C_V_L3` at `0.1 V/count`. Registers 640-643 are ignored by this block's
   voltage decoder. Register 643 is also read independently by the existing
   `643 x 1` request and emitted as the narrow unsigned-U16 `UPS_P`; possible
-  full phase/total pairing with high words 696-699 remains unimplemented.
+  full phase/total pairing with high words 696-699 was not implemented at
+  this stage. Stage 28 supersedes that boundary with distinct UPS phase/total
+  publication in the bounded zero-high unsigned domain.
 - The `655 x 5` read emits only register 655 as `L_F` at `0.01 Hz/count`.
   At this Stage 10 checkpoint, registers 656-659 were retained but not yet
   paired with their direct-load power low words.
@@ -1288,3 +1291,80 @@ The first fetch sends **27** fixed requests, subsequent fetches **25**, still
 one connection and one absolute deadline each. Golden protocol, signed-boundary,
 independent-total, exact read-order/count, terminal-failure and downstream
 publication tests cover the new group.
+
+## Stage 28: 2026-10-07 UPS/Backup Phase and Total Power
+
+The next requested group was UPS/backup load. Both compatible maps agree on
+read-only low words 640-643 and high words 696-699, ordered A/B/C/total at
+`1 W/count`. Unlike the signed CT and internal-grid pairs, both maps mark
+these UPS halves **U16**. The documented joined format is unsigned low-first
+U32; production deliberately accepts only the zero-high subset below.
+
+References, visually inspected at the relevant complete pages:
+
+- [Three-phase LV/HV V104-2, printed pages 34 and 37](https://hybrydaplus.pl/wp-content/uploads/2024/09/MODBUS.RTU_3PLV_HV_Protocol_V104-2.pdf)
+- [SG01-HP3-AM2 HV V104.3.1, printed pages 35 and 37-38](https://forum.iobroker.net/assets/uploads/files/1706097675773-modbusrtu%E4%B8%89%E7%9B%B8%E9%AB%98%E5%8E%8B%E5%82%A8%E8%83%BD%E9%80%9A%E4%BF%A1%E8%A7%84%E7%BA%A6v104-%E9%AB%98%E5%8E%8B-3-1-1111_sg01-hp3-am2.pdf)
+
+With the normal bridge still owner-stopped, an offline-tested and independently
+reviewed probe sent exactly unit-1 FC03 `640 x 4`, sequence `1D`, followed by
+`696 x 4`, sequence `1E`, on one connection with one absolute six-second
+deadline. Both complete 40-byte responses passed all V5 and nested Modbus
+framing, identity, sequence, status, checksum, count, and CRC checks. No retry,
+reconnect, scan, acknowledgement, settings write, or service restart occurred.
+
+Capture interval: `2026-10-07T18:17:21.2050275Z` to
+`2026-10-07T18:17:21.5108766Z`. Complete identity-bearing frames remain private;
+the redacted telemetry words are:
+
+```text
+640=0022 641=0048 642=0127 643=0191
+696=0000 697=0000 698=0000 699=0000
+```
+
+| Canonical key | Local UPS power (W) | Solarman UPS power (W) |
+| --- | ---: | ---: |
+| `C_P_L1` | 34 | 34 |
+| `C_P_L2` | 72 | 71 |
+| `C_P_L3` | 295 | 292 |
+| `UPS_P` | 401 | 397 |
+
+The reference was fetched separately using exactly one Solarman token request
+and one `currentData` request, with verified TLS and no retry, redirect,
+discovery, Jinko authentication, token-state write, or logger connection.
+The request interval was `18:17:03.4316761Z` to `18:17:03.9625381Z`; its
+upstream collection time was **18:12:49Z**, four minutes and 32 seconds before
+the hardware read. The response echoed the matching device identity and all
+power fields explicitly used W. This is nearby, non-synchronous correlation,
+not an atomic cloud/local measurement. The owner had reported a practically
+stable load; the phase differences here are `0/1/3 W`, total `4 W`.
+
+The same cloud sample contained distinct direct-load `LPP_A/B/C` values
+`35/84/298 W` and `E_Puse_t1=417 W`. Those keys are not substitutes for UPS
+phases/total. Neither matching totals in this capture nor nearby cloud values
+establish a universal phase-sum equality rule.
+
+Production reuses 640-643 from the existing sequence-`10` `640 x 7` block;
+644-646 continue to provide the unchanged phase voltages. The immediately
+following sequence-`1E` `696 x 4` read replaces the old sequence-`02`
+`643 x 1` request, which is removed from the closed allowlist. Each UPS pair
+requires high word `0000` and retains the entire unsigned low-word
+`0..65535 W` range. There is no signed cast, absolute-value conversion,
+phase-sum equality gate, derived total, or alias to another power surface.
+Any nonzero high word or invalid response rejects the complete snapshot.
+
+This accepts only a bounded subset of the documented U32 format. Nonzero
+high-word behavior, rollover coherence, and atomic low/high acquisition are
+**not** claimed as live-validated. The retained `65535 W` software boundary is
+not an inverter/pass-through rating. Wider-domain work remains MB-003.
+Registers 647-649 remain excluded (the maps mark those currents unused).
+No new BMS, apparent/reactive power, PF, energy, or status interpretation is
+implied by this UPS stage.
+
+The core now contains **94 metrics: 83 canonical and 11 source-local**.
+Only `consumption/C_P_L1`, `C_P_L2`, and `C_P_L3` are new; `ups/UPS_P` keeps
+its existing identity. The request count remains **27 first / 25 subsequent**,
+with one connection and one absolute deadline per fetch. Offline regressions
+cover the exact replacement frame, order/counts, zero and unsigned boundaries,
+nonzero-high rejection, independent totals, terminal failures with no partial
+snapshot, stable HA/Prometheus identity, missing-value behavior, and fallback
+timestamps. Synthetic boundary vectors are tests, not additional live captures.

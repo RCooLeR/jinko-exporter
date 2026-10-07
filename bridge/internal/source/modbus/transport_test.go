@@ -146,7 +146,7 @@ func TestFetchReadPlansAreExactAndUseUniqueSequences(t *testing.T) {
 	wantFirst := []readID{
 		deviceTypeRead, capabilityRead,
 		generatorPortModeRead, generatorEnergyRead, generatorElectricalRead,
-		upsPowerRead, loadVoltageRead, directLoadPowerLowRead, loadFrequencyRead,
+		loadVoltageRead, upsPowerHighRead, directLoadPowerLowRead, loadFrequencyRead,
 		gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead,
 		pvInputRead, inverterTemperatureRead, batteryTemperatureRead,
 		batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead,
@@ -182,7 +182,7 @@ func TestFetchReadPlansAreExactAndUseUniqueSequences(t *testing.T) {
 func TestReadSessionWrongSecondResponsePoisonsAndStopsStream(t *testing.T) {
 	responses := [][]byte{
 		makeReadResponse(t, deviceTypeRead, []uint16{expectedDeviceType}),
-		makeReadResponse(t, upsPowerRead, []uint16{1}), // Wrong sequence for capabilityRead.
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}), // Wrong sequence for capabilityRead.
 	}
 	responseIndex := 0
 	conn := &memoryConn{responseForWrite: func() []byte {
@@ -207,7 +207,7 @@ func TestReadSessionWrongSecondResponsePoisonsAndStopsStream(t *testing.T) {
 	if _, err := session.readApproved(capabilityRead); err == nil || !strings.Contains(err.Error(), "sequence") {
 		t.Fatalf("second read error = %v", err)
 	}
-	if _, err := session.readApproved(upsPowerRead); err == nil || !strings.Contains(err.Error(), "poisoned") {
+	if _, err := session.readApproved(upsPowerHighRead); err == nil || !strings.Contains(err.Error(), "poisoned") {
 		t.Fatalf("third read error = %v", err)
 	}
 	if len(conn.writes) != 2 || conn.closeCount != 1 {
