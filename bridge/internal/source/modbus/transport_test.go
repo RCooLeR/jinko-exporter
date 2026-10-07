@@ -150,12 +150,12 @@ func TestFetchReadPlansAreExactAndUseUniqueSequences(t *testing.T) {
 		gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead,
 		pvInputRead, inverterTemperatureRead, batteryTemperatureRead,
 		batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead,
-		runStateRead, gridFrequencyCurrentRead,
+		runStateRead, gridFrequencyCurrentRead, externalCTPowerHighRead,
 	}
 	first := fetchReadPlan(true)
 	steady := fetchReadPlan(false)
-	if len(first) != 24 || len(steady) != 22 {
-		t.Fatalf("plan lengths = %d/%d, want 24/22", len(first), len(steady))
+	if len(first) != 25 || len(steady) != 23 {
+		t.Fatalf("plan lengths = %d/%d, want 25/23", len(first), len(steady))
 	}
 	for index, id := range wantFirst {
 		if first[index] != id {

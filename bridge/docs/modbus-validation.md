@@ -32,6 +32,12 @@ can be inferred.
 There is no raw-register option and no sequential scan of undocumented,
 reserved, configuration, or control addresses.
 
+Stage 26 records a separate, owner-accepted bounded CT promotion: two-map signed
+semantics, a successful complete positive capture, and nearby but non-synchronous
+cloud values support publication. Exact negative-flow and independent CT-current
+live correlation remain explicit acceptance-evidence debt, not completed gates.
+This exception does not extend to other fields or a wider CT power domain.
+
 This ledger records completed or explicitly bounded production evidence. See
 the [Modbus validation backlog](./modbus-backlog.md) for open acceptance reads,
 hardware-dependent domains, intentionally excluded candidates, and the gates
@@ -57,7 +63,8 @@ required before any of them can be promoted.
 | `0x0218 x 4` (`536-539`) | Live zero verified, production zero-domain only | Emits generator daily runtime, daily energy, and total energy only as raw-backed zeros; any nonzero word rejects Modbus. |
 | `0x0295 x 11` (`661-671`) | Live zero verified, production zero-domain only | Emits generator phase voltage/power and total-power canonical keys only as raw-backed zeros; any nonzero word rejects Modbus. |
 | `0x024E x 2` (`590-591`) | Live verified, production | Battery power and Battery-1 current. |
-| `0x0261 x 11` (`609-619`) | Live/cloud verified; frequency and internal currents production, registers 613-619 excluded | `PG_F1` and `G_C_L1..3` are promoted; external CT currents and incomplete power low words remain ignored. |
+| `0x0261 x 11` (`609-619`) | Frequency/internal currents live verified; external CT bounded promotion, Stage 26 | `PG_F1`, `G_C_L1..3`, separate external currents 613-615, and CT active-power low words 616-619 paired with 705-708. |
+| `0x02C1 x 4` (`705-708`) | Positive raw capture verified; signed map-backed production, Stage 26 | External CT power high words; canonical sign extension and conservative `-32767..32767 W` per-value coherence envelope, independent total. Exact export/current correlation remains MB-006. |
 | `0x026E x 4` (`622-625`) | Live verified, conservative signed production with `687-690` | Selected grid phase/total power low words; paired values must remain inside the `-32767..32767 W` torn-read coherence envelope. |
 | `0x02AF x 4` (`687-690`) | Live verified, conservative signed production with `622-625` | Selected grid phase/total power high words; signed import/export is confirmed and only canonical sign extension is accepted. |
 | `0x0273 x 12` (`627-638`) | Scalars live verified; active power conservative signed production with `691-694` | Output voltage/current/frequency and gated active-power low words are promoted; apparent candidate 637 remains ignored. |
@@ -1149,3 +1156,73 @@ was current and then fell back successfully to Jinko; the following Modbus poll
 succeeded. Because the deadline covers connection setup and every preceding
 request, that log cannot attribute the delay specifically to either register.
 It changes neither the allowlist nor the no-retry/no-partial-snapshot policy.
+
+## Stage 26: 2026-10-07 External CT Current and Signed Power
+
+The owner confirmed the native CTs are connected directly to the inverter and
+stopped the normal bridge before the supervised read. A separate, offline-tested
+probe sent exactly unit-1 FC03 `613 x 7`, then `705 x 4`, on one connection under
+one six-second absolute deadline. Both responses passed V5 framing, sequence,
+identity, status, checksum, byte-count and Modbus CRC checks. No retry, reconnect,
+scan, control request, container restart, or inverter-setting change occurred.
+
+The capture ran from `2026-10-07T17:10:30.486342Z` to
+`2026-10-07T17:10:30.7214029Z`. Identity-bearing full frames remain private;
+the complete telemetry words are retained here without logger identity:
+
+```text
+613=0039 614=003E 615=0064
+616=0065 617=0062 618=00AC 619=0173
+705=0000 706=0000 707=0000 708=0000
+```
+
+Two compatible protocol maps mark these addresses read-only and agree on
+external currents as signed 16-bit `0.01 A/count`, and external active power as
+signed 32-bit `1 W/count`, with low words 616-619 paired respectively with
+high words 705-708. Thus the capture decodes to currents `0.57/0.62/1.00 A`
+and powers `101/98/172 W`, with independent total `371 W`.
+
+The owner-supplied browser detail export had collection time
+`2026-10-07T17:00:26Z` and matching inverter/logger identities. Its external CT
+powers were `103/99/170 W`, total `372 W`; selected grid powers matched those
+CT values, while internal powers were `99/86/164 W`, total `349 W`. This is
+useful positive-flow corroboration, **not a synchronous bracket**: the cloud
+sample is ten minutes and four seconds older. It contains no separately named
+CT-current points; generic `G_C_L1..3` must not be used as independent proof of
+613-615. Display ordering fields in that export are not register addresses.
+
+The owner explicitly confirmed that negative CT power is valid and requested
+publication without waiting for an export sample. Production therefore accepts
+the documented signed contract with a conservative acquisition bound. This is
+an explicit acceptance-evidence exception: all live high words here were zero,
+and neither a negative raw CT pair nor independent CT-current calibration was
+observed. Those checks remain MB-006. Synthetic negative vectors prove code
+behavior, not an additional live observation.
+
+Production reuses 613-619 from the existing `609 x 11` response and appends only
+the fixed sequence-`0x1A` `705 x 4` request immediately afterward. Each high word
+must be `0000` or `FFFF`; the joined signed value must be within
+`-32767..32767 W`. This symmetric coherence envelope rejects mismatched halves
+across a zero crossing, not legitimate negative power; it is not an inverter
+rating or CT capacity. Wider values reject the whole snapshot and invoke the
+configured fallback. CT total is read independently: the observed phase sum
+does not establish a universal equality rule. No absolute-value conversion,
+zero replacement, voltage alias, or calculated total is introduced.
+
+The four powers retain canonical keys `CT1_P_E`, `CT2_P_E`, `CT3_P_E`, and
+`CT_T_E`. Currents retain the documented S16 wire range at `0.01 A/count`, with
+source-local keys `JINKO_MODBUS_R613_EXTERNAL_CT_L1_CURRENT`,
+`JINKO_MODBUS_R614_EXTERNAL_CT_L2_CURRENT`, and
+`JINKO_MODBUS_R615_EXTERNAL_CT_L3_CURRENT`, group `grid`, unit `A`.
+The internal-current keys `G_C_L1..3` and all existing entities remain unchanged.
+
+The core now contains **87 metrics: 76 canonical and 11 source-local**. The
+first fetch sends **25** fixed FC03 requests; subsequent fetches send **23**,
+with one connection and one absolute deadline each. Offline tests lock exact
+new frames, order/counts, signed boundaries, zero-crossing tears, independent
+total, no partial snapshot, and downstream signed publication/fallback behavior.
+
+References:
+
+- [Three-phase LV/HV V104-2, printed pages 33 and 37-38](https://hybrydaplus.pl/wp-content/uploads/2024/09/MODBUS.RTU_3PLV_HV_Protocol_V104-2.pdf)
+- [SG01-HP3-AM2 HV V104.3.1, printed pages 33 and 38](https://forum.iobroker.net/assets/uploads/files/1706097675773-modbusrtu%E4%B8%89%E7%9B%B8%E9%AB%98%E5%8E%8B%E5%82%A8%E8%83%BD%E9%80%9A%E4%BF%A1%E8%A7%84%E7%BA%A6v104-%E9%AB%98%E5%8E%8B-3-1-1111_sg01-hp3-am2.pdf)

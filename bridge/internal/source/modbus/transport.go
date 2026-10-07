@@ -113,7 +113,7 @@ func openReadSession(
 }
 
 func fetchReadPlan(includeProfileGates bool) []readID {
-	plan := make([]readID, 0, 24)
+	plan := make([]readID, 0, 25)
 	if includeProfileGates {
 		plan = append(plan, deviceTypeRead, capabilityRead)
 	}
@@ -140,6 +140,7 @@ func fetchReadPlan(includeProfileGates bool) []readID {
 		warningFaultRead,
 		runStateRead,
 		gridFrequencyCurrentRead,
+		externalCTPowerHighRead,
 	)
 }
 

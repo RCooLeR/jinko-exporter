@@ -304,6 +304,14 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode grid frequency and currents: %w", err)
 	}
+	externalCTPowerHighWords, err := session.readApproved(externalCTPowerHighRead)
+	if err != nil {
+		return nil, fmt.Errorf("read external-CT power high words: %w", err)
+	}
+	externalCT, err := decodeExternalCT(gridFrequencyCurrentWords, externalCTPowerHighWords)
+	if err != nil {
+		return nil, fmt.Errorf("decode external-CT currents and powers: %w", err)
+	}
 
 	metricValues := []metricValue{
 		{key: "Pr1", value: c.capabilities.ratedPowerW},
@@ -327,6 +335,10 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		{key: "G_P_L2", value: gridPowers[1]},
 		{key: "G_P_L3", value: gridPowers[2]},
 		{key: "PG_Pt1", value: gridPowers[3]},
+		{key: "CT1_P_E", value: externalCT.powersW[0]},
+		{key: "CT2_P_E", value: externalCT.powersW[1]},
+		{key: "CT3_P_E", value: externalCT.powersW[2]},
+		{key: "CT_T_E", value: externalCT.powersW[3]},
 		{key: "AV1", value: output.voltages[0]},
 		{key: "AV2", value: output.voltages[1]},
 		{key: "AV3", value: output.voltages[2]},
@@ -359,13 +371,22 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	metricValues = append(metricValues, energyMetrics...)
 	metricValues = append(metricValues, generatorEnergyMetrics...)
 	metricValues = append(metricValues, generatorElectricalMetrics...)
-	metrics := make([]model.Metric, 0, len(metricValues)+len(warningFaultValues)+2)
+	metrics := make([]model.Metric, 0, len(metricValues)+len(warningFaultValues)+len(externalCT.currentsA)+2)
 	for _, item := range metricValues {
 		metric, err := canonicalMetric(item.key, item.value)
 		if err != nil {
 			return nil, err
 		}
 		metrics = append(metrics, metric)
+	}
+	for index, value := range externalCT.currentsA {
+		metrics = append(metrics, model.Metric{
+			Group: "grid",
+			Key:   fmt.Sprintf("JINKO_MODBUS_R%d_EXTERNAL_CT_L%d_CURRENT", 613+index, index+1),
+			Name:  fmt.Sprintf("External CT Current L%d", index+1),
+			Unit:  "A",
+			Value: value,
+		})
 	}
 	metrics = append(metrics, modbusWarningFaultMetrics(warningFaultValues)...)
 	metrics = append(metrics, model.Metric{

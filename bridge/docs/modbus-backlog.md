@@ -48,9 +48,12 @@ device type `0x0006`, two MPPTs, three phases, and one of the allowlisted
 Each fetch uses one fresh connection and fixed FC03 reads under one absolute
 deadline. It has no write or arbitrary-register path.
 
-The current 80-metric core comprises 72 shared canonical metrics and eight
-Modbus-local diagnostics: the register-500 run state, the register-551 power
-switch state, and six raw warning/fault words. When Modbus establishes the
+The current 87-metric core comprises 76 shared canonical metrics and eleven
+Modbus-local fields: the register-500 run state, the register-551 power
+switch state, six raw warning/fault words, and three external-CT currents.
+The bounded CT promotion is an explicitly accepted evidence exception recorded
+in validation Stage 26; its outstanding live checks remain MB-006 below.
+When Modbus establishes the
 primary failover surface, ordinary cloud-only fields are intentionally omitted
 after fallback rather than invented or emitted with competing labels. Shelly
 `grid_load` enrichment is independent of this Modbus core.
@@ -62,7 +65,8 @@ out-of-contract states so priority fallback can run. MB-001 is an explicit
 acceptance-evidence debt rather than an unbounded decoder: its current
 map/schema-backed status handling is narrow, read-only, and fail-closed. Any
 implementation that claims one of the open domains is blocked until that item's
-validation gates are complete.
+validation gates are complete, except for the explicitly recorded Stage-26 CT
+acceptance. This exception does not admit wider CT power values or other groups.
 
 ## Open Work
 
@@ -131,21 +135,49 @@ not derive it from rounded active/apparent values or reuse a load-side power
 factor. Keep load apparent power and inverter output apparent power separate;
 canonical load apparent total `E_Suse_t1` needs its own proven source.
 
-### MB-006 TODO: External CT Current and Power
+### MB-006 TODO: Remaining External CT Acceptance Evidence
 
-**Status:** blocked on an installed/configured external CT and directional flow.
+**Status:** bounded publication implemented; exact export/current correlation
+and wider-power acquisition remain open, not a claim of full live validation.
 
-Compatible maps identify current candidates at registers 613-615 and active
-power low words at 616-619 with high words at 705-708. Validate the CT mode,
-phase ordering, current scale, signed import/export convention, low-first
-pairing, total semantics, and behavior during both flow directions. Only then
-map proven fields to `CT1_P_E`, `CT2_P_E`, `CT3_P_E`, and `CT_T_E`. The
-internal grid-current metrics at registers 610-612 are a different measurement
-surface and must not be relabelled as external CT.
+The owner confirmed the native CTs are installed, supplied an import cloud
+sample, and explicitly accepted signed CT publication on 2026-10-07. Stage 26
+records the successful two-request raw capture and its ten-minute cloud offset.
+Two compatible maps define currents 613-615 as `S16 * 0.01 A` and powers
+616-619/705-708 as low-first signed 32-bit watts. Production preserves that sign
+inside the conservative `-32767..32767 W` per-value coherence envelope, with no
+phase-sum equality requirement. The power keys are `CT1_P_E`, `CT2_P_E`,
+`CT3_P_E`, and `CT_T_E`; currents use distinct Modbus-local keys. Internal
+currents 610-612 still supply `G_C_L1..3` and are never relabelled as CT.
+
+Retain a naturally occurring export capture with contemporaneous cloud/display
+CT values, plus an independently labelled CT-current comparison. User
+confirmation and synthetic signed test vectors do not replace these live
+checks. Do not infer a universal phase-sum invariant from the positive sample.
+The current wire-domain range is not a CT capacity rating. Power above the
+coherence envelope needs a separately reviewed coherent acquisition strategy
+and target evidence; do not widen a constant or cap it by inverter rated power.
 
 ### MB-007 TODO: Internal and Reactive Power Surfaces
 
-**Status:** mapping and discriminating live conditions missing.
+**Status:** internal active-power read plan prepared; target capture/correlation
+pending. Reactive-power mapping and discriminating conditions remain missing.
+
+The next narrow candidate is internal active power only: FC03 `604 x 4` for
+the low words and `700 x 4` for the high words, one connection and one request
+per block. V104-2 printed pages 32/37 and the SG01-HP3-AM2 HV map printed pages
+33/38 agree on read-only signed low-first `1 W/count` pairs 604/700 through
+607/703. High words start at **700**, not 701; reserved apparent-power
+candidates 608/704 are excluded. The isolated offline-by-default probe has
+exact frame/CRC/checksum/order and failure-path tests. This preparation does
+not add either block to production or claim a target read.
+
+The owner's 2026-10-07 `17:00:26Z` browser export distinguishes internal
+`99/86/164 W`, total `349 W`, from external CT `103/99/170 W`, total `372 W`.
+Obtain a fresh timestamped export/display bracket before the supervised read;
+an older reference cannot establish a precise match. Preserve the independently
+measured total and validate direction/coherence rather than copying an alias
+or assuming a phase-sum rule. Follow the normal validation gates before promotion.
 
 Cloud keys `GS_A`, `GS_B`, `GS_C`, and `GS_T` represent internal power, not the
 already supported grid phase/total powers. Reactive keys `G16`, `A_RP_PG`,

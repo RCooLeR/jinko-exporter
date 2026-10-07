@@ -15,6 +15,7 @@ const (
 	maximumVoltageV       = 1000.0
 
 	maximumGridPowerCoherenceW       = int64(0x7FFF)
+	maximumExternalCTPowerCoherenceW = int64(0x7FFF)
 	maximumDirectLoadPhaseCoherenceW = int64(0x7FFF)
 	maximumOutputPowerCoherenceW     = int64(0x7FFF)
 	maximumOutputPhaseVoltageV       = 500.0
@@ -52,6 +53,11 @@ type outputScalars struct {
 type gridFrequencyCurrents struct {
 	frequencyHz float64
 	currents    [3]float64
+}
+
+type externalCTReadings struct {
+	currentsA [3]float64
+	powersW   [4]float64
 }
 
 type directLoadPowers struct {
@@ -532,9 +538,40 @@ func decodeGridFrequencyCurrents(values []uint16) (gridFrequencyCurrents, error)
 		}
 	}
 
-	// Registers 613-619 are intentionally ignored. They contain external-CT
-	// currents and incomplete low-word-only power values, so they cannot affect
-	// either this decoder or the emitted canonical metrics.
+	// The independent external-CT decoder consumes registers 613-619 together
+	// with power high words 705-708. They must not alias internal currents here.
+	return result, nil
+}
+
+func decodeExternalCT(gridWords, highWords []uint16) (externalCTReadings, error) {
+	if err := requireWordCount("grid/external-CT registers 609-619", gridWords, 11); err != nil {
+		return externalCTReadings{}, err
+	}
+	if err := requireWordCount("external-CT power high-word registers 705-708", highWords, 4); err != nil {
+		return externalCTReadings{}, err
+	}
+
+	result := externalCTReadings{}
+	for index := range result.currentsA {
+		// CT current is a separate documented S16, 0.01 A field. It does not
+		// inherit the internal-current decoder's model-specific envelope.
+		result.currentsA[index] = float64(int16(gridWords[index+4])) / 100
+	}
+	for index, high := range highWords {
+		if high != 0x0000 && high != 0xFFFF {
+			return externalCTReadings{}, fmt.Errorf("external-CT power high word register %d is 0x%04X; expected signed extension 0x0000 or 0xFFFF", 705+index, high)
+		}
+		// The maps specify signed low-word-first 32-bit power. These two
+		// blocks are read separately, so a symmetric 0x7FFF coherence guard
+		// rejects a torn sign transition; it is not an inverter/CT rating.
+		raw := int32(uint32(gridWords[index+7]) | uint32(high)<<16)
+		if int64(raw) < -maximumExternalCTPowerCoherenceW || int64(raw) > maximumExternalCTPowerCoherenceW {
+			return externalCTReadings{}, fmt.Errorf("external-CT power registers %d/%d decode to %dW; safe signed coherence range is -%d..%dW", 616+index, 705+index, raw, maximumExternalCTPowerCoherenceW, maximumExternalCTPowerCoherenceW)
+		}
+		result.powersW[index] = float64(raw)
+	}
+	// The total is its own register pair; never require it to equal a sum of
+	// independently sampled phase values or replace it with a derived sum.
 	return result, nil
 }
 

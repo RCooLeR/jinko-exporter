@@ -127,6 +127,12 @@ func TestBuildReadRequestGoldenFrames(t *testing.T) {
 			wantSHA256: "ed8576fde66ebf7c7a4828372005e0538b456dd46a80b11b70e3b21264483879",
 		},
 		{
+			name:       "external-CT power high words",
+			id:         externalCTPowerHighRead,
+			wantHex:    "a5170010451a0078563412020000000000000000000000000000010302c10004144dc815",
+			wantSHA256: "dd46ae1ef1ed03f155d76e74e907f8077e046bdab6e890a981466207d5d258ea",
+		},
+		{
 			name:       "grid power low words",
 			id:         gridPowerLowRead,
 			wantHex:    "a5170010450c00785634120200000000000000000000000000000103026e0004246c9615",
@@ -338,6 +344,21 @@ func TestParseIndependentSanitizedPromotedResponseFixtures(t *testing.T) {
 			want:     []uint16{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF},
 		},
 		{
+			// These observed high-word payload zeros use the production sequence;
+			// serial and logger-owned metadata are synthetic. Negative CT values
+			// below are an explicit synthetic wire-format oracle, not a live capture.
+			name: "external-CT observed high words", id: externalCTPowerHighRead,
+			frameHex:   "a51b0010151a00785634120201000000000000000000000000010308000000000000000095d7e915",
+			want:       []uint16{0, 0, 0, 0},
+			wantSHA256: "357d856ad5adf81e83b4f24626a01dc95bb5eea113065cd57627f88156301c7c",
+		},
+		{
+			name: "external-CT synthetic signed high words", id: externalCTPowerHighRead,
+			frameHex:   "a51b0010151a00785634120201000000000000000000000000010308ffff0000ffffffffd4489315",
+			want:       []uint16{0xFFFF, 0, 0xFFFF, 0xFFFF},
+			wantSHA256: "0f6bb5d881ad20e48982ac550a862a5c2a297678250f63e420df59382b4f690f",
+		},
+		{
 			name: "output scalar block", id: outputScalarRead,
 			frameHex: "a52b0010150e5778563412020100000000000000000000000001031809550969093a017c017c01cc036f037304440b260b261383844bb915",
 			want: []uint16{
@@ -454,6 +475,7 @@ func TestParseIndependentSanitizedPromotedExceptionFixtures(t *testing.T) {
 		{id: warningFaultRead, frameHex: "a5130010151457785634120201000000000000000000000000018302c0f1f115"},
 		{id: runStateRead, frameHex: "a5130010150457785634120201000000000000000000000000018302c0f1e115"},
 		{id: gridFrequencyCurrentRead, frameHex: "a5130010150b00785634120201000000000000000000000000018302c0f19115"},
+		{id: externalCTPowerHighRead, frameHex: "a5130010151a00785634120201000000000000000000000000018302c0f1a015"},
 	}
 	for _, tt := range tests {
 		frame, err := hex.DecodeString(tt.frameHex)
