@@ -129,6 +129,12 @@ inverter settings merely to manufacture such a sample.
 
 **Status:** mapping not established.
 
+The 2026-10-07 follow-up found candidate low/high words 534/535 at
+`0.1 kWh/count` in both inspected maps (printed page 30). The low-word row
+explicitly says **reserved**. A counter name is not evidence that this firmware
+implements it: neither word was queried or promoted. Fresh cloud
+`Et_ge0=21610.50 kWh` does not resolve that reservation.
+
 Locate a lifetime-PV counter whose read-only address, width, word order, and
 scale agree across two compatible maps. Verify it against cloud `Et_ge0` over
 multiple observations, including monotonic behavior and the distinction from
@@ -138,6 +144,17 @@ counter merely because its value is numerically close to the cloud total.
 ### MB-005 TODO: Output Apparent Power and Power Factor
 
 **Status:** blocked on a materially non-unity-power-factor sample.
+
+The follow-up distinguishes three surfaces. External-grid apparent-power
+candidate 620/709 is documented at `1 VA/count`; it is not load apparent power
+or inverter output apparent power. Register 621 is labelled grid-connected PF
+with scale 1000, but the HV map's access cell contains both `R` and `R/W`:
+whether this is measured PF or a configuration/setpoint value is unresolved.
+It is excluded from the prepared evidence read, and is not an alias for `P_F1`.
+Load apparent candidates 654/660 and internal apparent candidates 608/704 are
+marked reserved/undefined and remain excluded. Maps label output pair 637/695
+as apparent power but use W, whereas canonical `O_P` uses kVA; retain this unit
+ambiguity until independently resolved.
 
 Registers 637/695 are compatible-map candidates for joined output apparent
 power and are deliberately ignored today. Prove their word order, scale, and
@@ -176,6 +193,24 @@ and target evidence; do not widen a constant or cap it by inverter rated power.
 correlation; exact negative-flow capture remains acceptance-evidence debt.
 Reactive-power mapping and discriminating conditions remain missing.
 
+A newer V105.1 map alone lists phase-reactive entries at 710-715, with low/high
+labels explicit only for phase A (710/711). Pairing 712/713 and 714/715 follows
+the table layout but remains an inference. Access/sign/unit columns are blank;
+the two compatible maps do not supply a matching contract. No read or
+publication is approved from that table alone. There is also no established
+direct register for `G16`, and
+no documented inverter-phase reactive mapping. Do not invent a total or reuse
+active/apparent registers.
+
+The owner's `18:43:51Z` cloud sample reports inverter reactive powers
+`6666/1813/9782 Var` alongside phase voltages `236.9/231.9/240.6 V` and currents
+`-0.2/-0.2/0.6 A`. Their magnitudes are inconsistent with those voltage/current
+readings, even allowing rounding. This is a reference-data anomaly, not valid
+calibration evidence; matching those cloud numbers would not establish a
+correct decoder.
+
+Reference: [V105.1, printed page 40](https://github.com/user-attachments/files/16798469/MODBUS.RTU.V105.1-20231006.pdf).
+
 Stage 27 records the supervised fixed FC03 `604 x 4`, then `700 x 4` read.
 V104-2 printed pages 32/37 and the SG01-HP3-AM2 HV map printed pages 33/38 agree
 on read-only signed low-first `1 W/count` pairs 604/700 through 607/703. High
@@ -202,6 +237,30 @@ distinguish aliases.
 
 **Status:** partially blocked on BMS protocol evidence; battery 2 requires
 matching hardware.
+
+The 2026-10-07 audit identified inverter-side BMS mirrors 210-218 and prepared
+a fixed raw-only `210 x 9` diagnostic. These are explicitly **R/W** registers;
+the proposed exception permits only FC03 reads, never a write or a production
+promotion by itself. Both maps agree on their meanings, but the HV map specifies
+`0.1 V` for 210/211/215 and `0.1 A` for 216, versus `0.01 V` and `1 A` in the
+LV tables. The third inspected map repeats the LV scales. Current signedness
+is unspecified in the mirror rows. SOC 214 is percent, temperature 217 is
+`(raw-1000)/10 C`, and limits 212/213/218 use A.
+
+The fresh cloud sample has BMS voltage `598.3 V`, current `-0.1 A`, temperature
+`23 C`, SOC `100%`, charge voltage `648 V`, and discharge current limit `22 A`.
+These are comparison candidates, not a local register capture. In particular,
+a future raw `FFFF` current alone must be distinguished from an unsupported
+sentinel before claiming a full signed-current contract.
+
+Register 219 has an unspecified unit; 224-226 omit detailed access/format
+information. Register 227 conflicts critically: battery hardware version in
+the LV table, LCD-upgrade test in the HV table. The separate 10000+ read-only
+bank describes battery device type `0x0700`, not this inverter's `0x0006`;
+its accessibility through this inverter is unproven. Extended pack layouts and
+battery2 mirrors also conflict. None of these ranges was queried. Lithium
+alarm/fault words 220/221 need their own raw-word contract and must not be
+equated with inverter warning/fault words.
 
 The safe aliases today are `BMS_SOC` from the already validated SOC register
 588 and `BMST` from the already validated temperature register 586. Do not
@@ -328,6 +387,16 @@ perform any automatic control action.
 ### MB-017 TODO: Remaining Status and Metadata Keys
 
 **Status:** intentionally excluded unless an exact contract is found.
+
+Both compatible maps (printed pages 4-5) agree on read-only protocol-version
+word 2, assistant/bootloader bytes in word 11, firmware words 14-18, and battery
+input code 24. A fixed raw-only diagnostic for `2 x 1`, `11 x 1`, `14 x 5`,
+`24 x 1` is prepared and offline-tested, but has no live capture yet. It skips
+conflicting words 12/13 and unrelated adjacent configuration. Firmware must be
+represented as lossless text metadata, not decimal float values such as `104`
+for cloud version `0104`. A source string or metadata field is not automatically
+a canonical numeric sensor. Publication through MQTT/HA and any bounded
+Prometheus info surface needs explicit tests before implementation.
 
 Do not synthesize cloud `ST_PG1` or `INV_MOD1` from register 500, register 551,
 or the device-type gate: their code systems and meanings differ. Firmware and

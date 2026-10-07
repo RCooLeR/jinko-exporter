@@ -1368,3 +1368,65 @@ cover the exact replacement frame, order/counts, zero and unsigned boundaries,
 nonzero-high rejection, independent totals, terminal failures with no partial
 snapshot, stable HA/Prometheus identity, missing-value behavior, and fallback
 timestamps. Synthetic boundary vectors are tests, not additional live captures.
+
+## Stage 29: 2026-10-07 Remaining-Surface Audit (No Promotion)
+
+The owner requested continuation across all remaining missing register groups.
+The BMS, energy/DC-bus, firmware/status, apparent-power/PF and reactive-power
+tables were audited in parallel, with complete relevant PDF pages visually
+checked. Findings are recorded under MB-004/005/007/008/015/017 in the
+[backlog](./modbus-backlog.md). Hardware-dependent nonzero, export, additional
+battery/MPPT, generator/AUX, fault-bit and wider-coherence items remain explicit
+exclusions; no operating conditions or settings were changed to manufacture
+evidence.
+
+The owner's current detail export is collected at `2026-10-07T18:43:51Z`.
+Its category fields use `storageName` as the canonical key; display `key`
+and `serialNumber` are not register addresses. Only selected telemetry was
+inspected; Stage 29 did not modify, stage or commit the user-owned export or
+fixture, including the fixture's pre-existing working-tree changes.
+
+The two Stage-26 protocol maps agree on the BMS mirror meanings but not the
+LV/HV scales. Their firmware tables agree on a small exact read set, while
+their lifetime-PV rows are reserved and their DC-bus candidates conflict.
+The HV PF row additionally mixes `R` and `R/W` access labels; it cannot be
+assumed to be a measured power factor. These findings prevent blindly copying
+cloud values or widening contiguous register ranges. The newer map's incomplete
+reactive table is not a replacement for target evidence.
+
+Prepared private, Git-ignored diagnostics retain the previous one-shot safety
+contract: immutable FC03 requests, offline golden/mutation/failure tests,
+exact ordered send budgets, one connection with one six-second deadline, and
+no retry, reconnect, scan, acknowledgement or write function. The BMS plan is
+only `210 x 9`; the metadata plan is `2 x 1`, `11 x 1`, `14 x 5`, `24 x 1`.
+The output/relay evidence plan is exactly `551 x 2`, `627 x 12`, `691 x 5`,
+`620 x 1`, `709 x 1`: it reuses existing approved ranges and separately reads
+documented external-grid apparent candidates, excluding ambiguous PF word 621.
+Synthetic response vectors are deliberately labelled synthetic, not captures.
+All three helpers passed offline tests and vet checks and received independent
+review; only the first two were attempted in no-argument dry mode below.
+
+The bounded Solarman reference helper was also extended with an explicit
+numeric allowlist for these comparisons. Field-specific units, missing values,
+signed values, source identity and collection age remain checked. Offline
+tests and independent review passed; the extended helper was not invoked live
+during Stage 29.
+There is still no Jinko token refresh or token-state mutation.
+
+Live validation is **blocked by startup of these new diagnostic executables**,
+not by a confirmed Modbus exception: no-argument runs stalled before their
+first plan output with zero CPU usage. Their offline Go tests and vet checks
+passed, but this does not establish that the live programs can execute.
+Only the exact owned dry-run process trees were stopped; no live-mode flag
+was supplied and no inverter request was sent. Relevant Windows event checks
+did not identify a matching Defender event, so antivirus involvement is only
+a hypothesis, not a diagnosed cause. No security setting was changed and no
+alternate execution mechanism was used to bypass the startup issue.
+
+The public bridge endpoint still returned HTTP 502, consistent with the
+owner-stopped bridge, but that HTTP result alone is not proof of process state.
+No container was started, rebuilt or deployed. No new register group is
+promoted by this stage: the production contract remains **94 core metrics,
+27 first / 25 subsequent fixed reads**. Resume from the prepared, reviewed
+one-shots only after executable startup works and the stopped-bridge condition
+and fresh reference are rechecked. Do not label the remaining backlog complete.
