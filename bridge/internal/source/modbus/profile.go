@@ -46,6 +46,7 @@ const (
 	controllerVersionsRead
 	firmwareWordsRead
 	batteryInputCodeRead
+	bmsMirrorsRead
 )
 
 // approvedReadSpec is the immutable compile-time allowlist. Every range is
@@ -54,8 +55,8 @@ const (
 // contract. There is deliberately no generic register entry point.
 func approvedReadSpec(id readID) (readSpec, bool) {
 	switch id {
-	// Experimental raw metadata: reachable only through the default-off
-	// metadata plan. No numeric interpretation or cloud version alias is made.
+	// Raw metadata validated on the 12 kW target in Stage 31. The explicit
+	// metadata option can disable these cached reads; there are no cloud aliases.
 	case protocolVersionRead:
 		return readSpec{name: "protocol-version-raw", sequence: 0x1F, start: 2, quantity: 1}, true
 	case controllerVersionsRead:
@@ -78,6 +79,10 @@ func approvedReadSpec(id readID) (readSpec, bool) {
 		return readSpec{name: "battery-voltage-soc", sequence: 0x05, start: 0x024B, quantity: 2}, true
 	case batteryFlowRead:
 		return readSpec{name: "battery-power-current", sequence: 0x0A, start: 0x024E, quantity: 2}, true
+	case bmsMirrorsRead:
+		// Explicit FC03-only exception for the map's R/W BMS mirror bank.
+		// Only the nonzero-correlated subset is decoded; no writes are possible.
+		return readSpec{name: "bms-telemetry-mirrors", sequence: 0x23, start: 210, quantity: 9}, true
 	case energyRead:
 		return readSpec{name: "energy-counters", sequence: 0x08, start: 0x0202, quantity: 16}, true
 	case gridPowerLowRead:

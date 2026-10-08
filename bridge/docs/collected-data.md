@@ -101,11 +101,9 @@ Home Assistant Discovery can persist the corresponding schema independently with
 
 ### Optional Raw Modbus Metadata
 
-`MODBUS_METADATA_ENABLED` is **false by default**. The implementation has
-offline tests, but no successful target capture yet; it must not be enabled
-merely because the container is rebuilt. With an explicitly validated opt-in,
-four fixed FC03 reads add these six `Snapshot.Meta` strings, not numeric
-measurements:
+`MODBUS_METADATA_ENABLED` is **true by default** after the complete target
+capture in Stage 31. Set false to omit these four cached FC03 reads. They add
+six `Snapshot.Meta` strings, not numeric measurements:
 
 | Metadata key | Source | Exact format |
 | --- | --- | --- |
@@ -119,7 +117,8 @@ measurements:
 The source never converts a version such as `0104` into decimal `104` or `260`,
 nor manufactures a cloud `MAIN`/`HMI` value. A successful acquisition is cached
 for the client lifetime and copied into each fresh snapshot. Core numeric
-metric count remains 94; Shelly enrichment remains independent.
+metric count is unaffected by these strings; the separately validated BMS
+subset brings it to 97. Shelly enrichment remains independent.
 
 MQTT preserves these exact strings, with stable diagnostic entity IDs.
 Missing metadata on source fallback is absent/unknown, not zero or retained
@@ -135,6 +134,34 @@ malformed values and missing fields are omitted. This info family is suppressed
 when inverter poll health is down, including when an independent Shelly poll
 succeeds. The numeric telemetry family's existing retention behavior is
 unchanged.
+
+### Lossless Jinko Cloud Metadata
+
+The Jinko parser also preserves eight explicit string storage keys as separate
+cloud metadata. It does not derive or alias the raw Modbus metadata above.
+
+| Jinko storage key | Snapshot metadata key |
+| --- | --- |
+| `PTCv1` | `cloud_protocol_version` |
+| `MAIN` | `cloud_main_firmware` |
+| `HMI` | `cloud_hmi_firmware` |
+| `CBAMSV` | `cloud_assistant_version` |
+| `CBAVM` | `cloud_bootloader_version` |
+| `L_B_H_V_N` | `cloud_battery_hardware_version` |
+| `L_B_H_V_N2` | `cloud_battery2_hardware_version` |
+| `BAT_FAC` | `cloud_battery_manufacturer` |
+
+Nonempty `orgValue` takes precedence over `value`; accepted strings remain
+byte-for-byte unchanged, including leading zeros and `FFFF`. No sentinel or
+manufacturer meaning is inferred. Blank/control-containing/over-128-byte text
+is omitted. Conflicting or invalid duplicate occurrences suppress that key for
+the snapshot. Non-string JSON is not coerced. Existing numeric version metrics
+are retained for compatibility; use the text metadata for the exact version.
+
+These fields appear in normalized fetch output and MQTT diagnostic discovery
+when the discovery ownership policy permits them (for example, Jinko primary).
+Persisted Modbus-primary discovery still excludes cloud-only fallback metadata.
+The Prometheus raw-Modbus info allowlist intentionally does not export them.
 
 ### Shelly `grid_load` Enrichment
 
@@ -186,7 +213,7 @@ they are current, not inverter `solar_up` or `solar_data_age_seconds`.
 
 ### Local Modbus
 
-The target-locked local profile is intentionally smaller than the cloud sources. It exposes only documented, reviewed read-only values through fixed FC03 requests and field-specific validation. Evidence differs by range: most production fields have target-live validation, while repeated complete target fetches prove transport and narrow decoder acceptance for registers 551-552 without yet retaining their exact raw words or a simultaneous relay-state bracket. The exact evidence status and accepted domain for every range are recorded in the [Modbus validation ledger](./modbus-validation.md); hardware- and condition-dependent gaps are tracked in the [Modbus validation backlog](./modbus-backlog.md). Register numbers below are zero-based **decimal** addresses; hexadecimal equivalents are included to make the wire ranges unambiguous.
+The target-locked local profile is intentionally smaller than the cloud sources. It uses only fixed FC03 read operations and field-specific validation of reviewed values. The BMS mirror bank R210-218 is marked R/W in the maps; the explicit Stage-31 exception permits its one fixed read, never any write. Evidence differs by range: most production fields have target-live validation, while repeated complete target fetches prove transport and narrow decoder acceptance for registers 551-552 without yet retaining their exact raw words or a simultaneous relay-state bracket. The exact evidence status and accepted domain for every range are recorded in the [Modbus validation ledger](./modbus-validation.md); hardware- and condition-dependent gaps are tracked in the [Modbus validation backlog](./modbus-backlog.md). Register numbers below are zero-based **decimal** addresses; hexadecimal equivalents are included to make the wire ranges unambiguous.
 
 | Decimal register read | Hex register read | Metric key(s) | Conversion |
 | --- | --- | --- |
@@ -197,8 +224,9 @@ The target-locked local profile is intentionally smaller than the cloud sources.
 | `540-541` | `0x021C-0x021D` | `T_DC`, `AC_T` | each documented read-only U16 uses `(raw - 1000) × 0.1 °C`; raw values above 3000 or decoded values outside `-100..100 °C` reject the whole snapshot |
 | `551-552` | `0x0227-0x0228` | `DEYE_MODBUS_R551_POWER_SWITCH_STATE`, `AC` | register 551 emits only its documented low-nibble power-switch code (`0` off, `1` on) as a source-local group-`status` metric; codes 2-15 reject the snapshot and undefined upper bits are ignored. Register 552 is emitted unchanged as the canonical group-`status` raw U16 AC relay mask; all bits are preserved, including undefined or firmware-specific bits |
 | `553-558` | `0x0229-0x022E` | `DEYE_MODBUS_R553_WARNING_WORD_1_RAW`, `DEYE_MODBUS_R554_WARNING_WORD_2_RAW`, `DEYE_MODBUS_R555_FAULT_WORD_1_RAW`, `DEYE_MODBUS_R556_FAULT_WORD_2_RAW`, `DEYE_MODBUS_R557_FAULT_WORD_3_RAW`, `DEYE_MODBUS_R558_FAULT_WORD_4_RAW` | six independent unsigned raw 16-bit words at scale 1, group `alert`, empty unit; no bit decoding or composite mask |
-| `586` | `0x024A` | `B_T1`, `BMST` | `(unsigned raw - 1000) × 0.1 °C`, with documented and plausible-range validation; the one decoded value is exposed through both canonical cloud keys |
-| `587-588` | `0x024B-0x024C` | `B_V1`, `B_left_cap1`, `BMS_SOC` | voltage `raw × 0.1 V`; SOC `raw × 1%` and must be at most 100; the one validated register-588 SOC value is exposed through both canonical cloud keys |
+| `210-218` | `0x00D2-0x00DA` | `BMS_C_V`, `BMS_D_C_L`, `BMS_SOC`, `BMS_B_V1`, `BMST` | One FC03 read of the R/W BMS-mirror bank, never a write. R210/R215 are HV `raw × 0.1 V`; R213 is nonnegative whole amps; R214 is percent; R217 is `(raw - 1000) × 0.1 °C`. R211/212/216/218 are read but not interpreted or published. |
+| `586` | `0x024A` | `B_T1` | `(unsigned raw - 1000) × 0.1 °C`, with documented and plausible-range validation; distinct from BMS temperature R217 |
+| `587-588` | `0x024B-0x024C` | `B_V1`, `B_left_cap1` | voltage `raw × 0.1 V`; SOC `raw × 1%` and must be at most 100; distinct from BMS voltage/SOC R215/R214 |
 | `590-591` | `0x024E-0x024F` | `B_P1`, `B_C1` | signed 16-bit power `× 10 W` and signed 16-bit current `× 0.01 A` |
 | `598-600` | `0x0256-0x0258` | `G_V_L1`, `G_V_L2`, `G_V_L3` | unsigned register value multiplied by `0.1 V` |
 | `604-607` and `700-703` | `0x025C-0x025F` and `0x02BC-0x02BF` | `GS_A`, `GS_B`, `GS_C`, `GS_T` | distinct internal active power, signed low-first 32-bit W; canonical `0000/FFFF` highs, conservative `-32767..32767 W` per-value coherence envelope, independent measured total; positive target correlation and outstanding negative-flow evidence recorded in Stage 27 |
@@ -224,7 +252,7 @@ only a later complete Modbus snapshot containing six zeros resolves it.
 
 Before telemetry, the client performs two profile gates together and caches them only after both succeed: decimal register `0` (`0x0000`) must contain device type `0x0006`, and decimal registers `20-22` (`0x0014-0x0016`) must decode to one official JKS-6/8/10/12/15/20H-EI rating (`6000`, `8000`, `10000`, `12000`, `15000`, or `20000 W`), exactly `2 MPPT`, `3 phases`, and raw register 22 `0x0203`. The 12 kW target is the only member with live-confirmed raw gate values; the other accepted ratings come from the official line specification and have not been individually live-correlated. The unvalidated 25 kW two-MPPT sibling is outside `jks-6-20h-ei-readonly-v1`; the structurally separate 29.9/30 kW BM3 three-MPPT variants also fail closed. Rated power is emitted as canonical `Pr1` in every snapshot and all three capabilities are retained in snapshot metadata. Registers `20-22` are read-only inherent properties; the unrelated R/W clock registers at decimal `62-64` are excluded. The device-type code is metadata, not Jinko `INV_MOD1`, because those fields use different code systems.
 
-Every fetch opens one fresh short-lived TCP connection and runs all required fixed blocks sequentially under one shared absolute deadline. The first fetch sends exactly twenty-seven allowlisted FC03 requests on that connection: two cached profile gates followed by twenty-five every-fetch reads. Once both gates have succeeded and are cached, each later fetch opens a new connection and sends exactly twenty-five requests. The first three every-fetch reads are the uncached generator zero-domain gate and its two telemetry blocks; the remaining twenty-two follow the fixed allowlisted order described here. Every request is sent once in the fixed allowlisted order. The first transport, protocol, profile, decode, or range error aborts the fetch, closes the connection, and returns no snapshot; there is no retry or reconnect within that fetch. The source has no arbitrary-register or Modbus-write API and never fills missing cloud metrics with guessed values. Output active low words in the existing `627 x 12` block are paired with the immediately following `691 x 5` high-word read. Only the four active pairs are emitted and only inside the conservative signed coherence envelope; apparent candidate 637/695 remains excluded. The existing `672 x 8` PV response emits `DP1`, `DP2`, `DV1`, `DC1`, `DV2`, `DC2`, and aggregate `S_P_T`; no additional PV request was added, and `DP3`/`DP4` remain excluded behind the mandatory zero gate at registers 674-675. Promoting the six PV-channel metrics first grew the locked core snapshot from 52 to 58 metrics; the three direct-load phases and second canonical view of the already decoded SOC then brought the surface to 62. The eleven raw-backed generator zeros brought it to 73, and `INV_O_P_L1..3` plus `INV_O_P_T` brought it to 77. Canonical `BMST` reuses the validated register-586 temperature, while the new `551 x 2` status read adds source-local `DEYE_MODBUS_R551_POWER_SWITCH_STATE` and canonical `AC`, bringing the previous surface to 80 metrics. The three distinct CT currents and four canonical CT powers brought it to 87 metrics (76 canonical and 11 source-local), using only one additional `705 x 4` read after the existing `609 x 11` block. The subsequent `604 x 4` and `700 x 4` reads add four canonical internal-power measurements, bringing the surface to 91 metrics (80 canonical and 11 source-local). Stage 28 reuses the `640 x 7` block and replaces the redundant `643 x 1` request with `696 x 4`, sequence `0x1E`: three dedicated UPS phase measurements bring the current core to 94 metrics (83 canonical and 11 source-local), without changing the 27/25 first/steady request counts or the existing `UPS_P` identity. Register 529 above is a separate documented daily energy counter. `MODBUS_DEVICE_SN` becomes `device_sn`; it is required in a mixed priority chain and must equal the inverter serial exposed by the cloud sources so Prometheus does not create a parallel identity series. The required logger serial remains separate as `parent_sn`.
+Every fetch opens one fresh short-lived TCP connection and runs all required fixed blocks sequentially under one shared absolute deadline. The default first fetch sends exactly 32 allowlisted FC03 requests: two cached profile gates, four cached raw-metadata reads and 26 every-fetch reads. With metadata disabled, the first count is 28. After profile/metadata acquisition is cached, later fetches send 26 requests. The first three every-fetch reads are the uncached generator zero-domain gate and its two telemetry blocks; the remaining twenty-three follow the fixed allowlisted order described here. Every request is sent once in the fixed allowlisted order. The first transport, protocol, profile, decode, or range error aborts the fetch, closes the connection, and returns no snapshot; there is no retry or reconnect within that fetch. The source has no arbitrary-register or Modbus-write API and never fills missing cloud metrics with guessed values. Output active low words in the existing `627 x 12` block are paired with the immediately following `691 x 5` high-word read. Only the four active pairs are emitted and only inside the conservative signed coherence envelope; apparent candidate 637/695 remains excluded. The existing `672 x 8` PV response emits `DP1`, `DP2`, `DV1`, `DC1`, `DV2`, `DC2`, and aggregate `S_P_T`; no additional PV request was added, and `DP3`/`DP4` remain excluded behind the mandatory zero gate at registers 674-675. Promoting the six PV-channel metrics first grew the locked core snapshot from 52 to 58 metrics; the three direct-load phases and second canonical view of the already decoded SOC then brought the surface to 62. The eleven raw-backed generator zeros brought it to 73, and `INV_O_P_L1..3` plus `INV_O_P_T` brought it to 77. Historically, canonical `BMST` reused the validated register-586 temperature, while the new `551 x 2` status read adds source-local `DEYE_MODBUS_R551_POWER_SWITCH_STATE` and canonical `AC`, bringing the previous surface to 80 metrics. The three distinct CT currents and four canonical CT powers brought it to 87 metrics (76 canonical and 11 source-local), using only one additional `705 x 4` read after the existing `609 x 11` block. The subsequent `604 x 4` and `700 x 4` reads add four canonical internal-power measurements, bringing the surface to 91 metrics (80 canonical and 11 source-local). Stage 28 reuses the `640 x 7` block and replaces the redundant `643 x 1` request with `696 x 4`, sequence `0x1E`: three dedicated UPS phase measurements brought the Stage-28 core to 94 metrics (83 canonical and 11 source-local), without changing its 27/25 first/steady request counts or `UPS_P` identity. Stage 31 adds three BMS measurements and replaces the two BMS aliases with independent mirrors, giving 97 metrics (86 canonical and 11 source-local). The BMS read runs every fetch; four newly validated metadata reads are cached, giving the current default 32/26 counts. Register 529 above is a separate documented daily energy counter. `MODBUS_DEVICE_SN` becomes `device_sn`; it is required in a mixed priority chain and must equal the inverter serial exposed by the cloud sources so Prometheus does not create a parallel identity series. The required logger serial remains separate as `parent_sn`.
 
 The generator one-shot used one connection for exactly three sequential unit-1 FC03 reads, with no retry: `133 x 1` at sequence `0x16`, `536 x 4` at `0x17`, and `661 x 11` at `0x18`. It returned `R133=0` and every word in the two telemetry blocks equal to zero. This is consistent with previously observed cloud generator zeros, but no fresh cloud bracket was available because the bridge was stopped for the isolated read. Production therefore claims only the observed zero domain: it reads all three blocks every time, emits the eleven canonical metrics only after every word passes the zero gate, and rejects the complete Modbus snapshot on any nonzero word so priority can fall back to Jinko or Solarman. No generator scale, sign, low/high pairing, or nonzero alias equivalence is inferred.
 
@@ -234,7 +262,7 @@ The run-state and register-551 power-switch metrics are deliberately source-loca
 
 For register 609, the two primary protocol maps establish the read-only address and grid-frequency meaning; the `0.01 Hz` scale comes from the maintained Deye P3 profile and the reviewed live/cloud correlation (`4995` raw against approximately `50.00 Hz`). Registers 610-612 are the documented internal grid-current triplet and correlated more closely than the external-CT triplet. External registers 613-619 do not affect those internal-current/frequency values, but now feed distinct CT metrics together with 705-708. The positive raw capture is corroborated by a ten-minute-older cloud sample; exact negative CT correlation and independently labelled CT-current comparison remain acceptance-evidence debt (Stage 26 / MB-006). CT currents missing from a cloud fallback are omitted, not aliased or filled with zero; persisted Home Assistant entities become `unknown`.
 
-The direct-load decoder promotes the phase pairs 650/656, 651/657, and 652/658 as canonical `LPP_A/B/C`, plus dedicated total pair 653/659 as `E_Puse_t1`. An earlier reviewed positive sample had low words `19/34/248/301` and four zero high words. A later same-frame read produced a phase-word sum of `243 W` while dedicated total register 653 was `251 W`; that live counterexample proves phase-sum equality is not a valid production invariant, so all four values are independent and the sum is never a gate. A later production poll observed `R656=0xFFFF`, proving that phase-A sign extension occurs, although the error log did not retain the paired low word or the remaining high words. Production therefore accepts each phase only with canonical high `0x0000`/`0xFFFF` and a joined value inside `-32767..32767 W`. This symmetric phase envelope rejects both directions of an in-domain zero-crossing tear. Dedicated total remains deliberately narrower in meaning but wider in non-negative magnitude: R659 must be zero and R653 accepts `0..65535 W`. Thus no unverified signed-total contract or `Pr1`-derived cap is introduced, and pass-through total headroom is preserved. UPS phases `C_P_L1..3` are emitted from their own 640/696 through 642/698 pairs, not aliased from `LPP_A/B/C`. Register 588 likewise supplies both canonical SOC keys, `B_left_cap1` and `BMS_SOC`, with identical validated values. Register 586 supplies both canonical temperature keys, `B_T1` and `BMST`; neither alias is synthesized as zero.
+The direct-load decoder promotes the phase pairs 650/656, 651/657, and 652/658 as canonical `LPP_A/B/C`, plus dedicated total pair 653/659 as `E_Puse_t1`. An earlier reviewed positive sample had low words `19/34/248/301` and four zero high words. A later same-frame read produced a phase-word sum of `243 W` while dedicated total register 653 was `251 W`; that live counterexample proves phase-sum equality is not a valid production invariant, so all four values are independent and the sum is never a gate. A later production poll observed `R656=0xFFFF`, proving that phase-A sign extension occurs, although the error log did not retain the paired low word or the remaining high words. Production therefore accepts each phase only with canonical high `0x0000`/`0xFFFF` and a joined value inside `-32767..32767 W`. This symmetric phase envelope rejects both directions of an in-domain zero-crossing tear. Dedicated total remains deliberately narrower in meaning but wider in non-negative magnitude: R659 must be zero and R653 accepts `0..65535 W`. Thus no unverified signed-total contract or `Pr1`-derived cap is introduced, and pass-through total headroom is preserved. UPS phases `C_P_L1..3` are emitted from their own 640/696 through 642/698 pairs, not aliased from `LPP_A/B/C`. Register 588 supplies inverter SOC `B_left_cap1`, while R214 supplies BMS SOC `BMS_SOC`. Register 586 supplies inverter battery temperature `B_T1`, while R217 supplies `BMST`. These separate readings need not be equal and are never synthesized as zero.
 
 UPS/backup phase powers now use the existing `640 x 7` response followed immediately by `696 x 4`, sequence `0x1E`; the separate `643 x 1` request is removed. The two maps define unsigned low-first 32-bit watts, but production accepts only the zero-high subset, preserving the full low-word range `0..65535 W` for each independent phase and total. Low-word bit 15 is not a sign bit. The phase values use `consumption/C_P_L1..3`; the dedicated total retains `ups/UPS_P` without being replaced by a phase sum. Any nonzero high rejects the whole snapshot. This zero-high policy does not establish full-U32 support or atomic coherence between the two requests.
 
@@ -322,6 +350,9 @@ The exact set depends on the inverter, source, firmware, and upstream API respon
 | `B_left_cap1` | `battery` | SoC | `%` |
 | `Etdy_cg1` | `battery` | Daily Charging Energy | `kWh` |
 | `Etdy_dcg1` | `battery` | Daily Discharging Energy | `kWh` |
+| `BMS_C_V` | `bms` | BMS Charge Voltage | `V` |
+| `BMS_D_C_L` | `bms` | Discharge Current Limit | `A` |
+| `BMS_B_V1` | `bms` | BMS Voltage | `V` |
 | `BMS_SOC` | `bms` | BMS_SOC | `%` |
 | `BMST` | `bms` | BMS Temperature | `C` |
 | `Li_B_SOH` | `bms` | Lithium battery SOH | `%` |

@@ -129,11 +129,11 @@ func TestDecodeMetadataRejectsIncompleteOrUnsupportedVector(t *testing.T) {
 	}
 }
 
-func TestMetadataPlanRequiresOptInAndIsCached(t *testing.T) {
+func TestMetadataPlanHonorsOptionAndCache(t *testing.T) {
 	baseline := fetchReadPlan(true, false)
 	steady := fetchReadPlan(false, false)
 	optIn := fetchReadPlan(true, true)
-	if len(baseline) != 27 || len(steady) != 25 || len(optIn) != 31 {
+	if len(baseline) != 28 || len(steady) != 26 || len(optIn) != 32 {
 		t.Fatal("wrong read budgets")
 	}
 	if !reflect.DeepEqual(steady, fetchReadPlan(false, true)) || !reflect.DeepEqual(optIn[:2], baseline[:2]) || !reflect.DeepEqual(optIn[6:], baseline[2:]) {
@@ -187,7 +187,7 @@ func TestClientMetadataIsTextOnlyCachedAndSnapshotOwned(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(baseline.Meta) != 7 || baselineClient.metadata != nil {
-		t.Fatal("metadata enabled without opt-in")
+		t.Fatal("metadata enabled when explicitly disabled")
 	}
 	cfg.MetadataEnabled = true
 	responses := append(enabledMetadataTestResponses(t), baselineMetadataTestResponses(t)[2:]...)
@@ -201,7 +201,7 @@ func TestClientMetadataIsTextOnlyCachedAndSnapshotOwned(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(snapshot.Metrics) != 94 || !reflect.DeepEqual(snapshot.Metrics, baseline.Metrics) {
+		if len(snapshot.Metrics) != 97 || !reflect.DeepEqual(snapshot.Metrics, baseline.Metrics) {
 			t.Fatal("metadata altered numeric telemetry")
 		}
 		if len(snapshot.Meta) != 13 {
@@ -215,15 +215,15 @@ func TestClientMetadataIsTextOnlyCachedAndSnapshotOwned(t *testing.T) {
 		}
 		snapshot.Meta["unexpected"] = "caller mutation"
 		conn := dialer.connection(fetch)
-		wantReads := 31
+		wantReads := 32
 		if fetch > 0 {
-			wantReads = 25
+			wantReads = 26
 		}
 		if len(conn.writes) != wantReads || conn.closeCount != 1 || conn.deadlineCalls != 1 || conn.deadline.IsZero() {
 			t.Fatalf("Fetch %d: writes=%d closes=%d deadlines=%d", fetch, len(conn.writes), conn.closeCount, conn.deadlineCalls)
 		}
 	}
-	if dialer.attemptCount() != 2 || dialer.responseCount() != 56 {
+	if dialer.attemptCount() != 2 || dialer.responseCount() != 58 {
 		t.Fatal("extra dial/read or missing metadata cache")
 	}
 }
@@ -269,7 +269,7 @@ func TestClientMetadataFailureStopsAndDoesNotPartiallyCache(t *testing.T) {
 				if snapshot, err = client.Fetch(context.Background()); err != nil || snapshot == nil {
 					t.Fatalf("next poll failed: %v", err)
 				}
-				if len(dialer.connection(1).writes) != 31 || !reflect.DeepEqual(client.metadata, expectedRawMetadata()) {
+				if len(dialer.connection(1).writes) != 32 || !reflect.DeepEqual(client.metadata, expectedRawMetadata()) {
 					t.Fatal("next poll used partial cache")
 				}
 			})

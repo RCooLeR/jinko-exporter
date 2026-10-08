@@ -185,7 +185,7 @@ type ModbusConfig struct {
 	DeviceSN     string
 	UnitID       uint
 	Timeout      time.Duration
-	// Opt-in until the four fixed raw-metadata reads are verified on the target.
+	// Four cached raw-metadata reads; enabled by default by the CLI configuration.
 	MetadataEnabled bool
 }
 
@@ -305,7 +305,7 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "modbus-device-sn", Usage: "Inverter serial used for snapshot identity; required with multiple priority sources so Prometheus device labels stay stable", Sources: cli.EnvVars("MODBUS_DEVICE_SN")},
 		&cli.UintFlag{Name: "modbus-unit-id", Value: 1, Usage: "Modbus unit/slave ID", Sources: cli.EnvVars("MODBUS_UNIT_ID")},
 		&cli.DurationFlag{Name: "modbus-timeout", Value: 5 * time.Second, Usage: "Modbus timeout", Sources: cli.EnvVars("MODBUS_TIMEOUT")},
-		&cli.BoolFlag{Name: "modbus-metadata-enabled", Value: false, Usage: "Opt in to four fixed cached raw firmware metadata reads; requires target validation", Sources: cli.EnvVars("MODBUS_METADATA_ENABLED")},
+		&cli.BoolFlag{Name: "modbus-metadata-enabled", Value: true, Usage: "Read four fixed cached raw firmware metadata blocks", Sources: cli.EnvVars("MODBUS_METADATA_ENABLED")},
 
 		&cli.BoolFlag{Name: "shelly-grid-load-enabled", Value: false, Usage: "Append grid-load metrics from a Shelly Pro 3EM meter to the selected inverter source", Sources: cli.EnvVars("SHELLY_GRID_LOAD_ENABLED")},
 		&cli.StringFlag{Name: "shelly-grid-load-url", Usage: "Shelly Pro 3EM base URL, for example http://192.0.2.50", Sources: cli.EnvVars("SHELLY_GRID_LOAD_URL")},

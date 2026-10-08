@@ -153,12 +153,12 @@ func TestClientExternalCTFailureDoesNotPublishPartialSnapshotOrRetry(t *testing.
 			if snapshot != nil || err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("snapshot/error = %#v/%v, want nil/%q", snapshot, err, tt.want)
 			}
-			if dialer.attemptCount() != 1 || dialer.connectionCount() != 1 || dialer.responseCount() != 25 {
-				t.Fatalf("attempts/connections/responses = %d/%d/%d, want 1/1/25", dialer.attemptCount(), dialer.connectionCount(), dialer.responseCount())
+			if dialer.attemptCount() != 1 || dialer.connectionCount() != 1 || dialer.responseCount() != 26 {
+				t.Fatalf("attempts/connections/responses = %d/%d/%d, want 1/1/26", dialer.attemptCount(), dialer.connectionCount(), dialer.responseCount())
 			}
 			conn := dialer.connection(0)
-			if len(conn.writes) != 25 || conn.closeCount != 1 {
-				t.Fatalf("writes/closes = %d/%d, want 25/1", len(conn.writes), conn.closeCount)
+			if len(conn.writes) != 26 || conn.closeCount != 1 {
+				t.Fatalf("writes/closes = %d/%d, want 26/1", len(conn.writes), conn.closeCount)
 			}
 		})
 	}
@@ -195,8 +195,8 @@ func TestClientExternalCTMetricDefinitionsStayDistinctFromInternalGrid(t *testin
 		"G_C_L3":  {"Grid\u00a0Current\u00a0L3", "A", 3.45},
 		"PG_Pt1":  {"Total Grid Power", "W", 316},
 	}
-	if len(snapshot.Metrics) != 94 {
-		t.Fatalf("metric count = %d, want 94", len(snapshot.Metrics))
+	if len(snapshot.Metrics) != 97 {
+		t.Fatalf("metric count = %d, want 97", len(snapshot.Metrics))
 	}
 	for _, metric := range snapshot.Metrics {
 		definition, ok := want[metric.Key]

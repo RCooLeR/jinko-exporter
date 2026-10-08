@@ -48,7 +48,7 @@ device type `0x0006`, two MPPTs, three phases, and one of the allowlisted
 Each fetch uses one fresh connection and fixed FC03 reads under one absolute
 deadline. It has no write or arbitrary-register path.
 
-The current 94-metric core comprises 83 shared canonical metrics and eleven
+The current 97-metric core comprises 86 shared canonical metrics and eleven
 Modbus-local fields: the register-500 run state, the register-551 power
 switch state, six raw warning/fault words, and three external-CT currents.
 The bounded CT and internal-power promotions record their evidence limits in
@@ -58,11 +58,13 @@ primary failover surface, ordinary cloud-only fields are intentionally omitted
 after fallback rather than invented or emitted with competing labels. Shelly
 `grid_load` enrichment is independent of this Modbus core.
 
-Stage 30 adds six raw metadata strings behind the default-off
-`MODBUS_METADATA_ENABLED` flag. It does not promote another numeric domain:
-ordinary reads remain 27 first / 25 subsequent; opting in adds four cached
-reads (31 first / 25 subsequent). This code is offline-tested, not target
-accepted. Leave it disabled until MB-017's target capture is complete.
+Stage 31 validates the six raw metadata strings introduced in Stage 30 and
+enables their four cached reads by default. It also promotes five independent
+BMS mirrors (three new keys, two alias replacements). Counts are 32 first /
+26 subsequent, or 28 first / 26 subsequent with metadata explicitly disabled.
+The BMS voltage scale follows the HV table and matching target/cloud readings;
+the LV table's different scale is not claimed to agree. The unresolved fields
+within that block remain ignored, not converted into guessed values.
 
 Open equipment-dependent items do not widen the supported contract and do not
 become release blockers merely because the required equipment is unavailable.
@@ -72,8 +74,8 @@ acceptance-evidence debt rather than an unbounded decoder: its current
 map/schema-backed status handling is narrow, read-only, and fail-closed. Any
 implementation that claims one of the open domains is blocked until that item's
 validation gates are complete, except for the explicitly bounded Stage-26 CT
-and Stage-27 internal-power acceptance. These exceptions do not admit wider
-power values or other groups.
+and Stage-27 internal-power acceptance, and the exact Stage-31 HV BMS subset.
+These exceptions do not admit wider power values or the unresolved BMS fields.
 
 ## Open Work
 
@@ -241,8 +243,8 @@ distinguish aliases.
 
 ### MB-008 TODO: Extended BMS and Second-Battery Data
 
-**Status:** partially blocked on BMS protocol evidence; battery 2 requires
-matching hardware.
+**Status:** five BMS mirrors promoted in Stage 31; current encoding, zero-only
+fields and the other BMS/second-battery surfaces remain open.
 
 The 2026-10-07 audit identified inverter-side BMS mirrors 210-218 and prepared
 a fixed raw-only `210 x 9` diagnostic. These are explicitly **R/W** registers;
@@ -253,7 +255,7 @@ LV tables. The third inspected map repeats the LV scales. Current signedness
 is unspecified in the mirror rows. SOC 214 is percent, temperature 217 is
 `(raw-1000)/10 C`, and limits 212/213/218 use A.
 
-The fresh cloud sample has BMS voltage `598.3 V`, current `-0.1 A`, temperature
+The earlier 2026-10-07 cloud sample has BMS voltage `598.3 V`, current `-0.1 A`, temperature
 `23 C`, SOC `100%`, charge voltage `648 V`, and discharge current limit `22 A`.
 These are comparison candidates, not a local register capture. In particular,
 a future raw `FFFF` current alone must be distinguished from an unsupported
@@ -268,13 +270,29 @@ battery2 mirrors also conflict. None of these ranges was queried. Lithium
 alarm/fault words 220/221 need their own raw-word contract and must not be
 equated with inverter warning/fault words.
 
-The safe aliases today are `BMS_SOC` from the already validated SOC register
-588 and `BMST` from the already validated temperature register 586. Do not
-alias `BMS_B_V1` to `B_V1` or `BMS_B_C1` to `B_C1`: the
+The 2026-10-08 supervised capture at `06:01:07Z` and identity-matched cloud
+sample collected at `06:02:38Z` agree on all nine observed mirror values under
+the HV scales. The accepted subset is R210 `BMS_C_V=648 V`, R213
+`BMS_D_C_L=22 A`, R214 `BMS_SOC=100%`, R215 `BMS_B_V1=615.2 V`, and R217
+`BMST=22 C`. The SOC/temperature values replace the former R588/R586 aliases;
+inverter `B_left_cap1` and `B_T1` still use their own registers. R213's
+nonnegative U16 whole-amp domain is a wire representation, not a battery rating
+or a claim that every extreme has been live-observed.
+
+R216 was `0001`, matching cloud `+0.1 A`. Negative current is a normal valid
+battery operating condition (also confirmed by the owner), but this capture
+does not prove its register encoding or any unsupported sentinel. R216 remains
+unpublished; it is neither forced positive nor made a rejection gate. R211,
+R212 and R218 were zero only and likewise remain unpublished pending nonzero
+correlation. Changes to these four ignored words do not invalidate the verified
+subset. The one exact `210 x 9` FC03 request is performed each fetch; protocol
+failures or invalid published-field domains reject the complete snapshot.
+
+Do not alias `BMS_B_V1` to `B_V1` or `BMS_B_C1` to `B_C1`: the
 [retained cloud fixture](../testdata/jinko_detail_response.json) contains
-different simultaneous values for each pair. BMS voltage/current,
+different simultaneous values for each pair. The remaining BMS current,
 charge/discharge limits, SOH, capacity, cycle/state data, cell diagnostics, and
-all `bms2` fields need addresses and live BMS correlation of their own. Jinko
+all `bms2` fields still need their own evidence. Jinko
 lithium-BMS alarm/fault keys are also not aliases for inverter-wide raw warning
 words 553-558.
 
@@ -392,27 +410,28 @@ perform any automatic control action.
 
 ### MB-017 TODO: Remaining Status and Metadata Keys
 
-**Status:** six raw strings implemented and offline-tested behind an explicit
-default-off flag; target validation and all other status interpretations remain
-open.
+**Status:** six raw strings target-validated and enabled by default in Stage 31;
+all other status interpretations remain open.
 
 Both compatible maps (printed pages 4-5) agree on read-only protocol-version
 word 2, assistant/bootloader bytes in word 11, firmware words 14-18, and battery
-input code 24. A fixed raw-only diagnostic for `2 x 1`, `11 x 1`, `14 x 5`,
-`24 x 1` is prepared and offline-tested, but has no live capture yet. It skips
+input code 24. The fixed raw-only diagnostic for `2 x 1`, `11 x 1`, `14 x 5`,
+`24 x 1` succeeded on the target at `2026-10-08T06:01:25Z`. It skips
 conflicting words 12/13 and unrelated adjacent configuration. Firmware must be
 represented as lossless text metadata, not decimal float values such as `104`
 for cloud version `0104`. A source string or metadata field is not automatically
 a canonical numeric sensor.
 
-Stage 30 implements those exact four cached reads and six raw `Snapshot.Meta`
-strings behind `MODBUS_METADATA_ENABLED=false`. MQTT/HA diagnostic discovery
+Stage 30 implemented those exact four cached reads behind a default-off flag;
+Stage 31 validates them and changes the default to `MODBUS_METADATA_ENABLED=true`.
+An explicit false remains an opt-out. MQTT/HA diagnostic discovery
 and the six-key Prometheus info allowlist have explicit format, source-fallback,
 availability and independent-Shelly tests. No cloud-version aliases or battery
 count are inferred. Protocol failures, cancellation and unsupported R24 codes
-leave no partially accepted profile/metadata cache. These offline guarantees
-do not replace a complete target capture or establish that the firmware
-supports the four blocks. Keep the opt-in disabled during an ordinary rebuild.
+leave no partially accepted profile/metadata cache. Sanitized complete target
+responses are retained as parser/decoder regressions. This evidence confirms
+the raw strings on the 12 kW target, not all sibling models or cloud-composite
+aliases. R24 remains a raw code rather than an inferred battery count.
 
 Do not synthesize cloud `ST_PG1` or `INV_MOD1` from register 500, register 551,
 or the device-type gate: their code systems and meanings differ. Firmware and

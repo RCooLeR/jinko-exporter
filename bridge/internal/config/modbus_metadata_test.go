@@ -1,12 +1,20 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
-func TestModbusMetadataRequiresExplicitOptIn(t *testing.T) {
+func TestModbusMetadataDefaultAndExplicitOverrides(t *testing.T) {
 	base := []string{"--source", "modbus", "--modbus-host", "192.168.50.25", "--modbus-logger-serial", "305419896"}
 	t.Setenv("MODBUS_METADATA_ENABLED", "")
-	if cfg := mustConfigFromArgs(t, base...); cfg.Modbus.MetadataEnabled {
-		t.Fatal("metadata reads enabled by default")
+	// Unset (rather than empty) is required to exercise the CLI default;
+	// urfave/cli treats an explicitly empty boolean environment value as false.
+	if err := os.Unsetenv("MODBUS_METADATA_ENABLED"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := mustConfigFromArgs(t, base...); !cfg.Modbus.MetadataEnabled {
+		t.Fatal("validated metadata reads disabled by default")
 	}
 	if cfg := mustConfigFromArgs(t, append(base, "--modbus-metadata-enabled")...); !cfg.Modbus.MetadataEnabled {
 		t.Fatal("explicit CLI opt-in ignored")

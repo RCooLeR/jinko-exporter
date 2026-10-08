@@ -104,7 +104,7 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	}
 	defer func() { _ = session.Close() }()
 
-	// Cache both profile gates and any opted-in metadata as one acquisition.
+	// Cache both profile gates and any enabled metadata as one acquisition.
 	// A failed or interrupted acquisition leaves no partially validated state.
 	if includeProfileGates {
 		capabilities, err := c.validateProfile(session)
@@ -274,6 +274,15 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode battery power and current: %w", err)
 	}
 
+	bmsWords, err := session.readApproved(bmsMirrorsRead)
+	if err != nil {
+		return nil, fmt.Errorf("read BMS telemetry mirrors: %w", err)
+	}
+	bmsMetrics, err := decodeBMSMirrors(bmsWords)
+	if err != nil {
+		return nil, fmt.Errorf("decode BMS telemetry mirrors: %w", err)
+	}
+
 	energyWords, err := session.readApproved(energyRead)
 	if err != nil {
 		return nil, fmt.Errorf("read energy counters: %w", err)
@@ -393,14 +402,13 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		{key: "T_DC", value: inverterTemperatures[0]},
 		{key: "AC_T", value: inverterTemperatures[1]},
 		{key: "B_T1", value: batteryTemperature},
-		{key: "BMST", value: batteryTemperature},
 		{key: "B_V1", value: batteryVoltage},
 		{key: "B_left_cap1", value: batterySOC},
-		{key: "BMS_SOC", value: batterySOC},
 		{key: "B_P1", value: batteryPower},
 		{key: "B_C1", value: batteryCurrent},
 		{key: "AC", value: float64(acRelayStatus)},
 	}
+	metricValues = append(metricValues, bmsMetrics...)
 	metricValues = append(metricValues, energyMetrics...)
 	metricValues = append(metricValues, generatorEnergyMetrics...)
 	metricValues = append(metricValues, generatorElectricalMetrics...)

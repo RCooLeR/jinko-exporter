@@ -38,6 +38,7 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, firstEnergy),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
@@ -63,6 +64,7 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1281}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6018, 99}),
 		makeReadResponse(t, batteryFlowRead, []uint16{0xFFF7, 0xFFF0}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, secondEnergy),
 		makeReadResponse(t, relayStatusRead, []uint16{0xFFF0, 0xFFFF}),
 		makeReadResponse(t, warningFaultRead, []uint16{1, 2, 3, 4, 0x8000, 0xFFFF}),
@@ -114,11 +116,11 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 	if firstDeadline.IsZero() {
 		t.Fatal("first Fetch connection deadline is zero")
 	}
-	if got := len(dialer.connection(0).writes); got != 27 {
-		t.Fatalf("first Fetch writes = %d, want 27", got)
+	if got := len(dialer.connection(0).writes); got != 28 {
+		t.Fatalf("first Fetch writes = %d, want 28", got)
 	}
-	if got := dialer.responseCount(); got != 27 {
-		t.Fatalf("first Fetch responses consumed = %d, want 27", got)
+	if got := dialer.responseCount(); got != 28 {
+		t.Fatalf("first Fetch responses consumed = %d, want 28", got)
 	}
 
 	second, err := client.Fetch(context.Background())
@@ -156,32 +158,32 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 	if secondDeadline.IsZero() || secondDeadline.Before(firstDeadline) {
 		t.Fatalf("second Fetch deadline = %s, want a non-regressing deadline relative to %s", secondDeadline, firstDeadline)
 	}
-	if got := len(dialer.connection(1).writes); got != 25 {
-		t.Fatalf("second Fetch writes = %d, want 25 (profile gates cached; generator mode uncached)", got)
+	if got := len(dialer.connection(1).writes); got != 26 {
+		t.Fatalf("second Fetch writes = %d, want 26 (profile gates cached; generator mode uncached)", got)
 	}
-	if got := dialer.responseCount(); got != 52 {
-		t.Fatalf("total responses consumed = %d, want 52", got)
+	if got := dialer.responseCount(); got != 54 {
+		t.Fatalf("total responses consumed = %d, want 54", got)
 	}
 
 	expectedReads := []readID{
 		deviceTypeRead, capabilityRead,
 		generatorPortModeRead, generatorEnergyRead, generatorElectricalRead,
 		loadVoltageRead, upsPowerHighRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
-		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
+		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, bmsMirrorsRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
 		externalCTPowerHighRead,
 		internalGridPowerLowRead, internalGridPowerHighRead,
 		generatorPortModeRead, generatorEnergyRead, generatorElectricalRead,
 		loadVoltageRead, upsPowerHighRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
-		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
+		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, bmsMirrorsRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
 		externalCTPowerHighRead,
 		internalGridPowerLowRead, internalGridPowerHighRead,
 	}
 	for index, id := range expectedReads {
 		connIndex := 0
 		writeIndex := index
-		if index >= 27 {
+		if index >= 28 {
 			connIndex = 1
-			writeIndex = index - 27
+			writeIndex = index - 28
 		}
 		conn := dialer.connection(connIndex)
 		want, err := buildReadRequest(testLoggerSerial, modbusUnitID, id)
@@ -218,6 +220,7 @@ func TestClientFetchAcceptsTwentyKilowattJKSFamilyMemberEndToEnd(t *testing.T) {
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
@@ -265,7 +268,7 @@ func TestClientFetchAcceptsTwentyKilowattJKSFamilyMemberEndToEnd(t *testing.T) {
 		deviceTypeRead, capabilityRead,
 		generatorPortModeRead, generatorEnergyRead, generatorElectricalRead,
 		loadVoltageRead, upsPowerHighRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
-		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
+		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, bmsMirrorsRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
 		externalCTPowerHighRead,
 		internalGridPowerLowRead, internalGridPowerHighRead,
 	}
@@ -310,6 +313,7 @@ func TestClientFetchCapabilityMismatchStopsAndDoesNotCacheDeviceCanary(t *testin
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
@@ -341,8 +345,8 @@ func TestClientFetchCapabilityMismatchStopsAndDoesNotCacheDeviceCanary(t *testin
 	if got := dialer.connectionCount(); got != 2 {
 		t.Fatalf("total connections = %d, want 2 (both gates rerun on the second session)", got)
 	}
-	if got := len(dialer.connection(1).writes); got != 27 {
-		t.Fatalf("second Fetch writes = %d, want 27", got)
+	if got := len(dialer.connection(1).writes); got != 28 {
+		t.Fatalf("second Fetch writes = %d, want 28", got)
 	}
 }
 
@@ -586,6 +590,7 @@ func TestClientFetchWarningFaultFailureReturnsNoPartialSnapshotAndDoesNotRetry(t
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		{}, // The warning/fault response closes immediately.
@@ -602,8 +607,8 @@ func TestClientFetchWarningFaultFailureReturnsNoPartialSnapshotAndDoesNotRetry(t
 	if snapshot != nil || dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 		t.Fatalf("snapshot/connections/attempts = %#v/%d/%d, want nil/1/1", snapshot, dialer.connectionCount(), dialer.attemptCount())
 	}
-	if writes := len(dialer.connection(0).writes); writes != 22 {
-		t.Fatalf("writes = %d, want exactly 22", writes)
+	if writes := len(dialer.connection(0).writes); writes != 23 {
+		t.Fatalf("writes = %d, want exactly 23", writes)
 	}
 }
 
@@ -645,8 +650,8 @@ func TestClientFetchRelayStatusFailureReturnsNoPartialSnapshotAndDoesNotRetry(t 
 			if snapshot != nil || dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 				t.Fatalf("snapshot/connections/attempts = %#v/%d/%d, want nil/1/1", snapshot, dialer.connectionCount(), dialer.attemptCount())
 			}
-			if writes := len(dialer.connection(0).writes); writes != 21 {
-				t.Fatalf("writes = %d, want exactly 21 through the relay-status read", writes)
+			if writes := len(dialer.connection(0).writes); writes != 22 {
+				t.Fatalf("writes = %d, want exactly 22 through the relay-status read", writes)
 			}
 			if closes := dialer.connection(0).closeCount; closes != 1 {
 				t.Fatalf("connection closes = %d, want 1", closes)
@@ -676,6 +681,7 @@ func TestClientFetchRunStateFailureReturnsNoPartialSnapshotAndDoesNotRetry(t *te
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
@@ -693,8 +699,8 @@ func TestClientFetchRunStateFailureReturnsNoPartialSnapshotAndDoesNotRetry(t *te
 	if snapshot != nil || dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 		t.Fatalf("snapshot/connections/attempts = %#v/%d/%d, want nil/1/1", snapshot, dialer.connectionCount(), dialer.attemptCount())
 	}
-	if writes := len(dialer.connection(0).writes); writes != 23 {
-		t.Fatalf("writes = %d, want exactly 23", writes)
+	if writes := len(dialer.connection(0).writes); writes != 24 {
+		t.Fatalf("writes = %d, want exactly 24", writes)
 	}
 }
 
@@ -719,6 +725,7 @@ func TestClientFetchGridFrequencyCurrentFailureReturnsNoPartialSnapshotAndDoesNo
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
@@ -737,8 +744,8 @@ func TestClientFetchGridFrequencyCurrentFailureReturnsNoPartialSnapshotAndDoesNo
 	if snapshot != nil || dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 		t.Fatalf("snapshot/connections/attempts = %#v/%d/%d, want nil/1/1", snapshot, dialer.connectionCount(), dialer.attemptCount())
 	}
-	if writes := len(dialer.connection(0).writes); writes != 24 {
-		t.Fatalf("writes = %d, want exactly 24", writes)
+	if writes := len(dialer.connection(0).writes); writes != 25 {
+		t.Fatalf("writes = %d, want exactly 25", writes)
 	}
 }
 
@@ -1132,8 +1139,8 @@ func assertSnapshot(t *testing.T, snapshot *model.Snapshot, want map[string]floa
 	if len(snapshot.Metrics) != len(want) {
 		t.Fatalf("metrics = %d, want %d", len(snapshot.Metrics), len(want))
 	}
-	if len(snapshot.Metrics) != 94 {
-		t.Fatalf("metrics = %d, want exact 94-key Modbus surface", len(snapshot.Metrics))
+	if len(snapshot.Metrics) != 97 {
+		t.Fatalf("metrics = %d, want exact 97-key Modbus surface", len(snapshot.Metrics))
 	}
 	wantAlertNames := map[string]string{
 		"DEYE_MODBUS_R553_WARNING_WORD_1_RAW": "Deye Inverter Warning Word 1 (Raw U16)",
@@ -1378,10 +1385,13 @@ func expectedSnapshotMetrics(
 		"T_DC":                                inverterTemperatures[0],
 		"AC_T":                                inverterTemperatures[1],
 		"B_T1":                                temperature,
-		"BMST":                                temperature,
+		"BMST":                                22,
 		"B_V1":                                voltage,
 		"B_left_cap1":                         soc,
-		"BMS_SOC":                             soc,
+		"BMS_SOC":                             100,
+		"BMS_C_V":                             648,
+		"BMS_D_C_L":                           22,
+		"BMS_B_V1":                            615.2,
 		"B_P1":                                batteryPower,
 		"B_C1":                                batteryCurrent,
 		"AC":                                  float64(acRelayStatus),
@@ -1518,6 +1528,7 @@ func responsesThroughEnergy(t *testing.T) [][]byte {
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 	)
 }

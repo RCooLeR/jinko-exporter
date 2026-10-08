@@ -6,8 +6,8 @@ import (
 )
 
 // readMetadata uses only the four map-agreed read-only blocks. Registers 12/13
-// conflict across maps and are intentionally absent. This experimental path is
-// default-off pending target capture; it preserves raw words, not MAIN/HMI aliases.
+// conflict across maps and are intentionally absent. Stage 31 records the target
+// capture; this preserves raw words, not MAIN/HMI aliases.
 func readMetadata(session *readSession) (map[string]string, error) {
 	protocol, err := session.readApproved(protocolVersionRead)
 	if err != nil {

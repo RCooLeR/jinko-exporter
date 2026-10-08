@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/RCooLeR/jinko-exporter/bridge/internal/model"
 )
@@ -41,9 +42,12 @@ func ParseDetailResponse(raw []byte) (*model.Snapshot, error) {
 	}
 
 	metrics := make([]model.Metric, 0, 128)
+	metadata := make(map[string]string)
+	rejectedMetadata := make(map[string]bool)
 	for _, cat := range payload.Categories {
 		group := normalizeGroup(cat.Tag, cat.Name)
 		for _, f := range cat.FieldList {
+			collectCloudMetadata(metadata, rejectedMetadata, f)
 			value, ok := parseFieldNumber(f)
 			if !ok {
 				continue
@@ -73,6 +77,9 @@ func ParseDetailResponse(raw []byte) (*model.Snapshot, error) {
 		seconds, fraction := math.Modf(payload.CollectionTime)
 		collectedAt = time.Unix(int64(seconds), int64(fraction*float64(time.Second))).UTC()
 	}
+	if len(metadata) == 0 {
+		metadata = nil
+	}
 
 	return &model.Snapshot{
 		DeviceSN:    strings.TrimSpace(payload.DeviceSN),
@@ -81,7 +88,57 @@ func ParseDetailResponse(raw []byte) (*model.Snapshot, error) {
 		SiteID:      strconv.FormatInt(payload.SiteID, 10),
 		CollectedAt: collectedAt,
 		Metrics:     metrics,
+		Meta:        metadata,
 	}, nil
+}
+
+// Cloud text is its own source contract. In particular, these values do not
+// establish aliases for raw Modbus words or interpret firmware sentinels.
+func collectCloudMetadata(metadata map[string]string, rejected map[string]bool, f field) {
+	var key string
+	switch f.StorageName {
+	case "PTCv1":
+		key = "cloud_protocol_version"
+	case "MAIN":
+		key = "cloud_main_firmware"
+	case "HMI":
+		key = "cloud_hmi_firmware"
+	case "CBAMSV":
+		key = "cloud_assistant_version"
+	case "CBAVM":
+		key = "cloud_bootloader_version"
+	case "L_B_H_V_N":
+		key = "cloud_battery_hardware_version"
+	case "L_B_H_V_N2":
+		key = "cloud_battery2_hardware_version"
+	case "BAT_FAC":
+		key = "cloud_battery_manufacturer"
+	default:
+		return
+	}
+	if rejected[key] {
+		return
+	}
+	value := f.OrgValue
+	if value == "" {
+		value = f.Value
+	}
+	valid := strings.TrimSpace(value) != "" && len(value) <= 128
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			valid = false
+			break
+		}
+	}
+	previous, exists := metadata[key]
+	if !valid || (exists && previous != value) {
+		// Once ambiguous or malformed, this key remains absent regardless of
+		// later field order. Other metadata and legacy metrics stay independent.
+		delete(metadata, key)
+		rejected[key] = true
+		return
+	}
+	metadata[key] = value
 }
 
 func normalizeGroup(tag string, name string) string {

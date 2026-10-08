@@ -43,12 +43,14 @@ same-fetch reconnect path. See the
 and the [validation backlog](./bridge/docs/modbus-backlog.md) for intentionally
 unsupported hardware and operating domains.
 
-`MODBUS_METADATA_ENABLED=false` keeps the existing validated read plan.
-An explicit opt-in adds four fixed, cached reads for lossless raw firmware
-metadata, with MQTT/Home Assistant diagnostics and a bounded Prometheus info
-family. This extension is offline-tested but still needs target validation;
-do not enable it as part of an ordinary rebuild. It does not add BMS or
-reinterpret numeric telemetry.
+Raw firmware metadata is now target-validated and enabled by default through
+four fixed, cached reads, with MQTT/Home Assistant diagnostics and a bounded
+Prometheus info family. Set `MODBUS_METADATA_ENABLED=false` to opt out.
+The BMS mirror read adds charge voltage, discharge-current limit and measured
+BMS voltage, and supplies independent BMS SOC/temperature instead of inverter
+aliases. Unverified BMS-current encoding and zero-only fields stay unpublished.
+The core contains 97 numeric metrics; requests are 32 first / 26 subsequent
+with metadata, or 28 first / 26 subsequent without it.
 
 In `serve`, Jinko OAuth expiry tracking—and token rotation when refresh is
 configured—continues in the background even while Modbus wins every telemetry

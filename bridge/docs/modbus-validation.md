@@ -1478,3 +1478,104 @@ method was changed to bypass this. No hardware/cloud request, deployment,
 container rebuild/start, or inverter setting change occurred in this stage.
 MB-017 target acceptance and the other equipment/mapping-dependent backlog
 items remain open; an ordinary rebuild must not enable this opt-in.
+
+## Stage 31: 2026-10-08 BMS Subset and Raw Metadata Target Capture
+
+Normal no-argument dry runs now completed without changing code execution
+methods or security settings. The earlier startup cause remains undiagnosed.
+The owner freshly confirmed that JinkoBridge and other logger pollers were
+stopped and explicitly approved the exact BMS and metadata one-shots.
+Exactly five FC03 application requests were sent: one `210 x 9` exchange on
+one connection, then the four metadata exchanges on a second connection.
+Each plan had one six-second absolute deadline and no retry, reconnect, scan,
+acknowledgement, Modbus write, configuration change or container restart.
+Complete identity-bearing captures are retained privately in ignored tools.
+
+The BMS exchange ran from `06:01:07.809728Z` to `06:01:07.9443022Z`:
+
+```text
+210=1950 211=0000 212=0000 213=0016 214=0064
+215=1808 216=0001 217=04C4 218=0000
+```
+
+The separate bounded Solarman helper made one HTTPS token request and one
+currentData request, from `06:03:33.4885079Z` to `06:03:33.9289256Z`, with no
+retry, redirect or token-state write. Its echoed identity matched the pinned
+device. Collection time was `06:02:38Z` (about 90 seconds after the BMS capture,
+55.93 seconds before the cloud response). The owner's updated detail export
+independently has that same collection time and values. This is nearby
+correlation, not an atomic simultaneous sample.
+
+| Register | HV interpretation | Cloud value | Publication decision |
+| --- | --- | --- | --- |
+| 210 | 648 V | 648 V charge voltage | `BMS_C_V` |
+| 211 | 0 V | 0 V discharge voltage | Defer: zero-only evidence |
+| 212 | 0 A | 0 A charge-current limit | Defer: zero-only evidence |
+| 213 | 22 A | 22 A discharge-current limit | `BMS_D_C_L` |
+| 214 | 100% | 100% SOC | Independent `BMS_SOC` |
+| 215 | 615.2 V | 615.2 V BMS voltage | `BMS_B_V1` |
+| 216 | +0.1 A under HV scale | +0.1 A BMS current | Defer: negative encoding/sentinels unproven |
+| 217 | 22 C | 22 C BMS temperature | Independent `BMST` |
+| 218 | 0 A | 0 A maximum charge current | Defer: zero-only evidence |
+
+The maps agree on field meanings but the HV table explicitly selects 0.1 V
+and 0.1 A instead of the LV table's 0.01 V and 1 A. The nonzero target/cloud
+values resolve that difference for this named HV profile; this stage does not
+claim identical LV/HV scales or infer support for other hardware. The bank is
+marked R/W; only the explicitly approved FC03 read is implemented. No R219 or
+other adjacent field is added. The production sequence is `0x23`, distinct from
+the metadata sequences; offline wire goldens use a synthetic identity.
+
+Five fields are accepted, adding three canonical keys and replacing two
+aliases. R210/R215 retain the existing 0..1000 V validation envelope, R214
+requires 0..100%, and R217 uses `(raw-1000)/10` within -100..100 C. R213 is a
+nonnegative U16 whole-amp limit; its wire range is not a battery rating or a
+claim that numeric extremes have been observed. Inverter `B_V1`, `B_T1` and
+`B_left_cap1` remain independent, with no equality gate against BMS readings.
+In this sample inverter `B_V1=615.6 V` and `B_C1=-0.02 A` differ from their BMS
+counterparts. They must not supply missing BMS values.
+
+Negative BMS current is normal and was explicitly confirmed by the owner.
+That does not determine its exact register encoding. The observed positive
+word is not used to invent signed or sentinel behavior: R216 is ignored for
+now, with no absolute-value conversion, zero substitution or rejection of
+otherwise valid snapshots. R211/R212/R218 are likewise ignored. Tests prove
+that nonzero/FFFF values in all four positions leave the published subset
+unchanged. A failed FC03 response or invalid published field still rejects the
+complete snapshot for ordinary priority fallback. Remaining BMS work is MB-008.
+
+The four metadata reads ran from `06:01:25.5299573Z` to `06:01:25.9868958Z`:
+
+```text
+2=0104 11=1C08 14=3001 15=1087 16=0000 17=2002 18=2017 24=0001
+```
+
+All framing/CRC/identity checks passed. The refreshed detail export reports
+PTCv1 `0104`, MAIN `3001-1087-1C08`, HMI `2002-2017`, bootloader `08`, assistant
+`1C`, and a one-way battery-input display. Only the exact raw strings are
+promoted: R16 stays present as `0000`, R24 stays raw `1`, and no cloud-composite
+or enum alias is introduced. Sanitized complete responses retain RTU payloads,
+CRC and transport fields; only logger identity/outer checksum were changed in
+the regression fixtures. Metadata is now enabled by default; an explicit
+`MODBUS_METADATA_ENABLED=false` remains an opt-out.
+
+The core is **97 numeric metrics (86 canonical, 11 source-local)**, plus six
+raw metadata strings. Default counts are **32 first / 26 subsequent**; disabling
+metadata gives **28/26**. Only metadata/profile properties are cached: BMS
+mirrors are read on every fetch. Two-success tests lock one connection per
+fetch, exact budgets, distinct BMS/inverter values, no duplicate keys, decoder
+boundaries, terminal failures, cancellation and absent-field fallback behavior.
+
+Separately, the Jinko parser now preserves eight allowlisted cloud text fields
+instead of losing firmware strings or their leading zeros. These `cloud_*`
+fields remain separate from raw Modbus metadata and existing numeric metrics
+are retained for compatibility. Malformed/ambiguous text is omitted. MQTT's
+existing primary ownership policy is unchanged, as is the six-key Prometheus
+raw metadata allowlist; cloud-only metadata does not silently expand either.
+
+Fresh noncached tests passed for all eleven runnable bridge test packages;
+`go vet ./...`, `go build ./...` and the private probe offline tests passed.
+The full suite remains blocked because Windows rejects creation of the
+unchanged Solarman test executable as potentially unwanted software. No
+security bypass was attempted. No deployment/NAS files, user-owned reference
+files, container state, inverter settings or wiring were changed.

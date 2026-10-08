@@ -83,8 +83,8 @@ services:
       # MODBUS_LOGGER_SERIAL: "<LOGGER_SERIAL>"
       # MODBUS_DEVICE_SN: "<SAME_INVERTER_SERIAL_AS_CLOUD>"
       # MODBUS_UNIT_ID: "1"
-      # Experimental raw firmware metadata; keep false until target validation.
-      # MODBUS_METADATA_ENABLED: "false"
+      # Cached raw firmware metadata is target-validated; false opts out.
+      # MODBUS_METADATA_ENABLED: "true"
       # MODBUS_TIMEOUT: "5s"
 
       # Optional diagnostic correlation for a non-zero Modbus warning/fault

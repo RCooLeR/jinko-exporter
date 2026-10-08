@@ -114,7 +114,7 @@ func openReadSession(
 }
 
 func fetchReadPlan(includeProfileGates, includeMetadata bool) []readID {
-	plan := make([]readID, 0, 31)
+	plan := make([]readID, 0, 32)
 	if includeProfileGates {
 		plan = append(plan, deviceTypeRead, capabilityRead)
 		if includeMetadata {
@@ -139,6 +139,7 @@ func fetchReadPlan(includeProfileGates, includeMetadata bool) []readID {
 		batteryTemperatureRead,
 		batteryVoltageSOCRead,
 		batteryFlowRead,
+		bmsMirrorsRead,
 		energyRead,
 		relayStatusRead,
 		warningFaultRead,

@@ -177,8 +177,8 @@ func TestClientUPSPowerDefinitionsRemainIndependentFromDirectLoad(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Metrics) != 94 {
-		t.Fatalf("metric count = %d, want 94", len(snapshot.Metrics))
+	if len(snapshot.Metrics) != 97 {
+		t.Fatalf("metric count = %d, want 97", len(snapshot.Metrics))
 	}
 	want := map[string]struct {
 		group, name string
