@@ -400,10 +400,15 @@ func buildInverterSource(cfg config.Config, alerts *alert.Manager) (source.Sourc
 		}
 		sources = append(sources, src)
 	}
-	if len(sources) == 1 && !cfg.ModbusAlertCorrelation.Enabled {
+	if len(sources) == 1 && !cfg.ModbusAlertCorrelation.Enabled && !cfg.Modbus.ValidationEvidenceEnabled {
 		return sources[0], nil
 	}
 	priority := source.NewPriority(sources, cfg.ProjectFailoverMetrics)
+	if cfg.Modbus.ValidationEvidenceEnabled {
+		if err := priority.EnableModbusValidationEvidence(); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.ModbusAlertCorrelation.Enabled {
 		if err := configureModbusAlertCorrelation(priority, cfg); err != nil {
 			return nil, err

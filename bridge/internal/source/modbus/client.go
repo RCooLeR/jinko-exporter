@@ -88,6 +88,10 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 
 	operationCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
+	var evidence *model.ModbusEvidence
+	if c.cfg.ValidationEvidenceEnabled {
+		evidence = &model.ModbusEvidence{StartedAt: time.Now().UTC()}
+	}
 	includeProfileGates := c.capabilities == nil
 	session, err := openReadSession(
 		operationCtx,
@@ -274,7 +278,13 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode battery power and current: %w", err)
 	}
 
+	if evidence != nil {
+		evidence.BMSWindow.StartedAt = time.Now().UTC()
+	}
 	bmsWords, err := session.readApproved(bmsMirrorsRead)
+	if evidence != nil {
+		evidence.BMSWindow.FinishedAt = time.Now().UTC()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read BMS telemetry mirrors: %w", err)
 	}
@@ -292,7 +302,13 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode energy counters: %w", err)
 	}
 
+	if evidence != nil {
+		evidence.RelayWindow.StartedAt = time.Now().UTC()
+	}
 	relayStatusWords, err := session.readApproved(relayStatusRead)
+	if evidence != nil {
+		evidence.RelayWindow.FinishedAt = time.Now().UTC()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read power and AC relay status: %w", err)
 	}
@@ -301,7 +317,13 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode power and AC relay status: %w", err)
 	}
 
+	if evidence != nil {
+		evidence.AlertWindow.StartedAt = time.Now().UTC()
+	}
 	warningFaultWords, err := session.readApproved(warningFaultRead)
+	if evidence != nil {
+		evidence.AlertWindow.FinishedAt = time.Now().UTC()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read warning/fault raw words: %w", err)
 	}
@@ -310,7 +332,13 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode warning/fault raw words: %w", err)
 	}
 
+	if evidence != nil {
+		evidence.RunStateWindow.StartedAt = time.Now().UTC()
+	}
 	runStateWords, err := session.readApproved(runStateRead)
+	if evidence != nil {
+		evidence.RunStateWindow.FinishedAt = time.Now().UTC()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read run-state block: %w", err)
 	}
@@ -460,13 +488,27 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	for key, value := range c.metadata {
 		meta[key] = value // fresh map: callers cannot mutate the cached metadata
 	}
+	collectedAt := time.Now().UTC()
+	if evidence != nil {
+		// Only retain successfully decoded words after the entire immutable
+		// request plan has completed. No transport frames or identity escape.
+		copy(evidence.BMSWords[:], bmsWords)
+		copy(evidence.RelayWords[:], relayStatusWords)
+		copy(evidence.AlertWords[:], warningFaultWords)
+		evidence.RunState = runStateWords[0]
+		evidence.FinishedAt = collectedAt
+	}
+	if err := operationCtx.Err(); err != nil {
+		return nil, err
+	}
 	return &model.Snapshot{
-		Source:      c.Name(),
-		DeviceSN:    strings.TrimSpace(c.cfg.DeviceSN),
-		ParentSN:    strings.TrimSpace(c.cfg.LoggerSerial),
-		CollectedAt: time.Now().UTC(),
-		Metrics:     metrics,
-		Meta:        meta,
+		Source:         c.Name(),
+		DeviceSN:       strings.TrimSpace(c.cfg.DeviceSN),
+		ParentSN:       strings.TrimSpace(c.cfg.LoggerSerial),
+		CollectedAt:    collectedAt,
+		Metrics:        metrics,
+		Meta:           meta,
+		ModbusEvidence: evidence,
 	}, nil
 }
 

@@ -184,6 +184,32 @@ The Modbus source is the deliberately locked read-only profile `jks-6-20h-ei-rea
 | `MODBUS_UNIT_ID` | `--modbus-unit-id` | `1` | Must remain `1` for this locked profile. |
 | `MODBUS_TIMEOUT` | `--modbus-timeout` | `5s` | One absolute deadline for the complete fetch. Must be greater than zero and at most `30s`. |
 | `MODBUS_METADATA_ENABLED` | `--modbus-metadata-enabled` | `true` | Four fixed cached raw firmware-metadata reads, target-validated in Stage 31. Set false to omit them. |
+| `MODBUS_VALIDATION_EVIDENCE_ENABLED` | `--modbus-validation-evidence-enabled` | `false` | Passive bounded raw BMS/status diagnostics from successful accepted normal polls only. Requires Modbus first and log level `info`, `debug`, or `trace`. No extra reads, cloud requests, sensor publication, or background task. |
+
+The passive evidence option copies only words already acquired by the normal
+locked plan: BMS 210-218, power/relay 551-552, alerts 553-558, and run state 500.
+It does not decode the ignored BMS words or turn them into numeric metrics.
+Records go to existing INFO logs under `raw_evidence`, with UTC per-read and
+whole-fetch windows; sequential blocks are not an atomic sample. No logger or
+inverter serial, IP, frame, credential, or arbitrary metadata is logged.
+
+Each process records its first complete accepted sample, then once each the
+first nonzero and first nonzero/non-FFFF value of R211/R212/R218, and the first
+high-bit and high-bit/non-FFFF R216 value. A high bit is not labelled negative
+current. Separate milestones prevent a possible FFFF sentinel from consuming
+the only useful observation. Changed power/relay/alert/run-state vectors are
+recorded at most once per minute, up to 64 times per process; comparison is
+against the last emitted vector so a settled rate-limited change is retained
+on a later poll. The last transition record announces budget exhaustion.
+The nine milestones remain independent of that budget: at most 73 records can
+be emitted before restart, often fewer because simultaneous reasons coalesce.
+Restart resets the budget; normal container-log retention/rotation still applies.
+
+Failed, canceled, malformed, cloud-fallback, or rejected snapshots never spend
+the evidence budget. The internal sidecar is excluded from snapshot JSON, HA
+state/discovery, and Prometheus. This is best-effort raw diagnostic logging,
+not an independent cloud reference or automatic permission to publish a new
+metric. No settings changes or deliberately induced faults are required.
 
 The metadata option adds only `2 x 1`, `11 x 1`, `14 x 5`, and `24 x 1`,
 immediately after the profile gates, in that order. It skips conflicting

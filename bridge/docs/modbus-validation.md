@@ -1628,3 +1628,58 @@ The numeric core remains 97 and default request counts remain 32/26.
 Named bit meanings still require a known event and firmware-compatible
 mapping; relay-state correlation (MB-001) is also not closed. No deployment,
 container operation, live read, inverter setting or wiring change occurred.
+
+## Stage 33: 2026-10-08 Passive Bounded BMS/Status Evidence
+
+The owner requested autonomous progress without repeated continuation prompts.
+To collect naturally occurring conditions without repeated one-shot requests,
+`MODBUS_VALIDATION_EVIDENCE_ENABLED` adds an explicitly opt-in observer of
+already-approved production reads. It is disabled by default, requires Modbus
+first in source priority, and requires INFO-capable logging (`trace`, `debug`,
+or `info`). It does not start a worker, fetch a cloud source, expand the read
+plan, retry, send a notification, or change any device setting.
+
+The Modbus client copies raw BMS 210-218, power/relay 551-552, warning/fault
+553-558, and run-state 500 only into a complete successful snapshot. Every
+block retains UTC start/end timestamps and a whole-fetch window. These are
+sequential acquisitions, not an atomic snapshot. Full R551 upper bits and
+ignored BMS words are preserved without interpreting them. A fixed-size
+internal sidecar owns these values and is excluded from public snapshot JSON,
+HA discovery/state, Prometheus, numeric metrics, and metadata.
+
+Only a primary Modbus snapshot accepted by Priority while its context is not
+canceled reaches the observer. It validates acquisition windows and parity
+with all six public raw alert words before consuming any budget. Failed,
+malformed, canceled, rejected, or cloud-fallback samples do not become evidence.
+The record contains no serials, addresses, credentials, frames, or arbitrary
+metadata, and uses the existing INFO log sink with no separate file writer.
+
+Nine once-per-process milestones cover the first accepted sample; first
+nonzero and first nonzero/non-FFFF values for each of R211/R212/R218; and first
+high-bit and first high-bit/non-FFFF R216. High-bit does not mean proven
+negative current, and FFFF is not silently treated as either a value or a
+sentinel. Power/relay/alert/run-state changes have a separate 64-record budget
+and one-minute minimum interval. Comparison uses the last emitted vector, so
+a settled throttled change can be retained on a later poll. The final
+transition record marks exhaustion. Simultaneous reasons coalesce; the upper
+bound is 73 records per process, with independent BMS milestones still eligible
+after the status budget is exhausted. Restart resets these bounded budgets.
+Logging is best effort and normal container log retention/rotation still applies.
+
+Regression tests lock byte-identical request plans with the option on/off,
+32/26 default and 28/26 metadata-disabled counts, 97 numeric metrics, ignored
+BMS bit-pattern preservation, fresh array ownership, complete windows, every
+late-read failure, cancellation, fallback/acceptance boundaries, deduplication,
+rate limiting, budget exhaustion/restart, log privacy and public serialization.
+Independent HA and Prometheus tests retain their exact published surface when
+an internal sidecar is present. All eleven runnable package test suites passed
+fresh, as did `go vet ./...` and `go build ./...`. The previously recorded
+Windows block on creation of the unchanged Solarman test executable remains;
+a fully green suite is not claimed and no security bypass was attempted.
+
+This is evidence-collection infrastructure, not new mapping evidence. MB-008
+still needs independent negative-current/nonzero-limit correlation; MB-001 and
+MB-016 still need observed states and compatible meanings. DC-link MB-015 has
+no accepted address, and reactive power remains explicitly out of scope. No
+new live device/cloud request, deployment, container operation, inverter
+setting, or wiring change was made while implementing and testing this stage.

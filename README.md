@@ -64,6 +64,12 @@ or fault vector, query both cloud sources concurrently for diagnostic evidence,
 and send a dedicated Home Assistant notification. It never writes to the
 inverter or changes source selection.
 
+Passive BMS/status validation evidence can be enabled separately with
+`MODBUS_VALIDATION_EVIDENCE_ENABLED=true` (Modbus first; INFO logs enabled).
+It retains bounded raw-word milestones from existing normal polls without
+additional device/cloud requests or new sensors. See
+[configuration](./bridge/docs/configuration.md#modbus-options).
+
 ## Documentation
 
 - [Bridge documentation](./bridge/docs/index.md)

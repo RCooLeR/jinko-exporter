@@ -187,6 +187,8 @@ type ModbusConfig struct {
 	Timeout      time.Duration
 	// Four cached raw-metadata reads; enabled by default by the CLI configuration.
 	MetadataEnabled bool
+	// Passive, bounded raw-word evidence from already-approved normal reads.
+	ValidationEvidenceEnabled bool
 }
 
 type ShellyGridLoadConfig struct {
@@ -306,6 +308,7 @@ func Flags() []cli.Flag {
 		&cli.UintFlag{Name: "modbus-unit-id", Value: 1, Usage: "Modbus unit/slave ID", Sources: cli.EnvVars("MODBUS_UNIT_ID")},
 		&cli.DurationFlag{Name: "modbus-timeout", Value: 5 * time.Second, Usage: "Modbus timeout", Sources: cli.EnvVars("MODBUS_TIMEOUT")},
 		&cli.BoolFlag{Name: "modbus-metadata-enabled", Value: true, Usage: "Read four fixed cached raw firmware metadata blocks", Sources: cli.EnvVars("MODBUS_METADATA_ENABLED")},
+		&cli.BoolFlag{Name: "modbus-validation-evidence-enabled", Value: false, Usage: "Log bounded raw BMS/status evidence from accepted normal polls without extra reads", Sources: cli.EnvVars("MODBUS_VALIDATION_EVIDENCE_ENABLED")},
 
 		&cli.BoolFlag{Name: "shelly-grid-load-enabled", Value: false, Usage: "Append grid-load metrics from a Shelly Pro 3EM meter to the selected inverter source", Sources: cli.EnvVars("SHELLY_GRID_LOAD_ENABLED")},
 		&cli.StringFlag{Name: "shelly-grid-load-url", Usage: "Shelly Pro 3EM base URL, for example http://192.0.2.50", Sources: cli.EnvVars("SHELLY_GRID_LOAD_URL")},
@@ -462,13 +465,14 @@ func FromCLI(c *cli.Command) (Config, error) {
 			StationID:                c.Int64("solarman-station-id"),
 		},
 		Modbus: ModbusConfig{
-			Host:            strings.TrimSpace(c.String("modbus-host")),
-			Port:            c.Int("modbus-port"),
-			LoggerSerial:    strings.TrimSpace(c.String("modbus-logger-serial")),
-			DeviceSN:        strings.TrimSpace(c.String("modbus-device-sn")),
-			UnitID:          c.Uint("modbus-unit-id"),
-			Timeout:         c.Duration("modbus-timeout"),
-			MetadataEnabled: c.Bool("modbus-metadata-enabled"),
+			Host:                      strings.TrimSpace(c.String("modbus-host")),
+			Port:                      c.Int("modbus-port"),
+			LoggerSerial:              strings.TrimSpace(c.String("modbus-logger-serial")),
+			DeviceSN:                  strings.TrimSpace(c.String("modbus-device-sn")),
+			UnitID:                    c.Uint("modbus-unit-id"),
+			Timeout:                   c.Duration("modbus-timeout"),
+			MetadataEnabled:           c.Bool("modbus-metadata-enabled"),
+			ValidationEvidenceEnabled: c.Bool("modbus-validation-evidence-enabled"),
 		},
 		ShellyGridLoad: ShellyGridLoadConfig{
 			Enabled: c.Bool("shelly-grid-load-enabled"),
@@ -615,6 +619,16 @@ func validate(cfg Config) error {
 		}
 	}
 
+	if cfg.Modbus.ValidationEvidenceEnabled {
+		if len(cfg.SourcePriority) == 0 || cfg.SourcePriority[0] != "modbus" {
+			return fmt.Errorf("source-priority must start with modbus when Modbus validation evidence is enabled")
+		}
+		switch strings.ToLower(strings.TrimSpace(cfg.LogLevel)) {
+		case "trace", "debug", "info":
+		default:
+			return fmt.Errorf("log-level must be trace, debug, or info when Modbus validation evidence is enabled")
+		}
+	}
 	if cfg.ModbusAlertCorrelation.Enabled {
 		if len(cfg.SourcePriority) == 0 || cfg.SourcePriority[0] != "modbus" {
 			return fmt.Errorf("source-priority must start with modbus when Modbus alert correlation is enabled")

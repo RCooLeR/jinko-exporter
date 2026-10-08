@@ -12,6 +12,8 @@ import (
 
 func TestCollectorBMSMirrorsRemainDistinctFromInverterBattery(t *testing.T) {
 	snapshot := &model.Snapshot{Source: "modbus", DeviceSN: "SYNTHETIC_INV_001", CollectedAt: time.Now()}
+	// Raw validation evidence is an internal diagnostic sidecar, never metrics.
+	snapshot.ModbusEvidence = &model.ModbusEvidence{BMSWords: [9]uint16{65535, 65535, 65535}, RelayWords: [2]uint16{65535, 65535}, RunState: 65535}
 	want := map[string]model.Metric{}
 	for key, value := range map[string]float64{"BMS_C_V": 648, "BMS_D_C_L": 22, "BMS_B_V1": 615.2, "BMS_SOC": 100, "BMST": 22,
 		"B_V1": 615.6, "B_left_cap1": 99, "B_T1": 23} {

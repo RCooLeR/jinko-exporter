@@ -19,6 +19,7 @@ type Priority struct {
 	sourceGates            []*sourceFetchGate
 	correlationMu          sync.RWMutex
 	alertCorrelation       *alertCorrelationWorker
+	validationEvidence     *modbusValidationObserver
 }
 
 type metricSurface struct {
@@ -99,6 +100,9 @@ func (p *Priority) Fetch(ctx context.Context) (*model.Snapshot, error) {
 				// preserved when telemetry overlaps, but cannot make an otherwise
 				// incompatible fallback count as a successful telemetry poll.
 			} else {
+				if p.validationEvidence != nil && idx == 0 && ctx.Err() == nil {
+					p.validationEvidence.observe(snapshot)
+				}
 				// Correlate only a snapshot that passed every Priority acceptance
 				// check. In particular, a mismatched Modbus fallback must not
 				// trigger cloud diagnostics for a device learned from another

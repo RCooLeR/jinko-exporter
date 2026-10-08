@@ -85,6 +85,10 @@ services:
       # MODBUS_UNIT_ID: "1"
       # Cached raw firmware metadata is target-validated; false opts out.
       # MODBUS_METADATA_ENABLED: "true"
+      # Optional bounded raw BMS/status evidence from existing normal reads.
+      # Requires modbus first and EXPORTER_LOG_LEVEL info/debug/trace.
+      # Does not add device/cloud requests or publish unverified sensors.
+      # MODBUS_VALIDATION_EVIDENCE_ENABLED: "true"
       # MODBUS_TIMEOUT: "5s"
 
       # Optional diagnostic correlation for a non-zero Modbus warning/fault

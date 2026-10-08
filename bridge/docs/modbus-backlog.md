@@ -23,6 +23,13 @@ reactive findings below are retained only to explain why no mapping was
 accepted. Existing cloud passthrough is unchanged; this scope decision does
 not remove existing entities or rewrite their values.
 
+Stage 33 adds default-off passive raw evidence collection for the selected
+BMS and status work. Once enabled, it copies only existing successful normal
+reads into bounded diagnostic logs, with acquisition timestamps and no extra
+device/cloud requests. Prefer these naturally occurring samples over asking
+the owner to trigger repeated one-shots. An independently timed cloud/display
+reference is still necessary; this collector alone closes no mapping gate.
+
 ## Validation Gates
 
 A new numeric field or a wider value domain is eligible for production only
@@ -108,6 +115,10 @@ exposes, so any upper bits are visible. Named interpretation of register-552
 relay and dry-contact bits needs separate observed state transitions; the
 current raw-U16 contract does not claim that every documented bit has been
 live-proven. The read must not toggle a relay or power state.
+
+The Stage-33 passive collector preserves both complete words, including R551
+upper bits, on the first accepted sample and bounded status transitions. Use
+its per-read window for the relay-state bracket; it does not assign bit names.
 
 ### MB-002 TODO: Exact Negative Inverter-Output Capture
 
@@ -259,6 +270,12 @@ or re-open their validation unless the owner changes this scope.
 
 **Status:** five BMS mirrors promoted in Stage 31; current encoding, zero-only
 fields and the other BMS/second-battery surfaces remain open.
+
+Stage 33 can retain the first complete BMS block plus first nonzero unresolved
+limits and high-bit R216 values during normal polling. Separate non-FFFF
+milestones prevent a possible sentinel from consuming the only useful sample.
+These are raw-word conditions, not a signed-current decoder. Match retained
+samples to independent cloud/display evidence before changing publication.
 
 The 2026-10-07 audit identified inverter-side BMS mirrors 210-218 and prepared
 a fixed raw-only `210 x 9` diagnostic. These are explicitly **R/W** registers;
@@ -445,6 +462,10 @@ makes a naturally occurring event easier to match with the display/cloud,
 without assigning names, fault codes, severity, or new sensor identities.
 It does not close this item: known nonzero events and firmware-specific
 meanings are still required. Relay-state evidence in MB-001 also remains open.
+
+Stage 33 additionally retains all six raw words alongside relay/run-state and
+BMS words on bounded naturally occurring status changes. This passive option
+does not enable the separate cloud correlation worker or HA notifications.
 
 ### MB-017 TODO: Remaining Status and Metadata Keys
 

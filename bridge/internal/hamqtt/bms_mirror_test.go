@@ -38,10 +38,20 @@ func TestBMSMirrorsKeepDiscoveryIdentityAndIndependentValues(t *testing.T) {
 		metrics = append(metrics, canonical(key, value))
 	}
 	for _, sourceName := range []string{"modbus", "jinko", "solarman"} {
-		if err := publisher.OnPollSuccess(discoverySnapshot(sourceName, metrics...), time.Second); err != nil {
+		snapshot := discoverySnapshot(sourceName, metrics...)
+		// Even an attached sidecar must not become unvalidated HA entities.
+		snapshot.ModbusEvidence = &model.ModbusEvidence{BMSWords: [9]uint16{65535, 65535, 65535}, RelayWords: [2]uint16{65535, 65535}, RunState: 65535}
+		if err := publisher.OnPollSuccess(snapshot, time.Second); err != nil {
 			t.Fatal(err)
 		}
 		state := publishedState(t, client, independentStateTopic)
+		for _, payload := range client.payloadsForTopic(independentStateTopic) {
+			for _, forbidden := range []string{"ModbusEvidence", "raw_evidence", "bms_words_210_218", "relay_words_551_552"} {
+				if strings.Contains(payload, forbidden) {
+					t.Fatalf("raw diagnostic sidecar leaked into MQTT state: %s", forbidden)
+				}
+			}
+		}
 		if state.MetricCount != len(metrics) {
 			t.Fatalf("count = %d", state.MetricCount)
 		}
