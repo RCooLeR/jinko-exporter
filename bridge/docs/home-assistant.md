@@ -334,7 +334,10 @@ automatic control action.
 The optional direct mobile push is independent of MQTT Discovery. When
 `MODBUS_ALERT_CORRELATION_ENABLED=true`, the first complete non-zero Modbus
 vector sends one detected push and starts bounded Jinko/Solarman evidence
-collection. The cloud completion is logged without creating a second push; a
+collection. The detected push includes the six raw words and their exact
+zero-based active positions (for example `R553.b1`), explicitly without verified
+fault names. These positions add no MQTT entities and do not change the
+word-based `alert_count`. The cloud completion is logged without creating a second push; a
 later complete all-zero Modbus vector sends the recovery push. Both pushes use
 one privacy-safe per-device tag, so recovery replaces the active notification
 without exposing the device serial. See [Alerts](./alerts.md) for configuration

@@ -156,7 +156,7 @@ request, authentication, or token alerts. Home Assistant receives one detected
 push before those reads and one recovery push only after a later complete
 all-zero Modbus snapshot. Cloud completion is written to structured logs and
 does not create a second mobile push. Correlation logs contain the six raw
-words, closed source statuses, bounded normalized numeric metrics, timestamps,
+words, exact active bit positions, closed source statuses, bounded normalized numeric metrics, timestamps,
 counts, and a digest. They exclude cloud identities and names, URLs, request or
 response bodies, upstream error text, credentials, cookies, and account email.
 Ordinary evidence is limited to keys present in the triggering Modbus snapshot,
@@ -164,6 +164,17 @@ and its group/unit identity is taken from that accepted Modbus metric rather
 than from cloud labels. Alert evidence is limited to the four shared canonical
 lithium-alert keys. Unknown upstream alert labels are discarded even when their
 spelling would be safe to serialize.
+
+Detected pushes additionally list raw positions such as `R553.b1` and
+`R558.b15`, explicitly marked as having unverified fault names/meanings.
+The corresponding structured field is `modbus_active_bits`, an ordered JSON
+array of `{ "register": 553, "bit": 1 }` objects. Bits are zero-based
+(bit 0 is the least-significant bit); unknown/reserved positions are retained.
+An all-zero vector produces `[]` in logs. The original six `modbus_words`
+remain present, and `alert_count` still counts nonzero words, not set bits.
+This is lossless diagnostic formatting, not a new fault-name mapping, sensor,
+severity classification, cloud job, or device read. It does not enable the
+opt-in worker or change its signature/cooldown/recovery behavior.
 
 Minimum shape for a local-first deployment:
 

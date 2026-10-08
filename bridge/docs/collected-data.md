@@ -249,6 +249,10 @@ Assistant notification and queries Jinko and Solarman only for bounded,
 sanitized comparison evidence. Cloud results never clear the Modbus alert,
 change the winning telemetry source, or assign unverified meanings to bits;
 only a later complete Modbus snapshot containing six zeros resolves it.
+For diagnosis, the opt-in worker includes exact zero-based active positions in
+the detected push and structured `modbus_active_bits` log field. Original words
+are preserved, including unknown/reserved bits. This assigns no semantic bit
+names and adds no telemetry metrics or device requests.
 
 Before telemetry, the client performs two profile gates together and caches them only after both succeed: decimal register `0` (`0x0000`) must contain device type `0x0006`, and decimal registers `20-22` (`0x0014-0x0016`) must decode to one official JKS-6/8/10/12/15/20H-EI rating (`6000`, `8000`, `10000`, `12000`, `15000`, or `20000 W`), exactly `2 MPPT`, `3 phases`, and raw register 22 `0x0203`. The 12 kW target is the only member with live-confirmed raw gate values; the other accepted ratings come from the official line specification and have not been individually live-correlated. The unvalidated 25 kW two-MPPT sibling is outside `jks-6-20h-ei-readonly-v1`; the structurally separate 29.9/30 kW BM3 three-MPPT variants also fail closed. Rated power is emitted as canonical `Pr1` in every snapshot and all three capabilities are retained in snapshot metadata. Registers `20-22` are read-only inherent properties; the unrelated R/W clock registers at decimal `62-64` are excluded. The device-type code is metadata, not Jinko `INV_MOD1`, because those fields use different code systems.
 

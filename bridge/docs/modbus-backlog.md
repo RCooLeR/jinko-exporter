@@ -10,6 +10,19 @@ operating condition is unavailable. Missing support is safer than publishing a
 plausible-looking value under the wrong canonical key. Nothing in this list is
 an instruction to scan registers or change inverter settings.
 
+## Owner-selected scope (2026-10-08)
+
+The active work is BMS (MB-008), DC-link voltages (MB-015), and status/fault
+interpretation (MB-001, MB-016, and the status part of MB-017). Other entries
+remain recorded evidence gaps, not an instruction to expand this work.
+
+Reactive-power work is explicitly excluded by the owner, not merely waiting
+for a better sample. Do not prepare reactive register reads, promote reactive
+metrics, or make reactive support a completion/release condition. Historical
+reactive findings below are retained only to explain why no mapping was
+accepted. Existing cloud passthrough is unchanged; this scope decision does
+not remove existing entities or rewrite their values.
+
 ## Validation Gates
 
 A new numeric field or a wider value domain is eligible for production only
@@ -195,11 +208,13 @@ The current wire-domain range is not a CT capacity rating. Power above the
 coherence envelope needs a separately reviewed coherent acquisition strategy
 and target evidence; do not widen a constant or cap it by inverter rated power.
 
-### MB-007 TODO: Internal and Reactive Power Surfaces
+### MB-007 TODO: Internal Power Evidence (Reactive Work Excluded)
 
 **Status:** internal active-power publication implemented after positive target
 correlation; exact negative-flow capture remains acceptance-evidence debt.
-Reactive-power mapping and discriminating conditions remain missing.
+Reactive-power mapping is excluded from further work by the owner's
+2026-10-08 decision. The following reactive notes are historical evidence,
+not a pending read or implementation plan.
 
 A newer V105.1 map alone lists phase-reactive entries at 710-715, with low/high
 labels explicit only for phase A (710/711). Pairing 712/713 and 714/715 follows
@@ -236,10 +251,9 @@ between internal, external CT, and selected grid power.
 
 Cloud keys `GS_A`, `GS_B`, `GS_C`, and `GS_T` represent internal power, not the
 selected grid phase/total powers. Reactive keys `G16`, `A_RP_PG`,
-`B_RP_PG`, `C_RP_PG`, `A_RP_INV`, `B_RP_INV`, and `C_RP_INV` likewise require
-their own documented register pairs, signs, scales, and totals. Validation needs
-a sample with material reactive power; zeros or near-unity power factor cannot
-distinguish aliases.
+`B_RP_PG`, `C_RP_PG`, `A_RP_INV`, `B_RP_INV`, and `C_RP_INV` have no accepted
+local mapping and are no longer planned. Do not derive them from active power
+or re-open their validation unless the owner changes this scope.
 
 ### MB-008 TODO: Extended BMS and Second-Battery Data
 
@@ -287,6 +301,15 @@ R212 and R218 were zero only and likewise remain unpublished pending nonzero
 correlation. Changes to these four ignored words do not invalidate the verified
 subset. The one exact `210 x 9` FC03 request is performed each fetch; protocol
 failures or invalid published-field domains reject the complete snapshot.
+
+The next owner-refreshed reference, collected at `2026-10-08T06:28:29Z`,
+still reports `BMS_B_C1=+0.10 A` and zero `BMS_D_V`, `BMS_C_C_L`, and
+`BMS_CC1`. No diagnostic read was spent repeating that already-known state.
+The next useful one-shot is the same fixed `210 x 9` block during a naturally
+occurring negative BMS-current sample, preferably not just -0.1 A, with fresh
+stopped-poller confirmation and explicit approval. Keep the raw word and
+closely timed cloud value; do not change settings or retry to obtain a desired
+sign. Zero-only limits remain deferred independently of the current result.
 
 Do not alias `BMS_B_V1` to `B_V1` or `BMS_B_C1` to `B_C1`: the
 [retained cloud fixture](../testdata/jinko_detail_response.json) contains
@@ -390,6 +413,14 @@ relationship is explanatory evidence, not a mapping. Candidate addresses
 metadata rather than live voltage. Require two-map agreement and a live/cloud
 bracket before adding either key.
 
+The 2026-10-08 page-level recheck confirms the conflict: the HV map's printed
+pages 32-33 call 601/602 grid line voltages AB/BC at 0.1 V (601 is reserved),
+whereas V104-2 page 32 labels them battery-1/battery-2 negative current while
+still printing 0.1 V. Neither is an accepted HV_V/BN_V contract. The refreshed
+cloud pair `737/368 V` does not resolve addresses or scale. No DC-link probe
+or production read is added; this item needs a firmware-compatible protocol
+definition, not a search for a numerically similar raw value.
+
 ### MB-016 TODO: Warning/Fault Bit Meanings
 
 **Status:** raw U16 words are production-safe; per-bit decoding is pending.
@@ -407,6 +438,13 @@ metrics plus source alert points. Use that evidence together with the inverter
 display and firmware table to close this TODO. Until then, the bridge may alert
 on non-zero raw words but must not attach bit names, acknowledge a fault, or
 perform any automatic control action.
+
+Stage 32 adds exact zero-based active bit positions to the existing opt-in
+correlation logs and detected push, alongside the complete raw words. This
+makes a naturally occurring event easier to match with the display/cloud,
+without assigning names, fault codes, severity, or new sensor identities.
+It does not close this item: known nonzero events and firmware-specific
+meanings are still required. Relay-state evidence in MB-001 also remains open.
 
 ### MB-017 TODO: Remaining Status and Metadata Keys
 

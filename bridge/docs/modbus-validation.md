@@ -1579,3 +1579,52 @@ The full suite remains blocked because Windows rejects creation of the
 unchanged Solarman test executable as potentially unwanted software. No
 security bypass was attempted. No deployment/NAS files, user-owned reference
 files, container state, inverter settings or wiring were changed.
+
+## Stage 32: 2026-10-08 Selected Scope and Exact Alert-Bit Evidence
+
+The owner selected BMS, DC-link voltages, and status/fault interpretation,
+and explicitly excluded reactive power. The backlog records that scope;
+reactive support is not a completion condition or a pending diagnostic plan.
+Existing cloud passthrough and existing entity identities are unchanged.
+
+The owner refreshed the private detail export, whose collection time is
+`2026-10-08T06:28:29Z` (09:28:29 Europe/Kyiv). Its identity matches the pinned
+target. It still reports BMS current `+0.10 A`, charge voltage `648 V`, BMS
+voltage `615.20 V`, temperature `22 C`, SOC `100%`, discharge-current limit
+`22 A`, and zero discharge voltage/charge-current limit/max-charge current.
+This is not the negative-current or nonzero-limit evidence needed for MB-008.
+No new device or cloud diagnostic request was made. The existing fixed raw
+`210 x 9` helper gained offline high-bit preservation tests and a precise
+negative-sample checklist; this did not change its single-request plan.
+
+Visual reinspection of HV printed pages 31-33 and V104-2 pages 31-32 confirms
+that no accepted DC-link address is available from the 601/602 candidates.
+HV describes grid line voltage, including a reserved 601; V104-2 describes
+battery negative currents despite voltage units. Cloud `HV_V=737 V` and
+`BN_V=368 V` do not identify a Modbus address. R33 is voltage-class metadata,
+not live DC voltage. MB-015 remains blocked on a compatible source definition;
+no read, scale inference, or new production metric is added.
+
+For MB-016 the code now provides exact diagnostic bit positions without
+inventing semantic labels. `ModbusAlertSignature.ActiveBits()` returns a fresh
+ordered list of `{register, bit}` pairs for all six raw words, including every
+reserved/unknown bit. Bits are zero-based; an inactive signature serializes as
+`[]`. Existing opt-in correlation logs add `modbus_active_bits` alongside
+their original raw words. The detected HA push appends references such as
+`R553.b1`, explicitly labelled with unverified fault names/meanings. All 96
+possible positions fit in the notification without truncation. Recovery text,
+signatures, cooldowns, alert counts, source selection and request plans are
+unchanged. No automatic acknowledgement, new cloud job, additional sensor,
+or named warning/fault mapping is introduced.
+
+Tests cover every single bit in every word, mixed/all-zero/all-one vectors,
+ordering, slice independence, JSON arrays, all correlation log paths, original
+word/ID/metric preservation, notification size, and recovery behavior. Fresh
+source/app/Modbus/HA/Prometheus/alert package tests, `go vet ./...`, and
+`go build ./...` passed. The previously recorded Windows block on the Solarman
+test executable remains unresolved; a fully green suite is not claimed.
+The numeric core remains 97 and default request counts remain 32/26.
+
+Named bit meanings still require a known event and firmware-compatible
+mapping; relay-state correlation (MB-001) is also not closed. No deployment,
+container operation, live read, inverter setting or wiring change occurred.
