@@ -42,6 +42,10 @@ const (
 	externalCTPowerHighRead
 	internalGridPowerLowRead
 	internalGridPowerHighRead
+	protocolVersionRead
+	controllerVersionsRead
+	firmwareWordsRead
+	batteryInputCodeRead
 )
 
 // approvedReadSpec is the immutable compile-time allowlist. Every range is
@@ -50,6 +54,16 @@ const (
 // contract. There is deliberately no generic register entry point.
 func approvedReadSpec(id readID) (readSpec, bool) {
 	switch id {
+	// Experimental raw metadata: reachable only through the default-off
+	// metadata plan. No numeric interpretation or cloud version alias is made.
+	case protocolVersionRead:
+		return readSpec{name: "protocol-version-raw", sequence: 0x1F, start: 2, quantity: 1}, true
+	case controllerVersionsRead:
+		return readSpec{name: "controller-version-bytes", sequence: 0x20, start: 11, quantity: 1}, true
+	case firmwareWordsRead:
+		return readSpec{name: "firmware-raw-words", sequence: 0x21, start: 14, quantity: 5}, true
+	case batteryInputCodeRead:
+		return readSpec{name: "battery-input-raw-code", sequence: 0x22, start: 24, quantity: 1}, true
 	case deviceTypeRead:
 		return readSpec{name: "device-type", sequence: 0x01, start: 0x0000, quantity: 1}, true
 	case upsPowerHighRead:

@@ -29,6 +29,7 @@ type Collector struct {
 	pollDurationDesc            *prometheus.Desc
 	errorCountDesc              *prometheus.Desc
 	valueDesc                   *prometheus.Desc
+	metadataInfoDesc            *prometheus.Desc
 	gridLoadUpDesc              *prometheus.Desc
 	gridLoadDataAgeDesc         *prometheus.Desc
 	gridLoadLastUpdateDesc      *prometheus.Desc
@@ -52,10 +53,12 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool, opti
 	sourceLabels := []string{"source"}
 	deviceLabels := []string{"source", "device_sn"}
 	valueLabels := []string{"source", "device_sn", "group", "key", "name", "unit"}
+	metadataLabels := []string{"source", "device_sn", "key", "value"}
 	if dropSourceLabel {
 		sourceLabels = nil
 		deviceLabels = []string{"device_sn"}
 		valueLabels = []string{"device_sn", "group", "key", "name", "unit"}
+		metadataLabels = metadataLabels[1:]
 	}
 	pollCountLabels := append(append([]string{}, sourceLabels...), "result")
 
@@ -128,6 +131,12 @@ func NewCollector(prefix string, state *poller.State, dropSourceLabel bool, opti
 			valueLabels,
 			nil,
 		),
+		metadataInfoDesc: prometheus.NewDesc(
+			prefix+"_device_metadata_info",
+			"Allowlisted lossless device metadata; 1 while the latest inverter poll is successful.",
+			metadataLabels,
+			nil,
+		),
 		gridLoadUpDesc: prometheus.NewDesc(
 			prefix+"_grid_load_up",
 			"1 if the last independent Shelly grid-load poll succeeded, 0 otherwise.",
@@ -173,6 +182,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.pollDurationDesc
 	ch <- c.errorCountDesc
 	ch <- c.valueDesc
+	ch <- c.metadataInfoDesc
 	if c.gridLoadState != nil {
 		ch <- c.gridLoadUpDesc
 		ch <- c.gridLoadDataAgeDesc
@@ -225,6 +235,9 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	seenValueLabels := make(map[string]struct{})
 	if snapshot != nil {
 		c.collectValues(ch, snapshot.Metrics, sourceName, deviceSN, false, seenValueLabels)
+		if status.Up {
+			c.collectMetadataInfo(ch, snapshot.Meta, sourceName, deviceSN)
+		}
 	}
 	if c.gridLoadState == nil {
 		return

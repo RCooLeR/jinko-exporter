@@ -1,6 +1,6 @@
 # Collected Data
 
-The bridge normalizes source responses into one snapshot shape. Only numeric telemetry becomes Prometheus metrics and Home Assistant metric sensors. Non-numeric metadata is kept as snapshot metadata and, when MQTT is enabled, as diagnostic entities.
+The bridge normalizes source responses into one snapshot shape. Numeric telemetry becomes measurement metrics and Home Assistant metric sensors. Non-numeric metadata is kept as snapshot metadata and, when MQTT is enabled, as diagnostic entities. The six optional raw Modbus metadata fields below also have an explicitly allowlisted Prometheus info family; arbitrary metadata is not exported as labels.
 
 ## Snapshot Shape
 
@@ -98,6 +98,43 @@ For the two-MPPT PV surface, Jinko, known Solarman points, and local Modbus use 
 For a source-independent priority deployment, set `EXPORTER_METRICS_DROP_SOURCE_LABEL=true`. Unless explicitly overridden, that setting also enables `EXPORTER_SOURCE_PROJECT_FAILOVER_METRICS` and strict shared-dictionary filtering through `SOLARMAN_CANONICAL_JINKO_METRICS`. After the primary surface has been learned, a matching fallback metric is published with the primary surface's group, key, name, and unit; fallback-only ordinary telemetry is omitted. Together, stable labels and removal of the `source` label prevent separate source-specific Prometheus series from appearing as duplicate lines in Grafana. Warning/alarm/fault metrics are not projected onto the primary telemetry surface and retain their source-local domains.
 
 Home Assistant Discovery can persist the corresponding schema independently with `MQTT_DISCOVERY_STATE_FILE`. The configured first-priority source contributes a monotonic ordinary metric surface; a cold fallback cannot add fallback-only ordinary entities. Source-local warning/alarm/fault metrics and Shelly `grid_load` metrics form separate monotonic unions. Ordinary values missing from the current snapshot are explicitly `null`, and missing-safe templates make those entities `unknown` without treating absence as zero or producing template warnings. Alert entities instead combine global bridge availability with an exact manifest-derived source/key condition: a finite zero remains `0`/`OFF`, a non-zero value is active, and an inactive source, missing key, or non-finite value is `unavailable`. This persistence changes only retained MQTT entity ownership and state shaping; it does not change the normalized snapshot returned by `fetch` or the source-selection behavior used by Prometheus.
+
+### Optional Raw Modbus Metadata
+
+`MODBUS_METADATA_ENABLED` is **false by default**. The implementation has
+offline tests, but no successful target capture yet; it must not be enabled
+merely because the container is rebuilt. With an explicitly validated opt-in,
+four fixed FC03 reads add these six `Snapshot.Meta` strings, not numeric
+measurements:
+
+| Metadata key | Source | Exact format |
+| --- | --- | --- |
+| `protocol_version_hex` | R2 | Four uppercase hexadecimal digits; leading zeros retained. |
+| `control_firmware_words` | R14, R15 | `XXXX-XXXX`, raw words in register order. |
+| `communication_firmware_words` | R16, R17, R18 | `XXXX-XXXX-XXXX`, raw words in register order. |
+| `bootloader_version_hex` | R11 low byte | Two uppercase hexadecimal digits. |
+| `assistant_version_hex` | R11 high byte | Two uppercase hexadecimal digits. |
+| `battery_input_code` | R24 | Raw decimal code `0` through `4`; not an inferred battery count. |
+
+The source never converts a version such as `0104` into decimal `104` or `260`,
+nor manufactures a cloud `MAIN`/`HMI` value. A successful acquisition is cached
+for the client lifetime and copied into each fresh snapshot. Core numeric
+metric count remains 94; Shelly enrichment remains independent.
+
+MQTT preserves these exact strings, with stable diagnostic entity IDs.
+Missing metadata on source fallback is absent/unknown, not zero or retained
+as a fresh reading. Inverter-down availability still applies even if Shelly
+is healthy. Existing cached MQTT metadata may remain in an offline payload;
+that does not make the corresponding HA entity available.
+
+Prometheus emits at most six samples per device in
+`solar_device_metadata_info{source,device_sn,key,value}=1` (using the configured
+prefix and omitting `source` when source labels are disabled). Only the six
+exact keys and formats above are accepted. URLs, tokens, arbitrary `Meta`,
+malformed values and missing fields are omitted. This info family is suppressed
+when inverter poll health is down, including when an independent Shelly poll
+succeeds. The numeric telemetry family's existing retention behavior is
+unchanged.
 
 ### Shelly `grid_load` Enrichment
 

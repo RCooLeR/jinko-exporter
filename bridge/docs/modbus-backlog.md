@@ -58,6 +58,12 @@ primary failover surface, ordinary cloud-only fields are intentionally omitted
 after fallback rather than invented or emitted with competing labels. Shelly
 `grid_load` enrichment is independent of this Modbus core.
 
+Stage 30 adds six raw metadata strings behind the default-off
+`MODBUS_METADATA_ENABLED` flag. It does not promote another numeric domain:
+ordinary reads remain 27 first / 25 subsequent; opting in adds four cached
+reads (31 first / 25 subsequent). This code is offline-tested, not target
+accepted. Leave it disabled until MB-017's target capture is complete.
+
 Open equipment-dependent items do not widen the supported contract and do not
 become release blockers merely because the required equipment is unavailable.
 They remain documented exclusions, and the current decoder must keep rejecting
@@ -386,7 +392,9 @@ perform any automatic control action.
 
 ### MB-017 TODO: Remaining Status and Metadata Keys
 
-**Status:** intentionally excluded unless an exact contract is found.
+**Status:** six raw strings implemented and offline-tested behind an explicit
+default-off flag; target validation and all other status interpretations remain
+open.
 
 Both compatible maps (printed pages 4-5) agree on read-only protocol-version
 word 2, assistant/bootloader bytes in word 11, firmware words 14-18, and battery
@@ -395,8 +403,16 @@ input code 24. A fixed raw-only diagnostic for `2 x 1`, `11 x 1`, `14 x 5`,
 conflicting words 12/13 and unrelated adjacent configuration. Firmware must be
 represented as lossless text metadata, not decimal float values such as `104`
 for cloud version `0104`. A source string or metadata field is not automatically
-a canonical numeric sensor. Publication through MQTT/HA and any bounded
-Prometheus info surface needs explicit tests before implementation.
+a canonical numeric sensor.
+
+Stage 30 implements those exact four cached reads and six raw `Snapshot.Meta`
+strings behind `MODBUS_METADATA_ENABLED=false`. MQTT/HA diagnostic discovery
+and the six-key Prometheus info allowlist have explicit format, source-fallback,
+availability and independent-Shelly tests. No cloud-version aliases or battery
+count are inferred. Protocol failures, cancellation and unsupported R24 codes
+leave no partially accepted profile/metadata cache. These offline guarantees
+do not replace a complete target capture or establish that the firmware
+supports the four blocks. Keep the opt-in disabled during an ordinary rebuild.
 
 Do not synthesize cloud `ST_PG1` or `INV_MOD1` from register 500, register 551,
 or the device-type gate: their code systems and meanings differ. Firmware and

@@ -1430,3 +1430,51 @@ promoted by this stage: the production contract remains **94 core metrics,
 27 first / 25 subsequent fixed reads**. Resume from the prepared, reviewed
 one-shots only after executable startup works and the stopped-bridge condition
 and fresh reference are rechecked. Do not label the remaining backlog complete.
+
+## Stage 30: 2026-10-08 Raw Metadata Implementation (Default-Off)
+
+The owner requested actual code completion while retaining manual container
+rebuilds. The two compatible metadata maps' complete relevant pages were
+visually rechecked. Their agreement supports an experimental raw-text path,
+not a new numeric measurement or a claim of target validation.
+
+`MODBUS_METADATA_ENABLED` / `--modbus-metadata-enabled` defaults to false.
+Opting in inserts exactly four FC03 requests after the two profile gates:
+`2 x 1` (sequence `1F`), `11 x 1` (`20`), `14 x 5` (`21`), and
+`24 x 1` (`22`). Conflicting words 12/13 remain excluded. There is still one
+connection, one absolute deadline, strict response validation, and no retry,
+reconnect, write or arbitrary range. Default counts remain **27/25**; enabled
+counts are **31/25** after complete profile/metadata acquisition is cached.
+Metadata failures/cancellation leave neither a partial metadata vector nor
+cached profile gates. Each returned snapshot owns a fresh metadata map.
+
+The six strings and their exact raw representations are documented in
+[collected data](./collected-data.md#optional-raw-modbus-metadata). Leading zeros,
+word order and hexadecimal digits survive unchanged. R24 accepts only raw
+codes 0..4 and is not interpreted as a battery count. No `MAIN`/`HMI` alias,
+BMS scale/sign assumption, or numeric metric is added: the core stays **94**.
+
+MQTT/HA uses existing diagnostic discovery with stable IDs and source-current
+values. Missing fallback fields do not inherit previous Modbus strings, and
+healthy Shelly data cannot make inverter metadata available. Prometheus adds
+a bounded six-key `device_metadata_info` family, gated on inverter poll health;
+arbitrary/private metadata is excluded. Existing numeric retention is unchanged.
+
+Offline tests lock independently assembled synthetic request/response vectors,
+exact request plans, write/range mutation rejection, raw formatting, unsupported
+codes, every metadata-block failure, cancellation, cache ownership, source
+fallback/recovery, HA availability and both Prometheus label modes. These
+vectors are explicitly not live captures. Independent code review found no
+actionable issue. `go build ./...` and `go vet ./...` passed. The sequential
+`go test -work -p 1 -count=1 -timeout=45s ./...` passed all eleven runnable test
+packages; Windows blocked creation of `solarman.test.exe` as a virus or
+potentially unwanted software, so the full suite did **not** pass. Two earlier
+parallel-run local-HTTP timeouts in app/Shelly tests did not recur in three
+isolated repetitions or the sequential package run; no timeout was relaxed.
+
+A no-argument BMS diagnostic still stalled before first output and was stopped
+without any live-mode flag or device request. No security setting or execution
+method was changed to bypass this. No hardware/cloud request, deployment,
+container rebuild/start, or inverter setting change occurred in this stage.
+MB-017 target acceptance and the other equipment/mapping-dependent backlog
+items remain open; an ordinary rebuild must not enable this opt-in.

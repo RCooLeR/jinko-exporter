@@ -43,6 +43,13 @@ same-fetch reconnect path. See the
 and the [validation backlog](./bridge/docs/modbus-backlog.md) for intentionally
 unsupported hardware and operating domains.
 
+`MODBUS_METADATA_ENABLED=false` keeps the existing validated read plan.
+An explicit opt-in adds four fixed, cached reads for lossless raw firmware
+metadata, with MQTT/Home Assistant diagnostics and a bounded Prometheus info
+family. This extension is offline-tested but still needs target validation;
+do not enable it as part of an ordinary rebuild. It does not add BMS or
+reinterpret numeric telemetry.
+
 In `serve`, Jinko OAuth expiry tracking—and token rotation when refresh is
 configured—continues in the background even while Modbus wins every telemetry
 poll; healthy Modbus does not cause Jinko detail calls. Keep bootstrap tokens in

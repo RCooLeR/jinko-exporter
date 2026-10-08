@@ -185,6 +185,8 @@ type ModbusConfig struct {
 	DeviceSN     string
 	UnitID       uint
 	Timeout      time.Duration
+	// Opt-in until the four fixed raw-metadata reads are verified on the target.
+	MetadataEnabled bool
 }
 
 type ShellyGridLoadConfig struct {
@@ -303,6 +305,7 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "modbus-device-sn", Usage: "Inverter serial used for snapshot identity; required with multiple priority sources so Prometheus device labels stay stable", Sources: cli.EnvVars("MODBUS_DEVICE_SN")},
 		&cli.UintFlag{Name: "modbus-unit-id", Value: 1, Usage: "Modbus unit/slave ID", Sources: cli.EnvVars("MODBUS_UNIT_ID")},
 		&cli.DurationFlag{Name: "modbus-timeout", Value: 5 * time.Second, Usage: "Modbus timeout", Sources: cli.EnvVars("MODBUS_TIMEOUT")},
+		&cli.BoolFlag{Name: "modbus-metadata-enabled", Value: false, Usage: "Opt in to four fixed cached raw firmware metadata reads; requires target validation", Sources: cli.EnvVars("MODBUS_METADATA_ENABLED")},
 
 		&cli.BoolFlag{Name: "shelly-grid-load-enabled", Value: false, Usage: "Append grid-load metrics from a Shelly Pro 3EM meter to the selected inverter source", Sources: cli.EnvVars("SHELLY_GRID_LOAD_ENABLED")},
 		&cli.StringFlag{Name: "shelly-grid-load-url", Usage: "Shelly Pro 3EM base URL, for example http://192.0.2.50", Sources: cli.EnvVars("SHELLY_GRID_LOAD_URL")},
@@ -459,12 +462,13 @@ func FromCLI(c *cli.Command) (Config, error) {
 			StationID:                c.Int64("solarman-station-id"),
 		},
 		Modbus: ModbusConfig{
-			Host:         strings.TrimSpace(c.String("modbus-host")),
-			Port:         c.Int("modbus-port"),
-			LoggerSerial: strings.TrimSpace(c.String("modbus-logger-serial")),
-			DeviceSN:     strings.TrimSpace(c.String("modbus-device-sn")),
-			UnitID:       c.Uint("modbus-unit-id"),
-			Timeout:      c.Duration("modbus-timeout"),
+			Host:            strings.TrimSpace(c.String("modbus-host")),
+			Port:            c.Int("modbus-port"),
+			LoggerSerial:    strings.TrimSpace(c.String("modbus-logger-serial")),
+			DeviceSN:        strings.TrimSpace(c.String("modbus-device-sn")),
+			UnitID:          c.Uint("modbus-unit-id"),
+			Timeout:         c.Duration("modbus-timeout"),
+			MetadataEnabled: c.Bool("modbus-metadata-enabled"),
 		},
 		ShellyGridLoad: ShellyGridLoadConfig{
 			Enabled: c.Bool("shelly-grid-load-enabled"),

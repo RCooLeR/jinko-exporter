@@ -30,6 +30,7 @@ type Client struct {
 	dial         dialContextFunc
 	gate         chan struct{}
 	capabilities *profileCapabilities
+	metadata     map[string]string
 }
 
 func New(cfg config.ModbusConfig) (*Client, error) {
@@ -96,20 +97,34 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		c.loggerSerial,
 		modbusUnitID,
 		includeProfileGates,
+		c.cfg.MetadataEnabled,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = session.Close() }()
 
-	// Both target-profile gates run together and are cached only after both
-	// succeed. A failed or interrupted gate leaves no partially validated state.
+	// Cache both profile gates and any opted-in metadata as one acquisition.
+	// A failed or interrupted acquisition leaves no partially validated state.
 	if includeProfileGates {
 		capabilities, err := c.validateProfile(session)
 		if err != nil {
 			return nil, err
 		}
+		var metadata map[string]string
+		if c.cfg.MetadataEnabled {
+			metadata, err = readMetadata(session)
+			if err != nil {
+				return nil, fmt.Errorf("read raw firmware metadata: %w", err)
+			}
+		}
+		// Commit the complete acquisition together. A failed metadata read must
+		// not cache the preceding profile gates or a partial metadata vector.
+		if err := operationCtx.Err(); err != nil {
+			return nil, err
+		}
 		c.capabilities = &capabilities
+		c.metadata = metadata
 	}
 
 	// Register 133 is mutable operating configuration rather than an inherent
@@ -425,21 +440,25 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("complete fixed Modbus Fetch plan: %w", err)
 	}
 
+	meta := map[string]string{
+		"profile":          profileName,
+		"transport":        "solarman-v5-over-tcp",
+		"modbus_function":  "03",
+		"device_type_code": "0x0006",
+		"rated_power_w":    strconv.FormatFloat(c.capabilities.ratedPowerW, 'f', 0, 64),
+		"mppt_count":       strconv.FormatUint(uint64(c.capabilities.mpptCount), 10),
+		"phase_count":      strconv.FormatUint(uint64(c.capabilities.phaseCount), 10),
+	}
+	for key, value := range c.metadata {
+		meta[key] = value // fresh map: callers cannot mutate the cached metadata
+	}
 	return &model.Snapshot{
 		Source:      c.Name(),
 		DeviceSN:    strings.TrimSpace(c.cfg.DeviceSN),
 		ParentSN:    strings.TrimSpace(c.cfg.LoggerSerial),
 		CollectedAt: time.Now().UTC(),
 		Metrics:     metrics,
-		Meta: map[string]string{
-			"profile":          profileName,
-			"transport":        "solarman-v5-over-tcp",
-			"modbus_function":  "03",
-			"device_type_code": "0x0006",
-			"rated_power_w":    strconv.FormatFloat(c.capabilities.ratedPowerW, 'f', 0, 64),
-			"mppt_count":       strconv.FormatUint(uint64(c.capabilities.mpptCount), 10),
-			"phase_count":      strconv.FormatUint(uint64(c.capabilities.phaseCount), 10),
-		},
+		Meta:        meta,
 	}, nil
 }
 
