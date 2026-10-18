@@ -2,7 +2,9 @@ import desktopLayout from "../../assets/overview/desktop_layout_spec.json";
 import mobileLayout from "../../assets/overview/mobile_layout_spec.json";
 import { setClassNameIfChanged, setHiddenIfChanged, setStyleIfChanged, setTextContentIfChanged } from "../lib/dom";
 import { calculateDailyGridBalanceUAH } from "../lib/energy-tariff";
-import { clamp, first, formatEnergy, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber, sum } from "../lib/format";
+import { clamp, first, formatEnergy, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber } from "../lib/format";
+import { entityInventorySignature } from "../lib/entity-inventory";
+import { completeSum } from "../lib/measurement-fallbacks";
 import { ENTITY_KEYS, resolveEntities, valueFor, type EntityKey, type EntityOverrides, type ResolvedEntityMap } from "../lib/entity-model";
 import { measuredGridLoadFor } from "../lib/grid-load";
 import { MINI_CARD_POSITIONS, type PositionBoxModel, type PositionMode } from "../lib/position-models";
@@ -76,6 +78,7 @@ class JksMiniCard extends HTMLElement {
   private _config: MiniCardConfig = { type: `custom:${CARD_TAG}`, ...DEFAULT_CONFIG };
   private _resolved: ResolvedEntityMap = {};
   private _attemptedEntityKeys = new Set<EntityKey>();
+  private _entityInventory = "";
   private _root: ShadowRoot;
   private _resizeObserver?: ResizeObserver;
   private _isMobile = false;
@@ -173,6 +176,11 @@ class JksMiniCard extends HTMLElement {
 
   private _resolveEntities(force = false): void {
     if (!this._hass) return;
+    const inventory = entityInventorySignature(this._hass);
+    if (inventory !== this._entityInventory) {
+      this._entityInventory = inventory;
+      force = true;
+    }
     if (force) {
       this._attemptedEntityKeys.clear();
     }
@@ -321,26 +329,17 @@ class JksMiniCard extends HTMLElement {
   }
 
   private _syncLayers(): void {
-    const pvTotalPower = first(this._value("pv_total_power"), sum([this._value("pv1_power"), this._value("pv2_power")]));
-    const gridTotalPower = first(
-      this._value("grid_total_power"),
-      sum([this._value("grid_l1_power"), this._value("grid_l2_power"), this._value("grid_l3_power")])
-    );
+    const pvTotalPower = first(this._value("pv_total_power"), completeSum([this._value("pv1_power"), this._value("pv2_power")]));
+    const gridTotalPower = this._value("grid_total_power");
     const measuredGridLoad = measuredGridLoadFor((key) => this._value(key));
-    const homeTotalPower = measuredGridLoad.available ? measuredGridLoad.power : first(
-      this._value("home_total_power"),
-      sum([this._value("home_l1_power"), this._value("home_l2_power"), this._value("home_l3_power")])
-    );
+    const homeTotalPower = this._parallelLoadPower(measuredGridLoad.power);
     const batteryPower = this._value("battery_power");
-    const generatorTotalPower = first(
-      this._value("generator_total_power"),
-      sum([this._value("generator_l1_power"), this._value("generator_l2_power"), this._value("generator_l3_power")])
-    );
+    const generatorTotalPower = first(this._value("generator_total_power"), completeSum([1, 2, 3].map((phase) => this._value(`generator_l${phase}_power` as EntityKey))));
 
     const visibility: Record<MiniLayerId, boolean> = {
       pv_offline: !this._isMeaningfulPower(pvTotalPower),
-      grid_offline: !this._isMeaningfulPower(gridTotalPower),
-      battery_offline: !this._isMeaningfulPower(batteryPower),
+      grid_offline: ![gridTotalPower, ...[1, 2, 3].map((phase) => this._value(`grid_l${phase}_current` as EntityKey))].some(isFiniteNumber),
+      battery_offline: ![batteryPower, this._value("battery_voltage"), this._value("battery_soc")].some(isFiniteNumber),
       gen_offline: !this._isMeaningfulPower(generatorTotalPower),
       load_offline: !measuredGridLoad.available && !this._isMeaningfulPower(homeTotalPower)
     };
@@ -454,24 +453,15 @@ class JksMiniCard extends HTMLElement {
       };
     }
 
-    const gridTotalPower = first(
-      this._value("grid_total_power"),
-      sum([this._value("grid_l1_power"), this._value("grid_l2_power"), this._value("grid_l3_power")])
-    );
-    const pvTotalPower = first(this._value("pv_total_power"), sum([this._value("pv1_power"), this._value("pv2_power")]));
+    const gridTotalPower = this._value("grid_total_power");
+    const pvTotalPower = first(this._value("pv_total_power"), completeSum([this._value("pv1_power"), this._value("pv2_power")]));
     const measuredGridLoad = measuredGridLoadFor((key) => this._value(key));
-    const homeTotalPower = measuredGridLoad.available ? measuredGridLoad.power : first(
-      this._value("home_total_power"),
-      sum([this._value("home_l1_power"), this._value("home_l2_power"), this._value("home_l3_power")])
-    );
+    const homeTotalPower = this._parallelLoadPower(measuredGridLoad.power);
     const pvDailyEnergy = this._value("pv_daily_energy");
     const gridBuyToday = this._value("grid_buy_today");
     const gridSellToday = this._value("grid_sell_today");
     const homeDailyEnergy = this._value("home_daily_energy");
-    const generatorTotalPower = first(
-      this._value("generator_total_power"),
-      sum([this._value("generator_l1_power"), this._value("generator_l2_power"), this._value("generator_l3_power")])
-    );
+    const generatorTotalPower = first(this._value("generator_total_power"), completeSum([1, 2, 3].map((phase) => this._value(`generator_l${phase}_power` as EntityKey))));
 
     return {
       production_card: formatEnergy(pvDailyEnergy),
@@ -484,7 +474,7 @@ class JksMiniCard extends HTMLElement {
       grid_node: formatPower(gridTotalPower, true),
       inverter_node: "--",
       inverter_temp: formatTemperature(this._value("dc_temperature")),
-      combined_load: formatPower(homeTotalPower),
+      combined_load: `${measuredGridLoad.power === null && homeTotalPower !== null ? "≈ " : ""}${formatPower(homeTotalPower)}`,
       battery_node: formatPower(this._value("battery_power"), true),
       generator_node: formatPower(generatorTotalPower)
     };
@@ -494,6 +484,13 @@ class JksMiniCard extends HTMLElement {
     const balance = calculateDailyGridBalanceUAH(buyToday, sellToday);
     if (!isFiniteNumber(balance)) return "--";
     return `${balance > 0 ? "+" : ""}${formatNumber(balance, 2).replace(".", ",")}\u20B4`;
+  }
+
+  private _parallelLoadPower(measured: number | null): number | null {
+    if (measured !== null) return measured;
+    const home = this._value("home_total_power");
+    const ups = this._value("ups_total_power") ?? completeSum([1, 2, 3].map((phase) => this._value(`home_l${phase}_power` as EntityKey)));
+    return home !== null && ups !== null ? home - ups : null;
   }
 
   private _applyTextBox(

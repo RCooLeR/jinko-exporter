@@ -16,7 +16,7 @@ import (
 func TestReadSessionUsesOneConnectionAndStrictRequestResponseOrder(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer serverConn.Close()
-	plan := fetchReadPlan(true)
+	plan := fetchReadPlan(true, false)
 	responses := make([][]byte, len(plan))
 	for index, id := range plan {
 		spec, _ := approvedReadSpec(id)
@@ -78,7 +78,7 @@ func TestReadSessionUsesOneConnectionAndStrictRequestResponseOrder(t *testing.T)
 		serverDone <- nil
 	}()
 
-	session, err := openReadSession(ctx, dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true)
+	session, err := openReadSession(ctx, dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestReadSessionUsesOneConnectionAndStrictRequestResponseOrder(t *testing.T)
 }
 
 func TestReadSessionAppliesOneDeadlineAndKeepaliveSetting(t *testing.T) {
-	plan := fetchReadPlan(false)
+	plan := fetchReadPlan(false, false)
 	responses := make([][]byte, 0, len(plan))
 	for _, id := range plan {
 		spec, _ := approvedReadSpec(id)
@@ -116,7 +116,7 @@ func TestReadSessionAppliesOneDeadlineAndKeepaliveSetting(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	session, err := openReadSession(ctx, dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, false)
+	session, err := openReadSession(ctx, dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,16 +146,17 @@ func TestFetchReadPlansAreExactAndUseUniqueSequences(t *testing.T) {
 	wantFirst := []readID{
 		deviceTypeRead, capabilityRead,
 		generatorPortModeRead, generatorEnergyRead, generatorElectricalRead,
-		upsPowerRead, loadVoltageRead, directLoadPowerLowRead, loadFrequencyRead,
+		loadVoltageRead, upsPowerHighRead, directLoadPowerLowRead, loadFrequencyRead,
 		gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead,
 		pvInputRead, inverterTemperatureRead, batteryTemperatureRead,
-		batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead,
-		runStateRead, gridFrequencyCurrentRead,
+		batteryVoltageSOCRead, batteryFlowRead, bmsMirrorsRead, energyRead, relayStatusRead, warningFaultRead,
+		runStateRead, gridFrequencyCurrentRead, externalCTPowerHighRead,
+		internalGridPowerLowRead, internalGridPowerHighRead,
 	}
-	first := fetchReadPlan(true)
-	steady := fetchReadPlan(false)
-	if len(first) != 24 || len(steady) != 22 {
-		t.Fatalf("plan lengths = %d/%d, want 24/22", len(first), len(steady))
+	first := fetchReadPlan(true, false)
+	steady := fetchReadPlan(false, false)
+	if len(first) != 28 || len(steady) != 26 {
+		t.Fatalf("plan lengths = %d/%d, want 28/26", len(first), len(steady))
 	}
 	for index, id := range wantFirst {
 		if first[index] != id {
@@ -181,7 +182,7 @@ func TestFetchReadPlansAreExactAndUseUniqueSequences(t *testing.T) {
 func TestReadSessionWrongSecondResponsePoisonsAndStopsStream(t *testing.T) {
 	responses := [][]byte{
 		makeReadResponse(t, deviceTypeRead, []uint16{expectedDeviceType}),
-		makeReadResponse(t, upsPowerRead, []uint16{1}), // Wrong sequence for capabilityRead.
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}), // Wrong sequence for capabilityRead.
 	}
 	responseIndex := 0
 	conn := &memoryConn{responseForWrite: func() []byte {
@@ -196,7 +197,7 @@ func TestReadSessionWrongSecondResponsePoisonsAndStopsStream(t *testing.T) {
 	defer cancel()
 	session, err := openReadSession(ctx, func(context.Context, string, string) (net.Conn, error) {
 		return conn, nil
-	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true)
+	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestReadSessionWrongSecondResponsePoisonsAndStopsStream(t *testing.T) {
 	if _, err := session.readApproved(capabilityRead); err == nil || !strings.Contains(err.Error(), "sequence") {
 		t.Fatalf("second read error = %v", err)
 	}
-	if _, err := session.readApproved(upsPowerRead); err == nil || !strings.Contains(err.Error(), "poisoned") {
+	if _, err := session.readApproved(upsPowerHighRead); err == nil || !strings.Contains(err.Error(), "poisoned") {
 		t.Fatalf("third read error = %v", err)
 	}
 	if len(conn.writes) != 2 || conn.closeCount != 1 {
@@ -220,7 +221,7 @@ func TestReadSessionIncompletePlanFailsAndCloses(t *testing.T) {
 	defer cancel()
 	session, err := openReadSession(ctx, func(context.Context, string, string) (net.Conn, error) {
 		return conn, nil
-	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, false)
+	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +239,7 @@ func TestReadSessionStopsAfterShortWriteAndStaysPoisoned(t *testing.T) {
 	defer cancel()
 	session, err := openReadSession(ctx, func(context.Context, string, string) (net.Conn, error) {
 		return conn, nil
-	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true)
+	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +261,7 @@ func TestReadSessionRejectsOutOfOrderPlanBeforeWrite(t *testing.T) {
 	defer cancel()
 	session, err := openReadSession(ctx, func(context.Context, string, string) (net.Conn, error) {
 		return conn, nil
-	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true)
+	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +279,7 @@ func TestReadSessionCancellationInterruptsBlockedRead(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	session, err := openReadSession(ctx, func(context.Context, string, string) (net.Conn, error) {
 		return counted, nil
-	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true)
+	}, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,12 +326,12 @@ func TestReadSessionRequiresDeadlineAndValidatesPlanBeforeDial(t *testing.T) {
 		dialCalls++
 		return nil, errors.New("must not dial")
 	}
-	if _, err := openReadSession(context.Background(), dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true); err == nil || !strings.Contains(err.Error(), "absolute deadline") {
+	if _, err := openReadSession(context.Background(), dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true, false); err == nil || !strings.Contains(err.Error(), "absolute deadline") {
 		t.Fatalf("deadline error = %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := openReadSession(ctx, dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, 2, true); err == nil || !strings.Contains(err.Error(), "not approved") {
+	if _, err := openReadSession(ctx, dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, 2, true, false); err == nil || !strings.Contains(err.Error(), "not approved") {
 		t.Fatalf("plan validation error = %v", err)
 	}
 	if dialCalls != 0 {
@@ -345,7 +346,7 @@ func TestReadSessionCancellationDuringDialClosesReturnedConnectionOnce(t *testin
 		cancel()
 		return conn, nil
 	}
-	session, err := openReadSession(ctx, dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true)
+	session, err := openReadSession(ctx, dial, netip.MustParseAddr("192.168.50.25"), 8899, testLoggerSerial, modbusUnitID, true, false)
 	if !errors.Is(err, context.Canceled) || session != nil {
 		t.Fatalf("session/error = %#v/%v, want nil/context.Canceled", session, err)
 	}

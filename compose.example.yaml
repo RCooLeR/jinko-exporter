@@ -83,6 +83,12 @@ services:
       # MODBUS_LOGGER_SERIAL: "<LOGGER_SERIAL>"
       # MODBUS_DEVICE_SN: "<SAME_INVERTER_SERIAL_AS_CLOUD>"
       # MODBUS_UNIT_ID: "1"
+      # Cached raw firmware metadata is target-validated; false opts out.
+      # MODBUS_METADATA_ENABLED: "true"
+      # Optional bounded raw BMS/status evidence from existing normal reads.
+      # Requires modbus first and EXPORTER_LOG_LEVEL info/debug/trace.
+      # Does not add device/cloud requests or publish unverified sensors.
+      # MODBUS_VALIDATION_EVIDENCE_ENABLED: "true"
       # MODBUS_TIMEOUT: "5s"
 
       # Optional diagnostic correlation for a non-zero Modbus warning/fault
@@ -101,6 +107,15 @@ services:
       # SHELLY_GRID_LOAD_ENABLED: "true"
       # SHELLY_GRID_LOAD_URL: "http://192.0.2.50"
       # SHELLY_GRID_LOAD_EM_ID: "0"
+      # SHELLY_GRID_LOAD_TIMEOUT: "5s"
+
+      # Optional second Shelly before the stabilizers, separate from grid load.
+      # Keep disabled until the upstream meter is installed and configured.
+      # Both URLs are TEST-NET placeholders; use each meter's actual address.
+      # SHELLY_GRID_INPUT_ENABLED: "false"
+      # SHELLY_GRID_INPUT_URL: "http://192.0.2.60"
+      # SHELLY_GRID_INPUT_EM_ID: "0"
+      # SHELLY_GRID_INPUT_TIMEOUT: "5s"
     secrets:
       - jinko_bearer_token
       # - jinko_refresh_token

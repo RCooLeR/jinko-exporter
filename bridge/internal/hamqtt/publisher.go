@@ -68,14 +68,18 @@ type Publisher struct {
 
 	// Independent grid-load polling shares the MQTT connection and stable entity
 	// identity, but never changes inverter health or measurement timestamps.
-	independentGridLoad bool
-	inverterSnapshot    *model.Snapshot
-	inverterUp          bool
-	inverterDuration    time.Duration
-	inverterPublishedAt string
-	gridLoadSnapshot    *model.Snapshot
-	gridLoadUp          bool
-	gridLoadPublishedAt string
+	independentGridLoad  bool
+	independentGridInput bool
+	inverterSnapshot     *model.Snapshot
+	inverterUp           bool
+	inverterDuration     time.Duration
+	inverterPublishedAt  string
+	gridLoadSnapshot     *model.Snapshot
+	gridLoadUp           bool
+	gridLoadPublishedAt  string
+	gridInputSnapshot    *model.Snapshot
+	gridInputUp          bool
+	gridInputPublishedAt string
 }
 
 type metricEntity struct {
@@ -84,26 +88,29 @@ type metricEntity struct {
 }
 
 type statePayload struct {
-	Source              string              `json:"source"`
-	DeviceSN            string              `json:"device_sn"`
-	ParentSN            string              `json:"parent_sn"`
-	DeviceID            string              `json:"device_id"`
-	SiteID              string              `json:"site_id"`
-	CollectedAt         string              `json:"collected_at"`
-	PublishedAt         string              `json:"published_at"`
-	Up                  bool                `json:"up"`
-	Metrics             map[string]*float64 `json:"metrics"`
-	MetricCount         int                 `json:"metric_count"`
-	AlertMetrics        map[string]float64  `json:"alert_metrics"`
-	AlertDomain         string              `json:"alert_domain"`
-	AlertCount          int                 `json:"alert_count"`
-	AlertsKnown         bool                `json:"alerts_known"`
-	AlertsActive        bool                `json:"alerts_active"`
-	PollDurationSeconds float64             `json:"poll_duration_seconds"`
-	Meta                map[string]string   `json:"meta,omitempty"`
-	GridLoadUp          *bool               `json:"grid_load_up,omitempty"`
-	GridLoadCollectedAt string              `json:"grid_load_collected_at,omitempty"`
-	GridLoadPublishedAt string              `json:"grid_load_published_at,omitempty"`
+	Source               string              `json:"source"`
+	DeviceSN             string              `json:"device_sn"`
+	ParentSN             string              `json:"parent_sn"`
+	DeviceID             string              `json:"device_id"`
+	SiteID               string              `json:"site_id"`
+	CollectedAt          string              `json:"collected_at"`
+	PublishedAt          string              `json:"published_at"`
+	Up                   bool                `json:"up"`
+	Metrics              map[string]*float64 `json:"metrics"`
+	MetricCount          int                 `json:"metric_count"`
+	AlertMetrics         map[string]float64  `json:"alert_metrics"`
+	AlertDomain          string              `json:"alert_domain"`
+	AlertCount           int                 `json:"alert_count"`
+	AlertsKnown          bool                `json:"alerts_known"`
+	AlertsActive         bool                `json:"alerts_active"`
+	PollDurationSeconds  float64             `json:"poll_duration_seconds"`
+	Meta                 map[string]string   `json:"meta,omitempty"`
+	GridLoadUp           *bool               `json:"grid_load_up,omitempty"`
+	GridLoadCollectedAt  string              `json:"grid_load_collected_at,omitempty"`
+	GridLoadPublishedAt  string              `json:"grid_load_published_at,omitempty"`
+	GridInputUp          *bool               `json:"grid_input_up,omitempty"`
+	GridInputCollectedAt string              `json:"grid_input_collected_at,omitempty"`
+	GridInputPublishedAt string              `json:"grid_input_published_at,omitempty"`
 }
 
 func NewPublisher(cfg config.MQTTConfig) (*Publisher, error) {
@@ -351,7 +358,7 @@ func (p *Publisher) OnPollSuccess(snapshot *model.Snapshot, duration time.Durati
 		return nil
 	}
 
-	if p.independentGridLoad {
+	if p.independentMeters() {
 		previous, previousDuration, previousPublishedAt := p.inverterSnapshot, p.inverterDuration, p.inverterPublishedAt
 		p.inverterSnapshot = cloneStreamSnapshot(snapshot)
 		p.inverterUp = true
@@ -381,11 +388,14 @@ func (p *Publisher) publishSnapshotLocked(snapshot *model.Snapshot, duration tim
 		if err != nil {
 			return err
 		}
-		if p.independentGridLoad && p.gridLoadSnapshot != nil {
+		for _, stream := range p.gridMeterStreams() {
+			if !stream.enabled || *stream.snapshot == nil {
+				continue
+			}
 			// The v1 manifest stores all diagnostic metadata keys together. Learn
 			// independently owned Shelly keys even when the inverter is using a
 			// fallback source, without granting that fallback ordinary ownership.
-			gridSchema := &model.Snapshot{Source: p.primarySource, Meta: gridLoadMetadata(p.gridLoadSnapshot.Meta)}
+			gridSchema := &model.Snapshot{Source: p.primarySource, Meta: gridMeterMetadata((*stream.snapshot).Meta, stream.group)}
 			gridChanged, err := candidate.mergeSnapshot(gridSchema, p.primarySource)
 			if err != nil {
 				return err
@@ -431,7 +441,7 @@ func (p *Publisher) publishSnapshotLocked(snapshot *model.Snapshot, duration tim
 	p.cachedStateTopic = stateTopic
 	p.cachedState = append(p.cachedState[:0], payload...)
 	p.lastAvailability = availabilityOnline
-	if p.independentGridLoad && !p.inverterUp && !p.gridLoadUp {
+	if p.independentMeters() && !p.inverterUp && !p.gridLoadUp && !p.gridInputUp {
 		p.lastAvailability = availabilityOffline
 	}
 	p.offlinePublishPending = false
@@ -442,7 +452,7 @@ func (p *Publisher) publishSnapshotLocked(snapshot *model.Snapshot, duration tim
 		}
 		if err := p.publishString(msg.topic, msg.payload, true); err != nil {
 			p.logPublishSkipped(err, msg.topic)
-			if p.independentGridLoad {
+			if p.independentMeters() {
 				return err
 			}
 			return nil
@@ -455,14 +465,14 @@ func (p *Publisher) publishSnapshotLocked(snapshot *model.Snapshot, duration tim
 
 	if err := p.publishBytes(stateTopic, payload, p.cfg.Retain); err != nil {
 		p.logPublishSkipped(err, stateTopic)
-		if p.independentGridLoad {
+		if p.independentMeters() {
 			return err
 		}
 		return nil
 	}
 	if err := p.publishString(p.availabilityTopic, p.lastAvailability, p.cfg.Retain); err != nil {
 		p.logPublishSkipped(err, p.availabilityTopic)
-		if p.independentGridLoad {
+		if p.independentMeters() {
 			return err
 		}
 		return nil
@@ -482,7 +492,7 @@ func (p *Publisher) OnPollFailure(sourceName string, err error, duration time.Du
 	if p.closing || p.closed {
 		return nil
 	}
-	if p.independentGridLoad {
+	if p.independentMeters() {
 		p.inverterUp = false
 		if err := p.publishIndependentLocked(); err != nil {
 			p.markPublicationFailureLocked()
@@ -528,7 +538,7 @@ func (p *Publisher) onConnect(_ mqtt.Client) {
 	for _, msg := range p.cachedDiscovery {
 		if err := p.publishString(msg.topic, msg.payload, true); err != nil {
 			log.Warn().Err(err).Str("broker", p.cfg.Broker).Str("topic", msg.topic).Msg("failed to republish MQTT discovery after connect")
-			if p.independentGridLoad {
+			if p.independentMeters() {
 				p.markPublicationFailureLocked()
 			}
 			return
@@ -542,7 +552,7 @@ func (p *Publisher) onConnect(_ mqtt.Client) {
 	if p.cachedStateTopic != "" && len(p.cachedState) > 0 {
 		if err := p.publishBytes(p.cachedStateTopic, p.cachedState, p.cfg.Retain); err != nil {
 			log.Warn().Err(err).Str("broker", p.cfg.Broker).Str("topic", p.cachedStateTopic).Msg("failed to republish MQTT state after connect")
-			if p.independentGridLoad {
+			if p.independentMeters() {
 				p.markPublicationFailureLocked()
 			}
 			return
@@ -557,7 +567,7 @@ func (p *Publisher) onConnect(_ mqtt.Client) {
 	// values look healthy.
 	if err := p.publishString(p.availabilityTopic, availability, p.cfg.Retain); err != nil {
 		log.Warn().Err(err).Str("broker", p.cfg.Broker).Msg("failed to publish MQTT availability after connect")
-		if p.independentGridLoad {
+		if p.independentMeters() {
 			p.markPublicationFailureLocked()
 		}
 		return
@@ -733,6 +743,9 @@ func (p *Publisher) discoveryMessagesForSchema(metrics []model.Metric, metaKeys,
 		if p.independentGridLoad && isGridLoadMetaKey(stateKey) {
 			p.setEntityAvailability(payload, stateTopic, "{{ 'online' if value_json.get('grid_load_up', false) and value_json.get('meta', {}).get('"+stateKey+"') is not none else 'offline' }}")
 		}
+		if isGridInputMetaKey(stateKey) {
+			p.setEntityAvailability(payload, stateTopic, "{{ 'online' if value_json.get('grid_input_up', false) and value_json.get('meta', {}).get('"+stateKey+"') is not none else 'offline' }}")
+		}
 		payload["entity_category"] = "diagnostic"
 		payload["icon"] = "mdi:information"
 		if err := add("sensor", "meta_"+stateKey, payload); err != nil {
@@ -780,10 +793,15 @@ func (p *Publisher) discoveryMessagesForSchema(metrics []model.Metric, metaKeys,
 
 		payload := p.baseDiscoveryPayload(device, metricName(metric), device.ID+"_"+stateKey, stateTopic)
 		payload["value_template"] = "{{ value_json.get('metrics', {}).get('" + stateKey + "') }}"
-		if p.independentGridLoad {
+		// Persisted upstream entities must stay unavailable after this optional
+		// meter is disabled; an inverter success cannot supply its health flag.
+		if p.independentMeters() || isGridInputMetric(metric) {
 			flag := "up"
 			if isGridLoadMetric(metric) {
 				flag = "grid_load_up"
+			}
+			if isGridInputMetric(metric) {
+				flag = "grid_input_up"
 			}
 			p.setEntityAvailability(payload, stateTopic, "{{ 'online' if value_json.get('"+flag+"', false) and value_json.get('metrics', {}).get('"+stateKey+"') is not none else 'offline' }}")
 		}
@@ -861,14 +879,14 @@ func (p *Publisher) baseDiscoveryPayload(device deviceInfo, name string, uniqueI
 			"serial_number": device.SerialNumber,
 		},
 	}
-	if p.independentGridLoad {
+	if p.independentMeters() {
 		p.setEntityAvailability(payload, stateTopic, "{{ 'online' if value_json.get('up', false) else 'offline' }}")
 	}
 	return payload
 }
 
 func (p *Publisher) setEntityAvailability(payload map[string]any, stateTopic, valueTemplate string) {
-	if p.independentGridLoad && !strings.Contains(valueTemplate, "value_json.get('grid_load_up'") && !strings.Contains(valueTemplate, "value_json.get('up'") {
+	if p.independentMeters() && !strings.Contains(valueTemplate, "value_json.get('grid_load_up'") && !strings.Contains(valueTemplate, "value_json.get('grid_input_up'") && !strings.Contains(valueTemplate, "value_json.get('up'") {
 		valueTemplate = strings.Replace(valueTemplate, "'online' if ", "'online' if value_json.get('up', false) and ", 1)
 	}
 	delete(payload, "availability_topic")
@@ -962,17 +980,27 @@ func (p *Publisher) buildStatePayload(snapshot *model.Snapshot, duration time.Du
 		PollDurationSeconds: duration.Seconds(),
 		Meta:                p.discoveryStateMeta(snapshot.Meta),
 	}
-	if p.independentGridLoad {
+	if p.independentMeters() {
 		payload.Up = p.inverterUp
 		payload.PublishedAt = p.inverterPublishedAt
 		if snapshot.CollectedAt.IsZero() {
 			payload.CollectedAt = ""
 		}
-		gridUp := p.gridLoadUp
-		payload.GridLoadUp = &gridUp
-		payload.GridLoadPublishedAt = p.gridLoadPublishedAt
-		if p.gridLoadSnapshot != nil && !p.gridLoadSnapshot.CollectedAt.IsZero() {
-			payload.GridLoadCollectedAt = p.gridLoadSnapshot.CollectedAt.Format(time.RFC3339)
+		if p.independentGridLoad {
+			gridUp := p.gridLoadUp
+			payload.GridLoadUp = &gridUp
+			payload.GridLoadPublishedAt = p.gridLoadPublishedAt
+			if p.gridLoadSnapshot != nil && !p.gridLoadSnapshot.CollectedAt.IsZero() {
+				payload.GridLoadCollectedAt = p.gridLoadSnapshot.CollectedAt.Format(time.RFC3339)
+			}
+		}
+		if p.independentGridInput {
+			gridUp := p.gridInputUp
+			payload.GridInputUp = &gridUp
+			payload.GridInputPublishedAt = p.gridInputPublishedAt
+			if p.gridInputSnapshot != nil && !p.gridInputSnapshot.CollectedAt.IsZero() {
+				payload.GridInputCollectedAt = p.gridInputSnapshot.CollectedAt.Format(time.RFC3339)
+			}
 		}
 	}
 	return payload
@@ -989,6 +1017,10 @@ func (p *Publisher) metricOwnedByDiscoveryState(source, stateKey string, metric 
 	}
 	if strings.EqualFold(strings.TrimSpace(metric.Group), "grid_load") {
 		_, owned := p.discoveryState.GridLoadMetrics[stateKey]
+		return owned
+	}
+	if isGridInputMetric(metric) {
+		_, owned := p.discoveryState.GridInputMetrics[stateKey]
 		return owned
 	}
 	_, owned := p.discoveryState.OrdinaryMetrics[stateKey]
@@ -1193,7 +1225,7 @@ func metricSensorMeta(metric model.Metric) metricMeta {
 	switch strings.ToLower(strings.TrimSpace(metric.Group)) {
 	case "basic", "version", "status", "state", "alert":
 		meta.EntityCategory = "diagnostic"
-	case "grid_load":
+	case "grid_load", "grid_input":
 		if strings.EqualFold(strings.TrimSpace(metric.Key), "internal_temperature") {
 			meta.EntityCategory = "diagnostic"
 			meta.SuggestedDisplayPrecision = new(1)

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
 import { DETAILED_CARD_POSITIONS, type CardElementPositionModel, type PositionBoxModel } from "./position-models.ts";
+import { stabilizerArtwork, stabilizerGeometry } from "./stabilizer-layout.ts";
 
 type Box = [number, number, number, number];
 
@@ -23,6 +24,7 @@ interface Layout {
 }
 
 interface CardHarness {
+  _config: { stabilizers?: boolean };
   _isMobile: boolean;
   _layout(): Layout;
   _elementPosition(id: string): CardElementPositionModel;
@@ -186,6 +188,64 @@ test("detailed card overlays stay aligned to the desktop artwork", async (t) => 
       const node = textNode();
       card._applyTextBox(node, mobileLayout, [116, 870, 116, 43], "230/231/232 V", "value value--metric value--primary-metric", {}, true);
       assert.equal(node.style.getPropertyValue("font-size"), "6.5px");
+      card._isMobile = false;
+    });
+
+    await t.test("stabilizer panels, rows and values share non-overlapping desktop/mobile coordinates", () => {
+      for (const mobile of [false, true]) {
+        card._isMobile = mobile;
+        card._config.stabilizers = false;
+        const base = card._layout();
+        card._config.stabilizers = true;
+        const variant = card._layout();
+        const geometry = stabilizerGeometry(mobile);
+        assert.equal(variant.elements.length, base.elements.length + 1);
+        assert.equal(new Set(variant.elements.map((item) => item.id)).size, variant.elements.length);
+        for (const item of base.elements.filter((item) => !["grid", "parallel_grid_load"].includes(item.id))) {
+          assert.deepEqual(variant.elements.find((entry) => entry.id === item.id), item, item.id);
+          const [x, y, w, h] = item.bbox;
+          for (const [mx, my, mw, mh] of geometry.masks) {
+            assert.ok(x + w <= mx || mx + mw <= x || y + h <= my || my + mh <= y,
+              `${item.id}: new right-column mask must not clip existing artwork`);
+          }
+        }
+        for (const [index, panel] of geometry.panels.entries()) {
+          assertInside(panel.bbox, geometry.mask, panel.id);
+          assert.deepEqual(variant.elements.find((item) => item.id === panel.id), panel);
+          if (index) {
+            const previous = geometry.panels[index - 1]!.bbox;
+            assert.ok(previous[1] + previous[3] < panel.bbox[1]);
+          }
+          for (const row of panel.rows) {
+            assertInside(row.row_box, panel.bbox, `${panel.id}:${row.id}:row`);
+            const node = textNode();
+            card._applyTextBox(node, variant, row.value_box, "230 / 231 / 232 V", "value value--metric value--primary-metric", card._elementPosition(panel.id).rows?.[row.id] ?? {}, true);
+            assertInside(effectiveBox(node, variant), row.row_box, `${panel.id}:${row.id}:value`);
+          }
+        }
+        const svg = stabilizerArtwork(variant, mobile);
+        for (const panel of geometry.panels) assert.ok(svg.includes(`data-stabilizer-node="${panel.id}"`));
+        for (const link of geometry.links) assert.ok(svg.includes(`d="${link}"`));
+        for (const [index, link] of geometry.links.entries()) {
+          const path = [...svg.matchAll(/<path\s[^>]*>/g)].find(([tag]) => tag.includes(`d="${link}"`))![0];
+          assert.ok(path.includes('marker-end="url(#st-arrow)"'), "each connector needs an end arrow");
+          assert.equal(path.includes('marker-start="url(#st-arrow)"'), index !== 1,
+            "only the load connector is one-way; grid and inverter connectors are bidirectional");
+        }
+        const [gridX, gridY, , gridHeight] = geometry.panels[1]!.bbox;
+        const inverter = variant.elements.find((item) => item.id === "inverter")!;
+        assert.equal(geometry.links[2], `M ${gridX} ${gridY + gridHeight / 2} H ${mobile ? 630 : 1268}`,
+          "Grid to inverter must be a single horizontal segment");
+        assert.ok(gridY + gridHeight / 2 > inverter.bbox[1] && gridY + gridHeight / 2 < inverter.bbox[1] + inverter.bbox[3],
+          "horizontal arrow must meet the inverter side, not pass above or below it");
+        assert.match(geometry.links[1]!, /^M [\d.]+ [\d.]+ V [\d.]+$/, "Grid to load must be a single vertical segment");
+        assert.equal(geometry.panels[0]!.rows.length, 4);
+        assert.deepEqual(geometry.panels[0]!.rows.map((row) => row.id), ["voltage", "current", "power", "energy_today"]);
+        assert.match(svg, />Today<\/text>/);
+        assert.doesNotMatch(svg, />Total<\/text>|Import total|Export total/);
+        card._config.stabilizers = false;
+        assert.deepEqual(card._layout(), base, "returning to default restores exact original geometry");
+      }
       card._isMobile = false;
     });
 

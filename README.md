@@ -43,6 +43,15 @@ same-fetch reconnect path. See the
 and the [validation backlog](./bridge/docs/modbus-backlog.md) for intentionally
 unsupported hardware and operating domains.
 
+Raw firmware metadata is now target-validated and enabled by default through
+four fixed, cached reads, with MQTT/Home Assistant diagnostics and a bounded
+Prometheus info family. Set `MODBUS_METADATA_ENABLED=false` to opt out.
+The BMS mirror read adds charge voltage, discharge-current limit and measured
+BMS voltage, and supplies independent BMS SOC/temperature instead of inverter
+aliases. Unverified BMS-current encoding and zero-only fields stay unpublished.
+The core contains 97 numeric metrics; requests are 32 first / 26 subsequent
+with metadata, or 28 first / 26 subsequent without it.
+
 In `serve`, Jinko OAuth expiry tracking—and token rotation when refresh is
 configured—continues in the background even while Modbus wins every telemetry
 poll; healthy Modbus does not cause Jinko detail calls. Keep bootstrap tokens in
@@ -54,6 +63,12 @@ An optional Modbus alert-correlation worker can capture a non-zero raw warning
 or fault vector, query both cloud sources concurrently for diagnostic evidence,
 and send a dedicated Home Assistant notification. It never writes to the
 inverter or changes source selection.
+
+Passive BMS/status validation evidence can be enabled separately with
+`MODBUS_VALIDATION_EVIDENCE_ENABLED=true` (Modbus first; INFO logs enabled).
+It retains bounded raw-word milestones from existing normal polls without
+additional device/cloud requests or new sensors. See
+[configuration](./bridge/docs/configuration.md#modbus-options).
 
 ## Documentation
 

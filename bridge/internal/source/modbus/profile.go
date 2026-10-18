@@ -16,7 +16,7 @@ type readID byte
 
 const (
 	deviceTypeRead readID = iota + 1
-	upsPowerRead
+	upsPowerHighRead
 	gridVoltageRead
 	capabilityRead
 	batteryTemperatureRead
@@ -39,6 +39,14 @@ const (
 	generatorElectricalRead
 	outputPowerHighRead
 	relayStatusRead
+	externalCTPowerHighRead
+	internalGridPowerLowRead
+	internalGridPowerHighRead
+	protocolVersionRead
+	controllerVersionsRead
+	firmwareWordsRead
+	batteryInputCodeRead
+	bmsMirrorsRead
 )
 
 // approvedReadSpec is the immutable compile-time allowlist. Every range is
@@ -47,10 +55,20 @@ const (
 // contract. There is deliberately no generic register entry point.
 func approvedReadSpec(id readID) (readSpec, bool) {
 	switch id {
+	// Raw metadata validated on the 12 kW target in Stage 31. The explicit
+	// metadata option can disable these cached reads; there are no cloud aliases.
+	case protocolVersionRead:
+		return readSpec{name: "protocol-version-raw", sequence: 0x1F, start: 2, quantity: 1}, true
+	case controllerVersionsRead:
+		return readSpec{name: "controller-version-bytes", sequence: 0x20, start: 11, quantity: 1}, true
+	case firmwareWordsRead:
+		return readSpec{name: "firmware-raw-words", sequence: 0x21, start: 14, quantity: 5}, true
+	case batteryInputCodeRead:
+		return readSpec{name: "battery-input-raw-code", sequence: 0x22, start: 24, quantity: 1}, true
 	case deviceTypeRead:
 		return readSpec{name: "device-type", sequence: 0x01, start: 0x0000, quantity: 1}, true
-	case upsPowerRead:
-		return readSpec{name: "ups-load-power", sequence: 0x02, start: 0x0283, quantity: 1}, true
+	case upsPowerHighRead:
+		return readSpec{name: "ups-load-power-high-words", sequence: 0x1E, start: 0x02B8, quantity: 4}, true
 	case gridVoltageRead:
 		return readSpec{name: "grid-phase-voltages", sequence: 0x03, start: 0x0256, quantity: 3}, true
 	case capabilityRead:
@@ -61,6 +79,10 @@ func approvedReadSpec(id readID) (readSpec, bool) {
 		return readSpec{name: "battery-voltage-soc", sequence: 0x05, start: 0x024B, quantity: 2}, true
 	case batteryFlowRead:
 		return readSpec{name: "battery-power-current", sequence: 0x0A, start: 0x024E, quantity: 2}, true
+	case bmsMirrorsRead:
+		// Explicit FC03-only exception for the map's R/W BMS mirror bank.
+		// Only the nonzero-correlated subset is decoded; no writes are possible.
+		return readSpec{name: "bms-telemetry-mirrors", sequence: 0x23, start: 210, quantity: 9}, true
 	case energyRead:
 		return readSpec{name: "energy-counters", sequence: 0x08, start: 0x0202, quantity: 16}, true
 	case gridPowerLowRead:
@@ -89,6 +111,12 @@ func approvedReadSpec(id readID) (readSpec, bool) {
 		return readSpec{name: "run-state-block", sequence: 0x04, start: 0x01F4, quantity: 6}, true
 	case gridFrequencyCurrentRead:
 		return readSpec{name: "grid-frequency-current-block", sequence: 0x0B, start: 0x0261, quantity: 11}, true
+	case externalCTPowerHighRead:
+		return readSpec{name: "external-ct-power-high-words", sequence: 0x1A, start: 0x02C1, quantity: 4}, true
+	case internalGridPowerLowRead:
+		return readSpec{name: "internal-grid-power-low-words", sequence: 0x1B, start: 0x025C, quantity: 4}, true
+	case internalGridPowerHighRead:
+		return readSpec{name: "internal-grid-power-high-words", sequence: 0x1C, start: 0x02BC, quantity: 4}, true
 	case generatorPortModeRead:
 		return readSpec{name: "generator-port-mode", sequence: 0x16, start: 0x0085, quantity: 1}, true
 	case generatorEnergyRead:

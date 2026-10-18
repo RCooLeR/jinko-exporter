@@ -1,6 +1,7 @@
 import { ENTITY_KEYS, resolveEntities, valueFor as entityValueFor, type EntityKey, type EntityOverrides, type ResolvedEntityMap } from "../lib/entity-model";
 import { buildEnergyViewModel, fakeValueFor, type EnergyMetricKey } from "../lib/energy-view-model";
 import { HtmlCardRenderer, type EnergyCardVariant } from "../lib/html-card-renderer";
+import { entityInventorySignature } from "../lib/entity-inventory";
 import type { HomeAssistant, LovelaceCardConfig } from "../types/home-assistant";
 
 export interface EnergyArtCardConfig extends LovelaceCardConfig {
@@ -9,6 +10,8 @@ export interface EnergyArtCardConfig extends LovelaceCardConfig {
   show_entity_map?: boolean;
   battery_capacity_kwh?: number;
   battery_negative_is_charging?: boolean;
+  stabilizers?: boolean;
+  stabilizers_test_mirror_grid?: boolean;
   entities?: EntityOverrides;
 }
 
@@ -25,6 +28,7 @@ export abstract class EnergyArtCard extends HTMLElement {
   private hassValue?: HomeAssistant;
   private resolved: ResolvedEntityMap = {};
   private attemptedEntityKeys = new Set<EntityKey>();
+  private entityInventory = "";
   private hasRendered = false;
 
   protected abstract readonly variant: EnergyCardVariant;
@@ -40,6 +44,12 @@ export abstract class EnergyArtCard extends HTMLElement {
   setConfig(config: EnergyArtCardConfig): void {
     if (!config || typeof config !== "object") {
       throw new Error("Card configuration is required");
+    }
+    if (config.stabilizers !== undefined && typeof config.stabilizers !== "boolean") {
+      throw new Error("stabilizers must be a boolean");
+    }
+    if (config.stabilizers_test_mirror_grid !== undefined && typeof config.stabilizers_test_mirror_grid !== "boolean") {
+      throw new Error("stabilizers_test_mirror_grid must be a boolean");
     }
 
     this.config = {
@@ -91,6 +101,11 @@ export abstract class EnergyArtCard extends HTMLElement {
 
   private resolveEntities(force = false): void {
     if (!this.hassValue) return;
+    const inventory = entityInventorySignature(this.hassValue);
+    if (inventory !== this.entityInventory) {
+      this.entityInventory = inventory;
+      force = true;
+    }
     if (force) this.attemptedEntityKeys.clear();
 
     const keys = force
@@ -114,12 +129,16 @@ export abstract class EnergyArtCard extends HTMLElement {
   private render(): void {
     const config = this.activeConfig;
     const viewModel = buildEnergyViewModel((key) => this.readValue(key), {
-      batteryNegativeIsCharging: config.battery_negative_is_charging !== false
+      batteryNegativeIsCharging: config.battery_negative_is_charging !== false,
+      stabilizers: config.stabilizers === true,
+      stabilizersTestMirrorGrid: config.stabilizers_test_mirror_grid === true
     });
     const warning = !config.static && viewModel.missing.length ? `Missing critical sensors: ${viewModel.missing.join(", ")}` : "";
 
     this.renderer.render(this.variant, {
       title: config.title?.trim() ?? "",
+      stabilizers: config.stabilizers === true,
+      stabilizersTestMirrorGrid: config.stabilizers === true && config.stabilizers_test_mirror_grid === true,
       values: viewModel.values,
       flags: viewModel.flags,
       warning,

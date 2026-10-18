@@ -45,6 +45,7 @@ func openReadSession(
 	loggerSerial uint32,
 	unit byte,
 	includeProfileGates bool,
+	includeMetadata bool,
 ) (*readSession, error) {
 	if ctx == nil {
 		return nil, errors.New("modbus read session requires a context")
@@ -56,7 +57,7 @@ func openReadSession(
 		return nil, errors.New("modbus read session requires a dialer")
 	}
 
-	plan := fetchReadPlan(includeProfileGates)
+	plan := fetchReadPlan(includeProfileGates, includeMetadata)
 	requests := make([][]byte, len(plan))
 	for index, id := range plan {
 		request, err := buildReadRequest(loggerSerial, unit, id)
@@ -112,17 +113,20 @@ func openReadSession(
 	return session, nil
 }
 
-func fetchReadPlan(includeProfileGates bool) []readID {
-	plan := make([]readID, 0, 24)
+func fetchReadPlan(includeProfileGates, includeMetadata bool) []readID {
+	plan := make([]readID, 0, 32)
 	if includeProfileGates {
 		plan = append(plan, deviceTypeRead, capabilityRead)
+		if includeMetadata {
+			plan = append(plan, protocolVersionRead, controllerVersionsRead, firmwareWordsRead, batteryInputCodeRead)
+		}
 	}
 	return append(plan,
 		generatorPortModeRead,
 		generatorEnergyRead,
 		generatorElectricalRead,
-		upsPowerRead,
 		loadVoltageRead,
+		upsPowerHighRead,
 		directLoadPowerLowRead,
 		loadFrequencyRead,
 		gridVoltageRead,
@@ -135,11 +139,15 @@ func fetchReadPlan(includeProfileGates bool) []readID {
 		batteryTemperatureRead,
 		batteryVoltageSOCRead,
 		batteryFlowRead,
+		bmsMirrorsRead,
 		energyRead,
 		relayStatusRead,
 		warningFaultRead,
 		runStateRead,
 		gridFrequencyCurrentRead,
+		externalCTPowerHighRead,
+		internalGridPowerLowRead,
+		internalGridPowerHighRead,
 	)
 }
 

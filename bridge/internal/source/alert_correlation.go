@@ -52,6 +52,13 @@ type ModbusAlertSignature struct {
 	R558 uint16
 }
 
+// ModbusAlertBit identifies an active raw register bit, not a fault code or a
+// verified meaning, severity, or BMS alarm. Bit is zero-based (0 is the LSB).
+type ModbusAlertBit struct {
+	Register uint16 `json:"register"`
+	Bit      uint8  `json:"bit"`
+}
+
 func (s ModbusAlertSignature) values() [6]uint16 {
 	return [6]uint16{s.R553, s.R554, s.R555, s.R556, s.R557, s.R558}
 }
@@ -64,6 +71,21 @@ func (s ModbusAlertSignature) Active() bool {
 		}
 	}
 	return false
+}
+
+// ActiveBits returns independent raw evidence ordered by register, then bit.
+// It includes all set bits, even reserved/unknown ones, without interpreting
+// them. An inactive signature returns an empty, non-nil slice for JSON [].
+func (s ModbusAlertSignature) ActiveBits() []ModbusAlertBit {
+	active := make([]ModbusAlertBit, 0)
+	for index, value := range s.values() {
+		for bit := uint8(0); bit < 16; bit++ {
+			if value&(uint16(1)<<bit) != 0 {
+				active = append(active, ModbusAlertBit{Register: uint16(553 + index), Bit: bit})
+			}
+		}
+	}
+	return active
 }
 
 // ModbusAlertSignatureFromSnapshot accepts only a successful Modbus snapshot

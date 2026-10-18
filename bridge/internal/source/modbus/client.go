@@ -30,6 +30,7 @@ type Client struct {
 	dial         dialContextFunc
 	gate         chan struct{}
 	capabilities *profileCapabilities
+	metadata     map[string]string
 }
 
 func New(cfg config.ModbusConfig) (*Client, error) {
@@ -87,6 +88,10 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 
 	operationCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
+	var evidence *model.ModbusEvidence
+	if c.cfg.ValidationEvidenceEnabled {
+		evidence = &model.ModbusEvidence{StartedAt: time.Now().UTC()}
+	}
 	includeProfileGates := c.capabilities == nil
 	session, err := openReadSession(
 		operationCtx,
@@ -96,20 +101,34 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		c.loggerSerial,
 		modbusUnitID,
 		includeProfileGates,
+		c.cfg.MetadataEnabled,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = session.Close() }()
 
-	// Both target-profile gates run together and are cached only after both
-	// succeed. A failed or interrupted gate leaves no partially validated state.
+	// Cache both profile gates and any enabled metadata as one acquisition.
+	// A failed or interrupted acquisition leaves no partially validated state.
 	if includeProfileGates {
 		capabilities, err := c.validateProfile(session)
 		if err != nil {
 			return nil, err
 		}
+		var metadata map[string]string
+		if c.cfg.MetadataEnabled {
+			metadata, err = readMetadata(session)
+			if err != nil {
+				return nil, fmt.Errorf("read raw firmware metadata: %w", err)
+			}
+		}
+		// Commit the complete acquisition together. A failed metadata read must
+		// not cache the preceding profile gates or a partial metadata vector.
+		if err := operationCtx.Err(); err != nil {
+			return nil, err
+		}
 		c.capabilities = &capabilities
+		c.metadata = metadata
 	}
 
 	// Register 133 is mutable operating configuration rather than an inherent
@@ -140,15 +159,6 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode generator voltage and power: %w", err)
 	}
 
-	upsWords, err := session.readApproved(upsPowerRead)
-	if err != nil {
-		return nil, fmt.Errorf("read UPS load power: %w", err)
-	}
-	upsPower, err := decodeUPSPower(upsWords)
-	if err != nil {
-		return nil, fmt.Errorf("decode UPS load power: %w", err)
-	}
-
 	loadVoltageWords, err := session.readApproved(loadVoltageRead)
 	if err != nil {
 		return nil, fmt.Errorf("read load phase voltages: %w", err)
@@ -156,6 +166,14 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	loadVoltages, err := decodeLoadVoltages(loadVoltageWords)
 	if err != nil {
 		return nil, fmt.Errorf("decode load phase voltages: %w", err)
+	}
+	upsPowerHighWords, err := session.readApproved(upsPowerHighRead)
+	if err != nil {
+		return nil, fmt.Errorf("read UPS load power high words: %w", err)
+	}
+	upsPowers, err := decodeUPSPowers(loadVoltageWords, upsPowerHighWords)
+	if err != nil {
+		return nil, fmt.Errorf("decode UPS load powers: %w", err)
 	}
 
 	directLoadPowerLowWords, err := session.readApproved(directLoadPowerLowRead)
@@ -260,6 +278,21 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode battery power and current: %w", err)
 	}
 
+	if evidence != nil {
+		evidence.BMSWindow.StartedAt = time.Now().UTC()
+	}
+	bmsWords, err := session.readApproved(bmsMirrorsRead)
+	if evidence != nil {
+		evidence.BMSWindow.FinishedAt = time.Now().UTC()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read BMS telemetry mirrors: %w", err)
+	}
+	bmsMetrics, err := decodeBMSMirrors(bmsWords)
+	if err != nil {
+		return nil, fmt.Errorf("decode BMS telemetry mirrors: %w", err)
+	}
+
 	energyWords, err := session.readApproved(energyRead)
 	if err != nil {
 		return nil, fmt.Errorf("read energy counters: %w", err)
@@ -269,7 +302,13 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode energy counters: %w", err)
 	}
 
+	if evidence != nil {
+		evidence.RelayWindow.StartedAt = time.Now().UTC()
+	}
 	relayStatusWords, err := session.readApproved(relayStatusRead)
+	if evidence != nil {
+		evidence.RelayWindow.FinishedAt = time.Now().UTC()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read power and AC relay status: %w", err)
 	}
@@ -278,7 +317,13 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode power and AC relay status: %w", err)
 	}
 
+	if evidence != nil {
+		evidence.AlertWindow.StartedAt = time.Now().UTC()
+	}
 	warningFaultWords, err := session.readApproved(warningFaultRead)
+	if evidence != nil {
+		evidence.AlertWindow.FinishedAt = time.Now().UTC()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read warning/fault raw words: %w", err)
 	}
@@ -287,7 +332,13 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("decode warning/fault raw words: %w", err)
 	}
 
+	if evidence != nil {
+		evidence.RunStateWindow.StartedAt = time.Now().UTC()
+	}
 	runStateWords, err := session.readApproved(runStateRead)
+	if evidence != nil {
+		evidence.RunStateWindow.FinishedAt = time.Now().UTC()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read run-state block: %w", err)
 	}
@@ -304,10 +355,33 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode grid frequency and currents: %w", err)
 	}
+	externalCTPowerHighWords, err := session.readApproved(externalCTPowerHighRead)
+	if err != nil {
+		return nil, fmt.Errorf("read external-CT power high words: %w", err)
+	}
+	externalCT, err := decodeExternalCT(gridFrequencyCurrentWords, externalCTPowerHighWords)
+	if err != nil {
+		return nil, fmt.Errorf("decode external-CT currents and powers: %w", err)
+	}
+	internalGridPowerLowWords, err := session.readApproved(internalGridPowerLowRead)
+	if err != nil {
+		return nil, fmt.Errorf("read internal-grid power low words: %w", err)
+	}
+	internalGridPowerHighWords, err := session.readApproved(internalGridPowerHighRead)
+	if err != nil {
+		return nil, fmt.Errorf("read internal-grid power high words: %w", err)
+	}
+	internalGridPowers, err := decodeInternalGridPowers(internalGridPowerLowWords, internalGridPowerHighWords)
+	if err != nil {
+		return nil, fmt.Errorf("decode internal-grid powers: %w", err)
+	}
 
 	metricValues := []metricValue{
 		{key: "Pr1", value: c.capabilities.ratedPowerW},
-		{key: "UPS_P", value: upsPower},
+		{key: "UPS_P", value: upsPowers[3]},
+		{key: "C_P_L1", value: upsPowers[0]},
+		{key: "C_P_L2", value: upsPowers[1]},
+		{key: "C_P_L3", value: upsPowers[2]},
 		{key: "C_V_L1", value: loadVoltages[0]},
 		{key: "C_V_L2", value: loadVoltages[1]},
 		{key: "C_V_L3", value: loadVoltages[2]},
@@ -327,6 +401,14 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		{key: "G_P_L2", value: gridPowers[1]},
 		{key: "G_P_L3", value: gridPowers[2]},
 		{key: "PG_Pt1", value: gridPowers[3]},
+		{key: "CT1_P_E", value: externalCT.powersW[0]},
+		{key: "CT2_P_E", value: externalCT.powersW[1]},
+		{key: "CT3_P_E", value: externalCT.powersW[2]},
+		{key: "CT_T_E", value: externalCT.powersW[3]},
+		{key: "GS_A", value: internalGridPowers[0]},
+		{key: "GS_B", value: internalGridPowers[1]},
+		{key: "GS_C", value: internalGridPowers[2]},
+		{key: "GS_T", value: internalGridPowers[3]},
 		{key: "AV1", value: output.voltages[0]},
 		{key: "AV2", value: output.voltages[1]},
 		{key: "AV3", value: output.voltages[2]},
@@ -348,24 +430,32 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		{key: "T_DC", value: inverterTemperatures[0]},
 		{key: "AC_T", value: inverterTemperatures[1]},
 		{key: "B_T1", value: batteryTemperature},
-		{key: "BMST", value: batteryTemperature},
 		{key: "B_V1", value: batteryVoltage},
 		{key: "B_left_cap1", value: batterySOC},
-		{key: "BMS_SOC", value: batterySOC},
 		{key: "B_P1", value: batteryPower},
 		{key: "B_C1", value: batteryCurrent},
 		{key: "AC", value: float64(acRelayStatus)},
 	}
+	metricValues = append(metricValues, bmsMetrics...)
 	metricValues = append(metricValues, energyMetrics...)
 	metricValues = append(metricValues, generatorEnergyMetrics...)
 	metricValues = append(metricValues, generatorElectricalMetrics...)
-	metrics := make([]model.Metric, 0, len(metricValues)+len(warningFaultValues)+2)
+	metrics := make([]model.Metric, 0, len(metricValues)+len(warningFaultValues)+len(externalCT.currentsA)+2)
 	for _, item := range metricValues {
 		metric, err := canonicalMetric(item.key, item.value)
 		if err != nil {
 			return nil, err
 		}
 		metrics = append(metrics, metric)
+	}
+	for index, value := range externalCT.currentsA {
+		metrics = append(metrics, model.Metric{
+			Group: "grid",
+			Key:   fmt.Sprintf("JINKO_MODBUS_R%d_EXTERNAL_CT_L%d_CURRENT", 613+index, index+1),
+			Name:  fmt.Sprintf("External CT Current L%d", index+1),
+			Unit:  "A",
+			Value: value,
+		})
 	}
 	metrics = append(metrics, modbusWarningFaultMetrics(warningFaultValues)...)
 	metrics = append(metrics, model.Metric{
@@ -386,21 +476,39 @@ func (c *Client) Fetch(ctx context.Context) (*model.Snapshot, error) {
 		return nil, fmt.Errorf("complete fixed Modbus Fetch plan: %w", err)
 	}
 
+	meta := map[string]string{
+		"profile":          profileName,
+		"transport":        "solarman-v5-over-tcp",
+		"modbus_function":  "03",
+		"device_type_code": "0x0006",
+		"rated_power_w":    strconv.FormatFloat(c.capabilities.ratedPowerW, 'f', 0, 64),
+		"mppt_count":       strconv.FormatUint(uint64(c.capabilities.mpptCount), 10),
+		"phase_count":      strconv.FormatUint(uint64(c.capabilities.phaseCount), 10),
+	}
+	for key, value := range c.metadata {
+		meta[key] = value // fresh map: callers cannot mutate the cached metadata
+	}
+	collectedAt := time.Now().UTC()
+	if evidence != nil {
+		// Only retain successfully decoded words after the entire immutable
+		// request plan has completed. No transport frames or identity escape.
+		copy(evidence.BMSWords[:], bmsWords)
+		copy(evidence.RelayWords[:], relayStatusWords)
+		copy(evidence.AlertWords[:], warningFaultWords)
+		evidence.RunState = runStateWords[0]
+		evidence.FinishedAt = collectedAt
+	}
+	if err := operationCtx.Err(); err != nil {
+		return nil, err
+	}
 	return &model.Snapshot{
-		Source:      c.Name(),
-		DeviceSN:    strings.TrimSpace(c.cfg.DeviceSN),
-		ParentSN:    strings.TrimSpace(c.cfg.LoggerSerial),
-		CollectedAt: time.Now().UTC(),
-		Metrics:     metrics,
-		Meta: map[string]string{
-			"profile":          profileName,
-			"transport":        "solarman-v5-over-tcp",
-			"modbus_function":  "03",
-			"device_type_code": "0x0006",
-			"rated_power_w":    strconv.FormatFloat(c.capabilities.ratedPowerW, 'f', 0, 64),
-			"mppt_count":       strconv.FormatUint(uint64(c.capabilities.mpptCount), 10),
-			"phase_count":      strconv.FormatUint(uint64(c.capabilities.phaseCount), 10),
-		},
+		Source:         c.Name(),
+		DeviceSN:       strings.TrimSpace(c.cfg.DeviceSN),
+		ParentSN:       strings.TrimSpace(c.cfg.LoggerSerial),
+		CollectedAt:    collectedAt,
+		Metrics:        metrics,
+		Meta:           meta,
+		ModbusEvidence: evidence,
 	}, nil
 }
 

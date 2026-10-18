@@ -10,6 +10,26 @@ operating condition is unavailable. Missing support is safer than publishing a
 plausible-looking value under the wrong canonical key. Nothing in this list is
 an instruction to scan registers or change inverter settings.
 
+## Owner-selected scope (2026-10-08)
+
+The active work is BMS (MB-008), DC-link voltages (MB-015), and status/fault
+interpretation (MB-001, MB-016, and the status part of MB-017). Other entries
+remain recorded evidence gaps, not an instruction to expand this work.
+
+Reactive-power work is explicitly excluded by the owner, not merely waiting
+for a better sample. Do not prepare reactive register reads, promote reactive
+metrics, or make reactive support a completion/release condition. Historical
+reactive findings below are retained only to explain why no mapping was
+accepted. Existing cloud passthrough is unchanged; this scope decision does
+not remove existing entities or rewrite their values.
+
+Stage 33 adds default-off passive raw evidence collection for the selected
+BMS and status work. Once enabled, it copies only existing successful normal
+reads into bounded diagnostic logs, with acquisition timestamps and no extra
+device/cloud requests. Prefer these naturally occurring samples over asking
+the owner to trigger repeated one-shots. An independently timed cloud/display
+reference is still necessary; this collector alone closes no mapping gate.
+
 ## Validation Gates
 
 A new numeric field or a wider value domain is eligible for production only
@@ -48,12 +68,23 @@ device type `0x0006`, two MPPTs, three phases, and one of the allowlisted
 Each fetch uses one fresh connection and fixed FC03 reads under one absolute
 deadline. It has no write or arbitrary-register path.
 
-The current 80-metric core comprises 72 shared canonical metrics and eight
-Modbus-local diagnostics: the register-500 run state, the register-551 power
-switch state, and six raw warning/fault words. When Modbus establishes the
+The current 97-metric core comprises 86 shared canonical metrics and eleven
+Modbus-local fields: the register-500 run state, the register-551 power
+switch state, six raw warning/fault words, and three external-CT currents.
+The bounded CT and internal-power promotions record their evidence limits in
+validation Stages 26-27; outstanding live checks remain MB-006/MB-007 below.
+When Modbus establishes the
 primary failover surface, ordinary cloud-only fields are intentionally omitted
 after fallback rather than invented or emitted with competing labels. Shelly
 `grid_load` enrichment is independent of this Modbus core.
+
+Stage 31 validates the six raw metadata strings introduced in Stage 30 and
+enables their four cached reads by default. It also promotes five independent
+BMS mirrors (three new keys, two alias replacements). Counts are 32 first /
+26 subsequent, or 28 first / 26 subsequent with metadata explicitly disabled.
+The BMS voltage scale follows the HV table and matching target/cloud readings;
+the LV table's different scale is not claimed to agree. The unresolved fields
+within that block remain ignored, not converted into guessed values.
 
 Open equipment-dependent items do not widen the supported contract and do not
 become release blockers merely because the required equipment is unavailable.
@@ -62,7 +93,9 @@ out-of-contract states so priority fallback can run. MB-001 is an explicit
 acceptance-evidence debt rather than an unbounded decoder: its current
 map/schema-backed status handling is narrow, read-only, and fail-closed. Any
 implementation that claims one of the open domains is blocked until that item's
-validation gates are complete.
+validation gates are complete, except for the explicitly bounded Stage-26 CT
+and Stage-27 internal-power acceptance, and the exact Stage-31 HV BMS subset.
+These exceptions do not admit wider power values or the unresolved BMS fields.
 
 ## Open Work
 
@@ -83,6 +116,10 @@ relay and dry-contact bits needs separate observed state transitions; the
 current raw-U16 contract does not claim that every documented bit has been
 live-proven. The read must not toggle a relay or power state.
 
+The Stage-33 passive collector preserves both complete words, including R551
+upper bits, on the first accepted sample and bounded status transitions. Use
+its per-read window for the relay-state bracket; it does not assign bit names.
+
 ### MB-002 TODO: Exact Negative Inverter-Output Capture
 
 **Status:** current signed decoder is safe; exact negative magnitude correlation
@@ -95,23 +132,40 @@ verified negative output, preserve all four low/high pairs, and compare
 evidence may confirm the current `-32767..32767 W` domain; it must not
 automatically widen that coherence envelope.
 
-### MB-003 TODO: Full UPS/Backup-Load Power
+### MB-003 TODO: Wider UPS/Backup-Load Power Domain
 
-**Status:** blocked on a discriminating load sample and complete pair evidence.
+**Status:** phase/total publication is implemented in Stage 28; nonzero high
+words remain unsupported.
 
-Production currently reads register 643 separately and emits only its unsigned
-U16 value as canonical `UPS_P`. Within the `640 x 7` block, registers 640-643
-are not decoded as phase/total power; only voltage registers 644-646 are used.
-Compatible-map candidates pair low words 640-643 with high words 696-699, but
-the sign convention, phase order, relationship between register 643 and the
-joined total, and relationship to cloud `C_P_L1..3`/`UPS_P` must all be proven.
-Validation needs a nontrivial, preferably unbalanced backup-load sample plus
-zero and boundary tests. Until then, the separate U16 `UPS_P` is the entire
-supported UPS-power contract.
+Two compatible maps define unsigned low-first pairs 640/696, 641/697,
+642/698, and 643/699 at `1 W/count`. A complete supervised capture measured
+`34/72/295 W`, total `401 W`, with all four high words zero. The nearby
+identity-matched Solarman sample measured `34/71/292 W`, total `397 W`;
+the exact four-minute-32-second offset is recorded in Stage 28.
+
+Production reuses the existing `640 x 7` block and immediately reads
+`696 x 4`, replacing the redundant `643 x 1` scalar request. It emits distinct
+canonical `C_P_L1..3` and preserves the existing `UPS_P` identity. Every high
+word must remain zero; each low word retains its unsigned `0..65535 W`
+domain, including the previous total's full range. Total is its own measured
+pair, not a phase sum or an alias for `E_Puse_t1`.
+
+This is a bounded subset of the documented U32 format, not validation of
+nonzero high words or an atomic acquisition guarantee. Any nonzero high word
+rejects the complete Modbus snapshot for configured fallback. Wider-domain
+support requires independent nonzero-high correlation and an appropriate
+low/high acquisition-coherence strategy; do not increase load or change
+inverter settings merely to manufacture such a sample.
 
 ### MB-004 TODO: Lifetime PV Production (`Et_ge0`)
 
 **Status:** mapping not established.
+
+The 2026-10-07 follow-up found candidate low/high words 534/535 at
+`0.1 kWh/count` in both inspected maps (printed page 30). The low-word row
+explicitly says **reserved**. A counter name is not evidence that this firmware
+implements it: neither word was queried or promoted. Fresh cloud
+`Et_ge0=21610.50 kWh` does not resolve that reservation.
 
 Locate a lifetime-PV counter whose read-only address, width, word order, and
 scale agree across two compatible maps. Verify it against cloud `Et_ge0` over
@@ -123,6 +177,17 @@ counter merely because its value is numerically close to the cloud total.
 
 **Status:** blocked on a materially non-unity-power-factor sample.
 
+The follow-up distinguishes three surfaces. External-grid apparent-power
+candidate 620/709 is documented at `1 VA/count`; it is not load apparent power
+or inverter output apparent power. Register 621 is labelled grid-connected PF
+with scale 1000, but the HV map's access cell contains both `R` and `R/W`:
+whether this is measured PF or a configuration/setpoint value is unresolved.
+It is excluded from the prepared evidence read, and is not an alias for `P_F1`.
+Load apparent candidates 654/660 and internal apparent candidates 608/704 are
+marked reserved/undefined and remain excluded. Maps label output pair 637/695
+as apparent power but use W, whereas canonical `O_P` uses kVA; retain this unit
+ambiguity until independently resolved.
+
 Registers 637/695 are compatible-map candidates for joined output apparent
 power and are deliberately ignored today. Prove their word order, scale, and
 relationship to canonical `O_P` (`kVA`) while apparent and active power differ
@@ -131,41 +196,143 @@ not derive it from rounded active/apparent values or reuse a load-side power
 factor. Keep load apparent power and inverter output apparent power separate;
 canonical load apparent total `E_Suse_t1` needs its own proven source.
 
-### MB-006 TODO: External CT Current and Power
+### MB-006 TODO: Remaining External CT Acceptance Evidence
 
-**Status:** blocked on an installed/configured external CT and directional flow.
+**Status:** bounded publication implemented; exact export/current correlation
+and wider-power acquisition remain open, not a claim of full live validation.
 
-Compatible maps identify current candidates at registers 613-615 and active
-power low words at 616-619 with high words at 705-708. Validate the CT mode,
-phase ordering, current scale, signed import/export convention, low-first
-pairing, total semantics, and behavior during both flow directions. Only then
-map proven fields to `CT1_P_E`, `CT2_P_E`, `CT3_P_E`, and `CT_T_E`. The
-internal grid-current metrics at registers 610-612 are a different measurement
-surface and must not be relabelled as external CT.
+The owner confirmed the native CTs are installed, supplied an import cloud
+sample, and explicitly accepted signed CT publication on 2026-10-07. Stage 26
+records the successful two-request raw capture and its ten-minute cloud offset.
+Two compatible maps define currents 613-615 as `S16 * 0.01 A` and powers
+616-619/705-708 as low-first signed 32-bit watts. Production preserves that sign
+inside the conservative `-32767..32767 W` per-value coherence envelope, with no
+phase-sum equality requirement. The power keys are `CT1_P_E`, `CT2_P_E`,
+`CT3_P_E`, and `CT_T_E`; currents use distinct Modbus-local keys. Internal
+currents 610-612 still supply `G_C_L1..3` and are never relabelled as CT.
 
-### MB-007 TODO: Internal and Reactive Power Surfaces
+Retain a naturally occurring export capture with contemporaneous cloud/display
+CT values, plus an independently labelled CT-current comparison. User
+confirmation and synthetic signed test vectors do not replace these live
+checks. Do not infer a universal phase-sum invariant from the positive sample.
+The current wire-domain range is not a CT capacity rating. Power above the
+coherence envelope needs a separately reviewed coherent acquisition strategy
+and target evidence; do not widen a constant or cap it by inverter rated power.
 
-**Status:** mapping and discriminating live conditions missing.
+### MB-007 TODO: Internal Power Evidence (Reactive Work Excluded)
+
+**Status:** internal active-power publication implemented after positive target
+correlation; exact negative-flow capture remains acceptance-evidence debt.
+Reactive-power mapping is excluded from further work by the owner's
+2026-10-08 decision. The following reactive notes are historical evidence,
+not a pending read or implementation plan.
+
+A newer V105.1 map alone lists phase-reactive entries at 710-715, with low/high
+labels explicit only for phase A (710/711). Pairing 712/713 and 714/715 follows
+the table layout but remains an inference. Access/sign/unit columns are blank;
+the two compatible maps do not supply a matching contract. No read or
+publication is approved from that table alone. There is also no established
+direct register for `G16`, and
+no documented inverter-phase reactive mapping. Do not invent a total or reuse
+active/apparent registers.
+
+The owner's `18:43:51Z` cloud sample reports inverter reactive powers
+`6666/1813/9782 Var` alongside phase voltages `236.9/231.9/240.6 V` and currents
+`-0.2/-0.2/0.6 A`. Their magnitudes are inconsistent with those voltage/current
+readings, even allowing rounding. This is a reference-data anomaly, not valid
+calibration evidence; matching those cloud numbers would not establish a
+correct decoder.
+
+Reference: [V105.1, printed page 40](https://github.com/user-attachments/files/16798469/MODBUS.RTU.V105.1-20231006.pdf).
+
+Stage 27 records the supervised fixed FC03 `604 x 4`, then `700 x 4` read.
+V104-2 printed pages 32/37 and the SG01-HP3-AM2 HV map printed pages 33/38 agree
+on read-only signed low-first `1 W/count` pairs 604/700 through 607/703. High
+words start at **700**, not 701; reserved apparent-power candidates 608/704
+remain excluded. Production preserves the four independent `GS_*` values with
+canonical sign extension and the `-32767..32767 W` coherence envelope.
+
+Local powers `98/86/148 W`, total `332 W`, closely matched the owner's fresh
+`17:31:27Z` cloud `98/84/148 W`, total `330 W`, during a reported stable load.
+The sample is positive with all-zero high words, not proof of a negative raw
+pair or wide power domain. Retain a naturally occurring negative-flow capture
+with the corresponding cloud/display values; wider power needs coherent
+acquisition evidence. Do not infer a universal phase-sum equality or an alias
+between internal, external CT, and selected grid power.
 
 Cloud keys `GS_A`, `GS_B`, `GS_C`, and `GS_T` represent internal power, not the
-already supported grid phase/total powers. Reactive keys `G16`, `A_RP_PG`,
-`B_RP_PG`, `C_RP_PG`, `A_RP_INV`, `B_RP_INV`, and `C_RP_INV` likewise require
-their own documented register pairs, signs, scales, and totals. Validation needs
-a sample with material reactive power; zeros or near-unity power factor cannot
-distinguish aliases.
+selected grid phase/total powers. Reactive keys `G16`, `A_RP_PG`,
+`B_RP_PG`, `C_RP_PG`, `A_RP_INV`, `B_RP_INV`, and `C_RP_INV` have no accepted
+local mapping and are no longer planned. Do not derive them from active power
+or re-open their validation unless the owner changes this scope.
 
 ### MB-008 TODO: Extended BMS and Second-Battery Data
 
-**Status:** partially blocked on BMS protocol evidence; battery 2 requires
-matching hardware.
+**Status:** five BMS mirrors promoted in Stage 31; current encoding, zero-only
+fields and the other BMS/second-battery surfaces remain open.
 
-The safe aliases today are `BMS_SOC` from the already validated SOC register
-588 and `BMST` from the already validated temperature register 586. Do not
-alias `BMS_B_V1` to `B_V1` or `BMS_B_C1` to `B_C1`: the
+Stage 33 can retain the first complete BMS block plus first nonzero unresolved
+limits and high-bit R216 values during normal polling. Separate non-FFFF
+milestones prevent a possible sentinel from consuming the only useful sample.
+These are raw-word conditions, not a signed-current decoder. Match retained
+samples to independent cloud/display evidence before changing publication.
+
+The 2026-10-07 audit identified inverter-side BMS mirrors 210-218 and prepared
+a fixed raw-only `210 x 9` diagnostic. These are explicitly **R/W** registers;
+the proposed exception permits only FC03 reads, never a write or a production
+promotion by itself. Both maps agree on their meanings, but the HV map specifies
+`0.1 V` for 210/211/215 and `0.1 A` for 216, versus `0.01 V` and `1 A` in the
+LV tables. The third inspected map repeats the LV scales. Current signedness
+is unspecified in the mirror rows. SOC 214 is percent, temperature 217 is
+`(raw-1000)/10 C`, and limits 212/213/218 use A.
+
+The earlier 2026-10-07 cloud sample has BMS voltage `598.3 V`, current `-0.1 A`, temperature
+`23 C`, SOC `100%`, charge voltage `648 V`, and discharge current limit `22 A`.
+These are comparison candidates, not a local register capture. In particular,
+a future raw `FFFF` current alone must be distinguished from an unsupported
+sentinel before claiming a full signed-current contract.
+
+Register 219 has an unspecified unit; 224-226 omit detailed access/format
+information. Register 227 conflicts critically: battery hardware version in
+the LV table, LCD-upgrade test in the HV table. The separate 10000+ read-only
+bank describes battery device type `0x0700`, not this inverter's `0x0006`;
+its accessibility through this inverter is unproven. Extended pack layouts and
+battery2 mirrors also conflict. None of these ranges was queried. Lithium
+alarm/fault words 220/221 need their own raw-word contract and must not be
+equated with inverter warning/fault words.
+
+The 2026-10-08 supervised capture at `06:01:07Z` and identity-matched cloud
+sample collected at `06:02:38Z` agree on all nine observed mirror values under
+the HV scales. The accepted subset is R210 `BMS_C_V=648 V`, R213
+`BMS_D_C_L=22 A`, R214 `BMS_SOC=100%`, R215 `BMS_B_V1=615.2 V`, and R217
+`BMST=22 C`. The SOC/temperature values replace the former R588/R586 aliases;
+inverter `B_left_cap1` and `B_T1` still use their own registers. R213's
+nonnegative U16 whole-amp domain is a wire representation, not a battery rating
+or a claim that every extreme has been live-observed.
+
+R216 was `0001`, matching cloud `+0.1 A`. Negative current is a normal valid
+battery operating condition (also confirmed by the owner), but this capture
+does not prove its register encoding or any unsupported sentinel. R216 remains
+unpublished; it is neither forced positive nor made a rejection gate. R211,
+R212 and R218 were zero only and likewise remain unpublished pending nonzero
+correlation. Changes to these four ignored words do not invalidate the verified
+subset. The one exact `210 x 9` FC03 request is performed each fetch; protocol
+failures or invalid published-field domains reject the complete snapshot.
+
+The next owner-refreshed reference, collected at `2026-10-08T06:28:29Z`,
+still reports `BMS_B_C1=+0.10 A` and zero `BMS_D_V`, `BMS_C_C_L`, and
+`BMS_CC1`. No diagnostic read was spent repeating that already-known state.
+The next useful one-shot is the same fixed `210 x 9` block during a naturally
+occurring negative BMS-current sample, preferably not just -0.1 A, with fresh
+stopped-poller confirmation and explicit approval. Keep the raw word and
+closely timed cloud value; do not change settings or retry to obtain a desired
+sign. Zero-only limits remain deferred independently of the current result.
+
+Do not alias `BMS_B_V1` to `B_V1` or `BMS_B_C1` to `B_C1`: the
 [retained cloud fixture](../testdata/jinko_detail_response.json) contains
-different simultaneous values for each pair. BMS voltage/current,
+different simultaneous values for each pair. The remaining BMS current,
 charge/discharge limits, SOH, capacity, cycle/state data, cell diagnostics, and
-all `bms2` fields need addresses and live BMS correlation of their own. Jinko
+all `bms2` fields still need their own evidence. Jinko
 lithium-BMS alarm/fault keys are also not aliases for inverter-wide raw warning
 words 553-558.
 
@@ -263,6 +430,14 @@ relationship is explanatory evidence, not a mapping. Candidate addresses
 metadata rather than live voltage. Require two-map agreement and a live/cloud
 bracket before adding either key.
 
+The 2026-10-08 page-level recheck confirms the conflict: the HV map's printed
+pages 32-33 call 601/602 grid line voltages AB/BC at 0.1 V (601 is reserved),
+whereas V104-2 page 32 labels them battery-1/battery-2 negative current while
+still printing 0.1 V. Neither is an accepted HV_V/BN_V contract. The refreshed
+cloud pair `737/368 V` does not resolve addresses or scale. No DC-link probe
+or production read is added; this item needs a firmware-compatible protocol
+definition, not a search for a numerically similar raw value.
+
 ### MB-016 TODO: Warning/Fault Bit Meanings
 
 **Status:** raw U16 words are production-safe; per-bit decoding is pending.
@@ -281,9 +456,41 @@ display and firmware table to close this TODO. Until then, the bridge may alert
 on non-zero raw words but must not attach bit names, acknowledge a fault, or
 perform any automatic control action.
 
+Stage 32 adds exact zero-based active bit positions to the existing opt-in
+correlation logs and detected push, alongside the complete raw words. This
+makes a naturally occurring event easier to match with the display/cloud,
+without assigning names, fault codes, severity, or new sensor identities.
+It does not close this item: known nonzero events and firmware-specific
+meanings are still required. Relay-state evidence in MB-001 also remains open.
+
+Stage 33 additionally retains all six raw words alongside relay/run-state and
+BMS words on bounded naturally occurring status changes. This passive option
+does not enable the separate cloud correlation worker or HA notifications.
+
 ### MB-017 TODO: Remaining Status and Metadata Keys
 
-**Status:** intentionally excluded unless an exact contract is found.
+**Status:** six raw strings target-validated and enabled by default in Stage 31;
+all other status interpretations remain open.
+
+Both compatible maps (printed pages 4-5) agree on read-only protocol-version
+word 2, assistant/bootloader bytes in word 11, firmware words 14-18, and battery
+input code 24. The fixed raw-only diagnostic for `2 x 1`, `11 x 1`, `14 x 5`,
+`24 x 1` succeeded on the target at `2026-10-08T06:01:25Z`. It skips
+conflicting words 12/13 and unrelated adjacent configuration. Firmware must be
+represented as lossless text metadata, not decimal float values such as `104`
+for cloud version `0104`. A source string or metadata field is not automatically
+a canonical numeric sensor.
+
+Stage 30 implemented those exact four cached reads behind a default-off flag;
+Stage 31 validates them and changes the default to `MODBUS_METADATA_ENABLED=true`.
+An explicit false remains an opt-out. MQTT/HA diagnostic discovery
+and the six-key Prometheus info allowlist have explicit format, source-fallback,
+availability and independent-Shelly tests. No cloud-version aliases or battery
+count are inferred. Protocol failures, cancellation and unsupported R24 codes
+leave no partially accepted profile/metadata cache. Sanitized complete target
+responses are retained as parser/decoder regressions. This evidence confirms
+the raw strings on the 12 kW target, not all sibling models or cloud-composite
+aliases. R24 remains a raw code rather than an inferred battery count.
 
 Do not synthesize cloud `ST_PG1` or `INV_MOD1` from register 500, register 551,
 or the device-type gate: their code systems and meanings differ. Firmware and

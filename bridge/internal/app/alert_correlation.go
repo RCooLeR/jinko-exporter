@@ -63,6 +63,7 @@ func configureModbusAlertCorrelation(priority *source.Priority, cfg config.Confi
 func homeAssistantCorrelationCallback(notifier homeAssistantNotificationSender, notificationTag string) source.AlertCorrelationNotifyFunc {
 	return func(ctx context.Context, event source.AlertCorrelationEvent) error {
 		correlationID := alertCorrelationID(event.ObservedAt, event.Signature)
+		activeBits := event.Signature.ActiveBits()
 		if event.Kind == source.AlertCorrelationComplete {
 			log.Info().
 				Str("correlation_id", correlationID).
@@ -70,6 +71,7 @@ func homeAssistantCorrelationCallback(notifier homeAssistantNotificationSender, 
 				Str("cloud_statuses", formatCorrelationStatuses(event.Sources)).
 				Time("observed_at", event.ObservedAt.UTC()).
 				Interface("modbus_words", correlationWords(event.Signature)).
+				Interface("modbus_active_bits", activeBits).
 				Msg("Modbus warning/fault cloud correlation completed")
 			return nil
 		}
@@ -79,6 +81,7 @@ func homeAssistantCorrelationCallback(notifier homeAssistantNotificationSender, 
 			log.Error().
 				Err(err).
 				Str("correlation_id", correlationID).
+				Interface("modbus_active_bits", activeBits).
 				Msg("rejected invalid Modbus alert correlation event")
 			return err
 		}
@@ -87,13 +90,15 @@ func homeAssistantCorrelationCallback(notifier homeAssistantNotificationSender, 
 			Str("correlation_id", correlationID).
 			Str("event", string(event.Kind)).
 			Time("observed_at", event.ObservedAt.UTC()).
-			Interface("modbus_words", correlationWords(event.Signature))
+			Interface("modbus_words", correlationWords(event.Signature)).
+			Interface("modbus_active_bits", activeBits)
 		if event.Kind == source.AlertCorrelationDetected {
 			logEvent = log.Warn().
 				Str("correlation_id", correlationID).
 				Str("event", string(event.Kind)).
 				Time("observed_at", event.ObservedAt.UTC()).
-				Interface("modbus_words", correlationWords(event.Signature))
+				Interface("modbus_words", correlationWords(event.Signature)).
+				Interface("modbus_active_bits", activeBits)
 		}
 		logEvent.Msg("processing Modbus warning/fault correlation event")
 
@@ -102,12 +107,14 @@ func homeAssistantCorrelationCallback(notifier homeAssistantNotificationSender, 
 				Err(err).
 				Str("correlation_id", correlationID).
 				Str("event", string(event.Kind)).
+				Interface("modbus_active_bits", activeBits).
 				Msg("Home Assistant Modbus alert notification failed")
 			return err
 		}
 		log.Info().
 			Str("correlation_id", correlationID).
 			Str("event", string(event.Kind)).
+			Interface("modbus_active_bits", activeBits).
 			Msg("Home Assistant Modbus alert notification delivered")
 		return nil
 	}
@@ -121,7 +128,7 @@ func alertCorrelationNotification(event source.AlertCorrelationEvent, notificati
 	switch event.Kind {
 	case source.AlertCorrelationDetected:
 		notification.Title = "Inverter warning/fault detected"
-		notification.Message = "A complete Modbus snapshot reported non-zero raw warning/fault words: " + words + ". Jinko and Solarman correlation is running."
+		notification.Message = "A complete Modbus snapshot reported non-zero raw warning/fault words: " + words + ". Jinko and Solarman correlation is running. Active raw bits (zero-based; fault names/meanings unverified): " + formatCorrelationActiveBits(event.Signature) + "."
 	case source.AlertCorrelationRecovered:
 		notification.Title = "Inverter warning/fault cleared"
 		notification.Message = "A complete Modbus snapshot reported R553-R558 as zero."
@@ -139,6 +146,7 @@ func modbusAlertNotificationTag(deviceSN, secret string) string {
 
 func recordAlertCorrelationEvidence(_ context.Context, evidence source.AlertCorrelationEvidence) error {
 	correlationID := alertCorrelationID(evidence.ObservedAt, evidence.Signature)
+	activeBits := evidence.Signature.ActiveBits()
 	for _, sourceEvidence := range evidence.Sources {
 		metrics := make([]correlationLogMetric, len(sourceEvidence.Metrics))
 		for index, metric := range sourceEvidence.Metrics {
@@ -166,6 +174,7 @@ func recordAlertCorrelationEvidence(_ context.Context, evidence source.AlertCorr
 			Bool("metrics_truncated", sourceEvidence.Truncated).
 			Str("metrics_sha256", sourceEvidence.MetricsSHA256).
 			Interface("modbus_words", correlationWords(evidence.Signature)).
+			Interface("modbus_active_bits", activeBits).
 			Interface("metrics", metrics)
 		if !sourceEvidence.CollectedAt.IsZero() {
 			logEvent = logEvent.Time("collected_at", sourceEvidence.CollectedAt.UTC())
@@ -197,6 +206,18 @@ func formatCorrelationWords(signature source.ModbusAlertSignature) string {
 		words.R557, words.R557,
 		words.R558, words.R558,
 	)
+}
+
+func formatCorrelationActiveBits(signature source.ModbusAlertSignature) string {
+	bits := signature.ActiveBits()
+	if len(bits) == 0 {
+		return "none"
+	}
+	labels := make([]string, len(bits))
+	for index, bit := range bits {
+		labels[index] = fmt.Sprintf("R%d.b%d", bit.Register, bit.Bit)
+	}
+	return strings.Join(labels, ", ")
 }
 
 func formatCorrelationStatuses(summaries []source.AlertCorrelationSourceSummary) string {

@@ -10,7 +10,7 @@ permissions:
 
 env:
   GOTOOLCHAIN: local
-  STATICCHECK_VERSION: v0.8.1
+  STATICCHECK_VERSION: v0.8.2
   GOVULNCHECK_VERSION: v1.7.0
 
 jobs:

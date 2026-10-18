@@ -32,6 +32,14 @@ can be inferred.
 There is no raw-register option and no sequential scan of undocumented,
 reserved, configuration, or control addresses.
 
+Stage 26 records a separate, owner-accepted bounded CT promotion: two-map signed
+semantics, a successful complete positive capture, and nearby but non-synchronous
+cloud values support publication. Exact negative-flow and independent CT-current
+live correlation remain explicit acceptance-evidence debt, not completed gates.
+Stage 27 separately records positive internal-power correlation and bounded
+map-backed signed handling, with exact negative-flow correlation still open.
+Neither exception extends to other fields or wider power domains.
+
 This ledger records completed or explicitly bounded production evidence. See
 the [Modbus validation backlog](./modbus-backlog.md) for open acceptance reads,
 hardware-dependent domains, intentionally excluded candidates, and the gates
@@ -43,7 +51,7 @@ required before any of them can be promoted.
 | --- | --- | --- |
 | `0x0000 x 1` | Live verified, production canary | Device type must be `0x0006`. |
 | `0x0256 x 3` | Live verified, production | Grid L1/L2/L3 voltage. |
-| `0x0283 x 1` (`643`) | Live verified, production narrow scalar | A separate one-register read emits `UPS_P` as unsigned U16 watts. It is not treated as a low word in production; full phase/total pairing remains backlog work. |
+| `0x0283 x 1` (`643`) | Historical verified scalar; retired in Stage 28 | The redundant scalar request is no longer allowlisted. `UPS_P` keeps its identity and unsigned range, now using 643 from `640 x 7` paired with 699. |
 | `0x01F4 x 6` (`500-505`) | Live verified; register 500 production, registers 501-505 excluded | Run state is promoted source-locally; the energy/time meanings remain rejected after failing cloud correlation. |
 | `0x024B x 2` (`587-588`) | Live verified, production | Battery-1 voltage and SOC; the validated SOC is exposed as both canonical `B_left_cap1` and `BMS_SOC`. |
 | `0x024A x 1` (`586`) | Live verified, production | Battery-1 temperature; one decoded value supplies canonical `B_T1` and `BMST`. |
@@ -57,12 +65,15 @@ required before any of them can be promoted.
 | `0x0218 x 4` (`536-539`) | Live zero verified, production zero-domain only | Emits generator daily runtime, daily energy, and total energy only as raw-backed zeros; any nonzero word rejects Modbus. |
 | `0x0295 x 11` (`661-671`) | Live zero verified, production zero-domain only | Emits generator phase voltage/power and total-power canonical keys only as raw-backed zeros; any nonzero word rejects Modbus. |
 | `0x024E x 2` (`590-591`) | Live verified, production | Battery power and Battery-1 current. |
-| `0x0261 x 11` (`609-619`) | Live/cloud verified; frequency and internal currents production, registers 613-619 excluded | `PG_F1` and `G_C_L1..3` are promoted; external CT currents and incomplete power low words remain ignored. |
+| `0x0261 x 11` (`609-619`) | Frequency/internal currents live verified; external CT bounded promotion, Stage 26 | `PG_F1`, `G_C_L1..3`, separate external currents 613-615, and CT active-power low words 616-619 paired with 705-708. |
+| `0x02C1 x 4` (`705-708`) | Positive raw capture verified; signed map-backed production, Stage 26 | External CT power high words; canonical sign extension and conservative `-32767..32767 W` per-value coherence envelope, independent total. Exact export/current correlation remains MB-006. |
+| `0x025C x 4` (`604-607`) and `0x02BC x 4` (`700-703`) | Positive target/cloud correlation; bounded signed map-backed production, Stage 27 | Internal active power `GS_A/B/C/T`, signed low-first W, canonical sign extension, `-32767..32767 W` per-value coherence envelope and independent total. Exact negative-flow capture remains MB-007. |
 | `0x026E x 4` (`622-625`) | Live verified, conservative signed production with `687-690` | Selected grid phase/total power low words; paired values must remain inside the `-32767..32767 W` torn-read coherence envelope. |
 | `0x02AF x 4` (`687-690`) | Live verified, conservative signed production with `622-625` | Selected grid phase/total power high words; signed import/export is confirmed and only canonical sign extension is accepted. |
 | `0x0273 x 12` (`627-638`) | Scalars live verified; active power conservative signed production with `691-694` | Output voltage/current/frequency and gated active-power low words are promoted; apparent candidate 637 remains ignored. |
 | `0x02B3 x 5` (`691-695`) | Positive pairing live correlated; `R691=0xFFFF` later observed; conservative signed production | Active highs 691-694 must be `0x0000` or `0xFFFF` and pair with 633-636 inside the signed coherence envelope; apparent candidate 695 remains ignored. |
-| `0x0280 x 7` (`640-646`) | Load-voltage scalars live/cloud verified, production; power fields excluded | Only load-side L1/L2/L3 voltage at 644-646 is promoted. |
+| `0x0280 x 7` (`640-646`) | Load-voltage scalars verified; UPS phase/total power promoted in Stage 28 | 644-646 emit load voltage; 640-643 pair with 696-699 as unsigned UPS power, only with zero high words. |
+| `0x02B8 x 4` (`696-699`) | Complete zero-high target capture and nearby cloud correlation, Stage 28 | UPS high words immediately follow `640 x 7`. All must be zero; each phase and independent total accepts `0..65535 W`. Nonzero highs remain MB-003. |
 | `0x028A x 4` (`650-653`) | Positive live/cloud correlation; `R656=0xFFFF` later observed; conservative signed phases with `656-658` | Low phase words emit canonical signed `LPP_A/B/C` inside the `±32767 W` coherence domain; dedicated total low word emits independent non-negative `E_Puse_t1`. |
 | `0x028F x 5` (`655-659`) | Load frequency and direct-load high-word pairing production | Register 655 emits frequency; phase highs 656-658 must be canonical `0000/FFFF`, while total high 659 must remain zero. |
 
@@ -542,7 +553,9 @@ selected scalars were compared with fresh cloud/display values.
   `C_V_L3` at `0.1 V/count`. Registers 640-643 are ignored by this block's
   voltage decoder. Register 643 is also read independently by the existing
   `643 x 1` request and emitted as the narrow unsigned-U16 `UPS_P`; possible
-  full phase/total pairing with high words 696-699 remains unimplemented.
+  full phase/total pairing with high words 696-699 was not implemented at
+  this stage. Stage 28 supersedes that boundary with distinct UPS phase/total
+  publication in the bounded zero-high unsigned domain.
 - The `655 x 5` read emits only register 655 as `L_F` at `0.01 Hz/count`.
   At this Stage 10 checkpoint, registers 656-659 were retained but not yet
   paired with their direct-load power low words.
@@ -1149,3 +1162,524 @@ was current and then fell back successfully to Jinko; the following Modbus poll
 succeeded. Because the deadline covers connection setup and every preceding
 request, that log cannot attribute the delay specifically to either register.
 It changes neither the allowlist nor the no-retry/no-partial-snapshot policy.
+
+## Stage 26: 2026-10-07 External CT Current and Signed Power
+
+The owner confirmed the native CTs are connected directly to the inverter and
+stopped the normal bridge before the supervised read. A separate, offline-tested
+probe sent exactly unit-1 FC03 `613 x 7`, then `705 x 4`, on one connection under
+one six-second absolute deadline. Both responses passed V5 framing, sequence,
+identity, status, checksum, byte-count and Modbus CRC checks. No retry, reconnect,
+scan, control request, container restart, or inverter-setting change occurred.
+
+The capture ran from `2026-10-07T17:10:30.486342Z` to
+`2026-10-07T17:10:30.7214029Z`. Identity-bearing full frames remain private;
+the complete telemetry words are retained here without logger identity:
+
+```text
+613=0039 614=003E 615=0064
+616=0065 617=0062 618=00AC 619=0173
+705=0000 706=0000 707=0000 708=0000
+```
+
+Two compatible protocol maps mark these addresses read-only and agree on
+external currents as signed 16-bit `0.01 A/count`, and external active power as
+signed 32-bit `1 W/count`, with low words 616-619 paired respectively with
+high words 705-708. Thus the capture decodes to currents `0.57/0.62/1.00 A`
+and powers `101/98/172 W`, with independent total `371 W`.
+
+The owner-supplied browser detail export had collection time
+`2026-10-07T17:00:26Z` and matching inverter/logger identities. Its external CT
+powers were `103/99/170 W`, total `372 W`; selected grid powers matched those
+CT values, while internal powers were `99/86/164 W`, total `349 W`. This is
+useful positive-flow corroboration, **not a synchronous bracket**: the cloud
+sample is ten minutes and four seconds older. It contains no separately named
+CT-current points; generic `G_C_L1..3` must not be used as independent proof of
+613-615. Display ordering fields in that export are not register addresses.
+
+The owner explicitly confirmed that negative CT power is valid and requested
+publication without waiting for an export sample. Production therefore accepts
+the documented signed contract with a conservative acquisition bound. This is
+an explicit acceptance-evidence exception: all live high words here were zero,
+and neither a negative raw CT pair nor independent CT-current calibration was
+observed. Those checks remain MB-006. Synthetic negative vectors prove code
+behavior, not an additional live observation.
+
+Production reuses 613-619 from the existing `609 x 11` response and appends only
+the fixed sequence-`0x1A` `705 x 4` request immediately afterward. Each high word
+must be `0000` or `FFFF`; the joined signed value must be within
+`-32767..32767 W`. This symmetric coherence envelope rejects mismatched halves
+across a zero crossing, not legitimate negative power; it is not an inverter
+rating or CT capacity. Wider values reject the whole snapshot and invoke the
+configured fallback. CT total is read independently: the observed phase sum
+does not establish a universal equality rule. No absolute-value conversion,
+zero replacement, voltage alias, or calculated total is introduced.
+
+The four powers retain canonical keys `CT1_P_E`, `CT2_P_E`, `CT3_P_E`, and
+`CT_T_E`. Currents retain the documented S16 wire range at `0.01 A/count`, with
+source-local keys `JINKO_MODBUS_R613_EXTERNAL_CT_L1_CURRENT`,
+`JINKO_MODBUS_R614_EXTERNAL_CT_L2_CURRENT`, and
+`JINKO_MODBUS_R615_EXTERNAL_CT_L3_CURRENT`, group `grid`, unit `A`.
+The internal-current keys `G_C_L1..3` and all existing entities remain unchanged.
+
+The core now contains **87 metrics: 76 canonical and 11 source-local**. The
+first fetch sends **25** fixed FC03 requests; subsequent fetches send **23**,
+with one connection and one absolute deadline each. Offline tests lock exact
+new frames, order/counts, signed boundaries, zero-crossing tears, independent
+total, no partial snapshot, and downstream signed publication/fallback behavior.
+
+References:
+
+- [Three-phase LV/HV V104-2, printed pages 33 and 37-38](https://hybrydaplus.pl/wp-content/uploads/2024/09/MODBUS.RTU_3PLV_HV_Protocol_V104-2.pdf)
+- [SG01-HP3-AM2 HV V104.3.1, printed pages 33 and 38](https://forum.iobroker.net/assets/uploads/files/1706097675773-modbusrtu%E4%B8%89%E7%9B%B8%E9%AB%98%E5%8E%8B%E5%82%A8%E8%83%BD%E9%80%9A%E4%BF%A1%E8%A7%84%E7%BA%A6v104-%E9%AB%98%E5%8E%8B-3-1-1111_sg01-hp3-am2.pdf)
+
+## Stage 27: 2026-10-07 Internal Grid Active Power
+
+Following the CT expansion, the owner requested the next group, refreshed the
+browser detail export, and reported that the load was practically unchanged.
+The two maps cited in Stage 26 agree on internal active-power low words 604-607
+and high words 700-703 (V104-2 printed pages 32/37; HV map pages 33/38): four
+read-only signed low-first 32-bit pairs, `1 W/count`. Register 700 is the first
+high word; neither reserved apparent-power word 608 nor 704 is included.
+
+With the normal bridge still stopped, the offline-tested and independently
+reviewed probe sent exactly unit-1 FC03 `604 x 4` (sequence `1B`), then
+`700 x 4` (sequence `1C`) on one connection under one six-second absolute
+deadline. Both complete 40-byte responses passed V5 framing, identity, sequence,
+status, checksum, nested Modbus byte count and CRC validation. No retry,
+reconnect, scan, settings write, or service restart occurred.
+
+Capture interval: `2026-10-07T17:36:54.5475214Z` to
+`2026-10-07T17:36:54.7889831Z`. Identity-bearing frames remain private; complete
+redacted telemetry words are:
+
+```text
+604=0062 605=0056 606=0094 607=014C
+700=0000 701=0000 702=0000 703=0000
+```
+
+| Canonical key | Local power (W) | Cloud power (W) |
+| --- | ---: | ---: |
+| `GS_A` | 98 | 98 |
+| `GS_B` | 86 | 84 |
+| `GS_C` | 148 | 148 |
+| `GS_T` | 332 | 330 |
+
+The matching-identity cloud sample was collected at `17:31:27Z`, five minutes
+and 27 seconds earlier. Only L2 and total differ, by `2 W`. The owner confirmed
+a stable load, but this is still a non-atomic comparison, not simultaneous
+sampling. That same cloud sample had external CT powers `102/98/154 W`, total
+`354 W`, independently supporting the distinction between internal and CT
+surfaces. Internal currents remain their existing 610-612 fields.
+
+Production adds only these two fixed reads after the existing CT high-word
+read and emits canonical `grid/GS_A`, `GS_B`, `GS_C`, and `GS_T` in W. Each
+power preserves the documented sign and accepts only canonical `0000/FFFF`
+high words and joined values inside `-32767..32767 W`. This is an acquisition
+coherence guard, not an inverter or pass-through rating. Total remains an
+independent measurement: no equality gate or calculated replacement is added.
+A bad pair or response rejects the entire snapshot for configured fallback.
+
+Positive address/scale/phase/total correlation is supported by this capture.
+Signed extension is map-backed and offline-tested; a live negative pair was
+not observed. That narrower acceptance-evidence debt remains MB-007, together
+with any future wider-domain acquisition work. It is not a claim that reactive
+power, apparent power, or all operating conditions have been validated.
+
+The complete core now contains **91 metrics: 80 canonical and 11 source-local**.
+The first fetch sends **27** fixed requests, subsequent fetches **25**, still
+one connection and one absolute deadline each. Golden protocol, signed-boundary,
+independent-total, exact read-order/count, terminal-failure and downstream
+publication tests cover the new group.
+
+## Stage 28: 2026-10-07 UPS/Backup Phase and Total Power
+
+The next requested group was UPS/backup load. Both compatible maps agree on
+read-only low words 640-643 and high words 696-699, ordered A/B/C/total at
+`1 W/count`. Unlike the signed CT and internal-grid pairs, both maps mark
+these UPS halves **U16**. The documented joined format is unsigned low-first
+U32; production deliberately accepts only the zero-high subset below.
+
+References, visually inspected at the relevant complete pages:
+
+- [Three-phase LV/HV V104-2, printed pages 34 and 37](https://hybrydaplus.pl/wp-content/uploads/2024/09/MODBUS.RTU_3PLV_HV_Protocol_V104-2.pdf)
+- [SG01-HP3-AM2 HV V104.3.1, printed pages 35 and 37-38](https://forum.iobroker.net/assets/uploads/files/1706097675773-modbusrtu%E4%B8%89%E7%9B%B8%E9%AB%98%E5%8E%8B%E5%82%A8%E8%83%BD%E9%80%9A%E4%BF%A1%E8%A7%84%E7%BA%A6v104-%E9%AB%98%E5%8E%8B-3-1-1111_sg01-hp3-am2.pdf)
+
+With the normal bridge still owner-stopped, an offline-tested and independently
+reviewed probe sent exactly unit-1 FC03 `640 x 4`, sequence `1D`, followed by
+`696 x 4`, sequence `1E`, on one connection with one absolute six-second
+deadline. Both complete 40-byte responses passed all V5 and nested Modbus
+framing, identity, sequence, status, checksum, count, and CRC checks. No retry,
+reconnect, scan, acknowledgement, settings write, or service restart occurred.
+
+Capture interval: `2026-10-07T18:17:21.2050275Z` to
+`2026-10-07T18:17:21.5108766Z`. Complete identity-bearing frames remain private;
+the redacted telemetry words are:
+
+```text
+640=0022 641=0048 642=0127 643=0191
+696=0000 697=0000 698=0000 699=0000
+```
+
+| Canonical key | Local UPS power (W) | Solarman UPS power (W) |
+| --- | ---: | ---: |
+| `C_P_L1` | 34 | 34 |
+| `C_P_L2` | 72 | 71 |
+| `C_P_L3` | 295 | 292 |
+| `UPS_P` | 401 | 397 |
+
+The reference was fetched separately using exactly one Solarman token request
+and one `currentData` request, with verified TLS and no retry, redirect,
+discovery, Jinko authentication, token-state write, or logger connection.
+The request interval was `18:17:03.4316761Z` to `18:17:03.9625381Z`; its
+upstream collection time was **18:12:49Z**, four minutes and 32 seconds before
+the hardware read. The response echoed the matching device identity and all
+power fields explicitly used W. This is nearby, non-synchronous correlation,
+not an atomic cloud/local measurement. The owner had reported a practically
+stable load; the phase differences here are `0/1/3 W`, total `4 W`.
+
+The same cloud sample contained distinct direct-load `LPP_A/B/C` values
+`35/84/298 W` and `E_Puse_t1=417 W`. Those keys are not substitutes for UPS
+phases/total. Neither matching totals in this capture nor nearby cloud values
+establish a universal phase-sum equality rule.
+
+Production reuses 640-643 from the existing sequence-`10` `640 x 7` block;
+644-646 continue to provide the unchanged phase voltages. The immediately
+following sequence-`1E` `696 x 4` read replaces the old sequence-`02`
+`643 x 1` request, which is removed from the closed allowlist. Each UPS pair
+requires high word `0000` and retains the entire unsigned low-word
+`0..65535 W` range. There is no signed cast, absolute-value conversion,
+phase-sum equality gate, derived total, or alias to another power surface.
+Any nonzero high word or invalid response rejects the complete snapshot.
+
+This accepts only a bounded subset of the documented U32 format. Nonzero
+high-word behavior, rollover coherence, and atomic low/high acquisition are
+**not** claimed as live-validated. The retained `65535 W` software boundary is
+not an inverter/pass-through rating. Wider-domain work remains MB-003.
+Registers 647-649 remain excluded (the maps mark those currents unused).
+No new BMS, apparent/reactive power, PF, energy, or status interpretation is
+implied by this UPS stage.
+
+The core now contains **94 metrics: 83 canonical and 11 source-local**.
+Only `consumption/C_P_L1`, `C_P_L2`, and `C_P_L3` are new; `ups/UPS_P` keeps
+its existing identity. The request count remains **27 first / 25 subsequent**,
+with one connection and one absolute deadline per fetch. Offline regressions
+cover the exact replacement frame, order/counts, zero and unsigned boundaries,
+nonzero-high rejection, independent totals, terminal failures with no partial
+snapshot, stable HA/Prometheus identity, missing-value behavior, and fallback
+timestamps. Synthetic boundary vectors are tests, not additional live captures.
+
+## Stage 29: 2026-10-07 Remaining-Surface Audit (No Promotion)
+
+The owner requested continuation across all remaining missing register groups.
+The BMS, energy/DC-bus, firmware/status, apparent-power/PF and reactive-power
+tables were audited in parallel, with complete relevant PDF pages visually
+checked. Findings are recorded under MB-004/005/007/008/015/017 in the
+[backlog](./modbus-backlog.md). Hardware-dependent nonzero, export, additional
+battery/MPPT, generator/AUX, fault-bit and wider-coherence items remain explicit
+exclusions; no operating conditions or settings were changed to manufacture
+evidence.
+
+The owner's current detail export is collected at `2026-10-07T18:43:51Z`.
+Its category fields use `storageName` as the canonical key; display `key`
+and `serialNumber` are not register addresses. Only selected telemetry was
+inspected; Stage 29 did not modify, stage or commit the user-owned export or
+fixture, including the fixture's pre-existing working-tree changes.
+
+The two Stage-26 protocol maps agree on the BMS mirror meanings but not the
+LV/HV scales. Their firmware tables agree on a small exact read set, while
+their lifetime-PV rows are reserved and their DC-bus candidates conflict.
+The HV PF row additionally mixes `R` and `R/W` access labels; it cannot be
+assumed to be a measured power factor. These findings prevent blindly copying
+cloud values or widening contiguous register ranges. The newer map's incomplete
+reactive table is not a replacement for target evidence.
+
+Prepared private, Git-ignored diagnostics retain the previous one-shot safety
+contract: immutable FC03 requests, offline golden/mutation/failure tests,
+exact ordered send budgets, one connection with one six-second deadline, and
+no retry, reconnect, scan, acknowledgement or write function. The BMS plan is
+only `210 x 9`; the metadata plan is `2 x 1`, `11 x 1`, `14 x 5`, `24 x 1`.
+The output/relay evidence plan is exactly `551 x 2`, `627 x 12`, `691 x 5`,
+`620 x 1`, `709 x 1`: it reuses existing approved ranges and separately reads
+documented external-grid apparent candidates, excluding ambiguous PF word 621.
+Synthetic response vectors are deliberately labelled synthetic, not captures.
+All three helpers passed offline tests and vet checks and received independent
+review; only the first two were attempted in no-argument dry mode below.
+
+The bounded Solarman reference helper was also extended with an explicit
+numeric allowlist for these comparisons. Field-specific units, missing values,
+signed values, source identity and collection age remain checked. Offline
+tests and independent review passed; the extended helper was not invoked live
+during Stage 29.
+There is still no Jinko token refresh or token-state mutation.
+
+Live validation is **blocked by startup of these new diagnostic executables**,
+not by a confirmed Modbus exception: no-argument runs stalled before their
+first plan output with zero CPU usage. Their offline Go tests and vet checks
+passed, but this does not establish that the live programs can execute.
+Only the exact owned dry-run process trees were stopped; no live-mode flag
+was supplied and no inverter request was sent. Relevant Windows event checks
+did not identify a matching Defender event, so antivirus involvement is only
+a hypothesis, not a diagnosed cause. No security setting was changed and no
+alternate execution mechanism was used to bypass the startup issue.
+
+The public bridge endpoint still returned HTTP 502, consistent with the
+owner-stopped bridge, but that HTTP result alone is not proof of process state.
+No container was started, rebuilt or deployed. No new register group is
+promoted by this stage: the production contract remains **94 core metrics,
+27 first / 25 subsequent fixed reads**. Resume from the prepared, reviewed
+one-shots only after executable startup works and the stopped-bridge condition
+and fresh reference are rechecked. Do not label the remaining backlog complete.
+
+## Stage 30: 2026-10-08 Raw Metadata Implementation (Default-Off)
+
+The owner requested actual code completion while retaining manual container
+rebuilds. The two compatible metadata maps' complete relevant pages were
+visually rechecked. Their agreement supports an experimental raw-text path,
+not a new numeric measurement or a claim of target validation.
+
+`MODBUS_METADATA_ENABLED` / `--modbus-metadata-enabled` defaults to false.
+Opting in inserts exactly four FC03 requests after the two profile gates:
+`2 x 1` (sequence `1F`), `11 x 1` (`20`), `14 x 5` (`21`), and
+`24 x 1` (`22`). Conflicting words 12/13 remain excluded. There is still one
+connection, one absolute deadline, strict response validation, and no retry,
+reconnect, write or arbitrary range. Default counts remain **27/25**; enabled
+counts are **31/25** after complete profile/metadata acquisition is cached.
+Metadata failures/cancellation leave neither a partial metadata vector nor
+cached profile gates. Each returned snapshot owns a fresh metadata map.
+
+The six strings and their exact raw representations are documented in
+[collected data](./collected-data.md#optional-raw-modbus-metadata). Leading zeros,
+word order and hexadecimal digits survive unchanged. R24 accepts only raw
+codes 0..4 and is not interpreted as a battery count. No `MAIN`/`HMI` alias,
+BMS scale/sign assumption, or numeric metric is added: the core stays **94**.
+
+MQTT/HA uses existing diagnostic discovery with stable IDs and source-current
+values. Missing fallback fields do not inherit previous Modbus strings, and
+healthy Shelly data cannot make inverter metadata available. Prometheus adds
+a bounded six-key `device_metadata_info` family, gated on inverter poll health;
+arbitrary/private metadata is excluded. Existing numeric retention is unchanged.
+
+Offline tests lock independently assembled synthetic request/response vectors,
+exact request plans, write/range mutation rejection, raw formatting, unsupported
+codes, every metadata-block failure, cancellation, cache ownership, source
+fallback/recovery, HA availability and both Prometheus label modes. These
+vectors are explicitly not live captures. Independent code review found no
+actionable issue. `go build ./...` and `go vet ./...` passed. The sequential
+`go test -work -p 1 -count=1 -timeout=45s ./...` passed all eleven runnable test
+packages; Windows blocked creation of `solarman.test.exe` as a virus or
+potentially unwanted software, so the full suite did **not** pass. Two earlier
+parallel-run local-HTTP timeouts in app/Shelly tests did not recur in three
+isolated repetitions or the sequential package run; no timeout was relaxed.
+
+A no-argument BMS diagnostic still stalled before first output and was stopped
+without any live-mode flag or device request. No security setting or execution
+method was changed to bypass this. No hardware/cloud request, deployment,
+container rebuild/start, or inverter setting change occurred in this stage.
+MB-017 target acceptance and the other equipment/mapping-dependent backlog
+items remain open; an ordinary rebuild must not enable this opt-in.
+
+## Stage 31: 2026-10-08 BMS Subset and Raw Metadata Target Capture
+
+Normal no-argument dry runs now completed without changing code execution
+methods or security settings. The earlier startup cause remains undiagnosed.
+The owner freshly confirmed that JinkoBridge and other logger pollers were
+stopped and explicitly approved the exact BMS and metadata one-shots.
+Exactly five FC03 application requests were sent: one `210 x 9` exchange on
+one connection, then the four metadata exchanges on a second connection.
+Each plan had one six-second absolute deadline and no retry, reconnect, scan,
+acknowledgement, Modbus write, configuration change or container restart.
+Complete identity-bearing captures are retained privately in ignored tools.
+
+The BMS exchange ran from `06:01:07.809728Z` to `06:01:07.9443022Z`:
+
+```text
+210=1950 211=0000 212=0000 213=0016 214=0064
+215=1808 216=0001 217=04C4 218=0000
+```
+
+The separate bounded Solarman helper made one HTTPS token request and one
+currentData request, from `06:03:33.4885079Z` to `06:03:33.9289256Z`, with no
+retry, redirect or token-state write. Its echoed identity matched the pinned
+device. Collection time was `06:02:38Z` (about 90 seconds after the BMS capture,
+55.93 seconds before the cloud response). The owner's updated detail export
+independently has that same collection time and values. This is nearby
+correlation, not an atomic simultaneous sample.
+
+| Register | HV interpretation | Cloud value | Publication decision |
+| --- | --- | --- | --- |
+| 210 | 648 V | 648 V charge voltage | `BMS_C_V` |
+| 211 | 0 V | 0 V discharge voltage | Defer: zero-only evidence |
+| 212 | 0 A | 0 A charge-current limit | Defer: zero-only evidence |
+| 213 | 22 A | 22 A discharge-current limit | `BMS_D_C_L` |
+| 214 | 100% | 100% SOC | Independent `BMS_SOC` |
+| 215 | 615.2 V | 615.2 V BMS voltage | `BMS_B_V1` |
+| 216 | +0.1 A under HV scale | +0.1 A BMS current | Defer: negative encoding/sentinels unproven |
+| 217 | 22 C | 22 C BMS temperature | Independent `BMST` |
+| 218 | 0 A | 0 A maximum charge current | Defer: zero-only evidence |
+
+The maps agree on field meanings but the HV table explicitly selects 0.1 V
+and 0.1 A instead of the LV table's 0.01 V and 1 A. The nonzero target/cloud
+values resolve that difference for this named HV profile; this stage does not
+claim identical LV/HV scales or infer support for other hardware. The bank is
+marked R/W; only the explicitly approved FC03 read is implemented. No R219 or
+other adjacent field is added. The production sequence is `0x23`, distinct from
+the metadata sequences; offline wire goldens use a synthetic identity.
+
+Five fields are accepted, adding three canonical keys and replacing two
+aliases. R210/R215 retain the existing 0..1000 V validation envelope, R214
+requires 0..100%, and R217 uses `(raw-1000)/10` within -100..100 C. R213 is a
+nonnegative U16 whole-amp limit; its wire range is not a battery rating or a
+claim that numeric extremes have been observed. Inverter `B_V1`, `B_T1` and
+`B_left_cap1` remain independent, with no equality gate against BMS readings.
+In this sample inverter `B_V1=615.6 V` and `B_C1=-0.02 A` differ from their BMS
+counterparts. They must not supply missing BMS values.
+
+Negative BMS current is normal and was explicitly confirmed by the owner.
+That does not determine its exact register encoding. The observed positive
+word is not used to invent signed or sentinel behavior: R216 is ignored for
+now, with no absolute-value conversion, zero substitution or rejection of
+otherwise valid snapshots. R211/R212/R218 are likewise ignored. Tests prove
+that nonzero/FFFF values in all four positions leave the published subset
+unchanged. A failed FC03 response or invalid published field still rejects the
+complete snapshot for ordinary priority fallback. Remaining BMS work is MB-008.
+
+The four metadata reads ran from `06:01:25.5299573Z` to `06:01:25.9868958Z`:
+
+```text
+2=0104 11=1C08 14=3001 15=1087 16=0000 17=2002 18=2017 24=0001
+```
+
+All framing/CRC/identity checks passed. The refreshed detail export reports
+PTCv1 `0104`, MAIN `3001-1087-1C08`, HMI `2002-2017`, bootloader `08`, assistant
+`1C`, and a one-way battery-input display. Only the exact raw strings are
+promoted: R16 stays present as `0000`, R24 stays raw `1`, and no cloud-composite
+or enum alias is introduced. Sanitized complete responses retain RTU payloads,
+CRC and transport fields; only logger identity/outer checksum were changed in
+the regression fixtures. Metadata is now enabled by default; an explicit
+`MODBUS_METADATA_ENABLED=false` remains an opt-out.
+
+The core is **97 numeric metrics (86 canonical, 11 source-local)**, plus six
+raw metadata strings. Default counts are **32 first / 26 subsequent**; disabling
+metadata gives **28/26**. Only metadata/profile properties are cached: BMS
+mirrors are read on every fetch. Two-success tests lock one connection per
+fetch, exact budgets, distinct BMS/inverter values, no duplicate keys, decoder
+boundaries, terminal failures, cancellation and absent-field fallback behavior.
+
+Separately, the Jinko parser now preserves eight allowlisted cloud text fields
+instead of losing firmware strings or their leading zeros. These `cloud_*`
+fields remain separate from raw Modbus metadata and existing numeric metrics
+are retained for compatibility. Malformed/ambiguous text is omitted. MQTT's
+existing primary ownership policy is unchanged, as is the six-key Prometheus
+raw metadata allowlist; cloud-only metadata does not silently expand either.
+
+Fresh noncached tests passed for all eleven runnable bridge test packages;
+`go vet ./...`, `go build ./...` and the private probe offline tests passed.
+The full suite remains blocked because Windows rejects creation of the
+unchanged Solarman test executable as potentially unwanted software. No
+security bypass was attempted. No deployment/NAS files, user-owned reference
+files, container state, inverter settings or wiring were changed.
+
+## Stage 32: 2026-10-08 Selected Scope and Exact Alert-Bit Evidence
+
+The owner selected BMS, DC-link voltages, and status/fault interpretation,
+and explicitly excluded reactive power. The backlog records that scope;
+reactive support is not a completion condition or a pending diagnostic plan.
+Existing cloud passthrough and existing entity identities are unchanged.
+
+The owner refreshed the private detail export, whose collection time is
+`2026-10-08T06:28:29Z` (09:28:29 Europe/Kyiv). Its identity matches the pinned
+target. It still reports BMS current `+0.10 A`, charge voltage `648 V`, BMS
+voltage `615.20 V`, temperature `22 C`, SOC `100%`, discharge-current limit
+`22 A`, and zero discharge voltage/charge-current limit/max-charge current.
+This is not the negative-current or nonzero-limit evidence needed for MB-008.
+No new device or cloud diagnostic request was made. The existing fixed raw
+`210 x 9` helper gained offline high-bit preservation tests and a precise
+negative-sample checklist; this did not change its single-request plan.
+
+Visual reinspection of HV printed pages 31-33 and V104-2 pages 31-32 confirms
+that no accepted DC-link address is available from the 601/602 candidates.
+HV describes grid line voltage, including a reserved 601; V104-2 describes
+battery negative currents despite voltage units. Cloud `HV_V=737 V` and
+`BN_V=368 V` do not identify a Modbus address. R33 is voltage-class metadata,
+not live DC voltage. MB-015 remains blocked on a compatible source definition;
+no read, scale inference, or new production metric is added.
+
+For MB-016 the code now provides exact diagnostic bit positions without
+inventing semantic labels. `ModbusAlertSignature.ActiveBits()` returns a fresh
+ordered list of `{register, bit}` pairs for all six raw words, including every
+reserved/unknown bit. Bits are zero-based; an inactive signature serializes as
+`[]`. Existing opt-in correlation logs add `modbus_active_bits` alongside
+their original raw words. The detected HA push appends references such as
+`R553.b1`, explicitly labelled with unverified fault names/meanings. All 96
+possible positions fit in the notification without truncation. Recovery text,
+signatures, cooldowns, alert counts, source selection and request plans are
+unchanged. No automatic acknowledgement, new cloud job, additional sensor,
+or named warning/fault mapping is introduced.
+
+Tests cover every single bit in every word, mixed/all-zero/all-one vectors,
+ordering, slice independence, JSON arrays, all correlation log paths, original
+word/ID/metric preservation, notification size, and recovery behavior. Fresh
+source/app/Modbus/HA/Prometheus/alert package tests, `go vet ./...`, and
+`go build ./...` passed. The previously recorded Windows block on the Solarman
+test executable remains unresolved; a fully green suite is not claimed.
+The numeric core remains 97 and default request counts remain 32/26.
+
+Named bit meanings still require a known event and firmware-compatible
+mapping; relay-state correlation (MB-001) is also not closed. No deployment,
+container operation, live read, inverter setting or wiring change occurred.
+
+## Stage 33: 2026-10-08 Passive Bounded BMS/Status Evidence
+
+The owner requested autonomous progress without repeated continuation prompts.
+To collect naturally occurring conditions without repeated one-shot requests,
+`MODBUS_VALIDATION_EVIDENCE_ENABLED` adds an explicitly opt-in observer of
+already-approved production reads. It is disabled by default, requires Modbus
+first in source priority, and requires INFO-capable logging (`trace`, `debug`,
+or `info`). It does not start a worker, fetch a cloud source, expand the read
+plan, retry, send a notification, or change any device setting.
+
+The Modbus client copies raw BMS 210-218, power/relay 551-552, warning/fault
+553-558, and run-state 500 only into a complete successful snapshot. Every
+block retains UTC start/end timestamps and a whole-fetch window. These are
+sequential acquisitions, not an atomic snapshot. Full R551 upper bits and
+ignored BMS words are preserved without interpreting them. A fixed-size
+internal sidecar owns these values and is excluded from public snapshot JSON,
+HA discovery/state, Prometheus, numeric metrics, and metadata.
+
+Only a primary Modbus snapshot accepted by Priority while its context is not
+canceled reaches the observer. It validates acquisition windows and parity
+with all six public raw alert words before consuming any budget. Failed,
+malformed, canceled, rejected, or cloud-fallback samples do not become evidence.
+The record contains no serials, addresses, credentials, frames, or arbitrary
+metadata, and uses the existing INFO log sink with no separate file writer.
+
+Nine once-per-process milestones cover the first accepted sample; first
+nonzero and first nonzero/non-FFFF values for each of R211/R212/R218; and first
+high-bit and first high-bit/non-FFFF R216. High-bit does not mean proven
+negative current, and FFFF is not silently treated as either a value or a
+sentinel. Power/relay/alert/run-state changes have a separate 64-record budget
+and one-minute minimum interval. Comparison uses the last emitted vector, so
+a settled throttled change can be retained on a later poll. The final
+transition record marks exhaustion. Simultaneous reasons coalesce; the upper
+bound is 73 records per process, with independent BMS milestones still eligible
+after the status budget is exhausted. Restart resets these bounded budgets.
+Logging is best effort and normal container log retention/rotation still applies.
+
+Regression tests lock byte-identical request plans with the option on/off,
+32/26 default and 28/26 metadata-disabled counts, 97 numeric metrics, ignored
+BMS bit-pattern preservation, fresh array ownership, complete windows, every
+late-read failure, cancellation, fallback/acceptance boundaries, deduplication,
+rate limiting, budget exhaustion/restart, log privacy and public serialization.
+Independent HA and Prometheus tests retain their exact published surface when
+an internal sidecar is present. All eleven runnable package test suites passed
+fresh, as did `go vet ./...` and `go build ./...`. The previously recorded
+Windows block on creation of the unchanged Solarman test executable remains;
+a fully green suite is not claimed and no security bypass was attempted.
+
+This is evidence-collection infrastructure, not new mapping evidence. MB-008
+still needs independent negative-current/nonzero-limit correlation; MB-001 and
+MB-016 still need observed states and compatible meanings. DC-link MB-015 has
+no accepted address, and reactive power remains explicitly out of scope. No
+new live device/cloud request, deployment, container operation, inverter
+setting, or wiring change was made while implementing and testing this stage.

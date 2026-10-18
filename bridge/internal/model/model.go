@@ -19,4 +19,7 @@ type Snapshot struct {
 	CollectedAt time.Time         `json:"collected_at"`
 	Metrics     []Metric          `json:"metrics"`
 	Meta        map[string]string `json:"meta,omitempty"`
+	// ModbusEvidence is opt-in internal validation data. It must never become
+	// telemetry, discovery metadata, or part of serialized public snapshots.
+	ModbusEvidence *ModbusEvidence `json:"-"`
 }

@@ -14,17 +14,19 @@ const (
 	maximumTemperatureC   = 100.0
 	maximumVoltageV       = 1000.0
 
-	maximumGridPowerCoherenceW       = int64(0x7FFF)
-	maximumDirectLoadPhaseCoherenceW = int64(0x7FFF)
-	maximumOutputPowerCoherenceW     = int64(0x7FFF)
-	maximumOutputPhaseVoltageV       = 500.0
-	maximumAbsoluteOutputAmps        = 100.0
-	maximumOutputFrequencyHz         = 100.0
-	maximumLoadPhaseVoltageV         = 500.0
-	maximumLoadFrequencyHz           = 100.0
-	maximumGridFrequencyHz           = 100.0
-	maximumAbsoluteGridAmps          = 100.0
-	maximumPVToRatedPowerRatio       = 2.0
+	maximumGridPowerCoherenceW         = int64(0x7FFF)
+	maximumExternalCTPowerCoherenceW   = int64(0x7FFF)
+	maximumInternalGridPowerCoherenceW = int64(0x7FFF)
+	maximumDirectLoadPhaseCoherenceW   = int64(0x7FFF)
+	maximumOutputPowerCoherenceW       = int64(0x7FFF)
+	maximumOutputPhaseVoltageV         = 500.0
+	maximumAbsoluteOutputAmps          = 100.0
+	maximumOutputFrequencyHz           = 100.0
+	maximumLoadPhaseVoltageV           = 500.0
+	maximumLoadFrequencyHz             = 100.0
+	maximumGridFrequencyHz             = 100.0
+	maximumAbsoluteGridAmps            = 100.0
+	maximumPVToRatedPowerRatio         = 2.0
 	// The supported family spans several ratings and hardware revisions. Keep
 	// the PV-current guard deliberately above their model-specific input-current
 	// limits, using the same broad 100 A telemetry envelope as the validated AC
@@ -52,6 +54,11 @@ type outputScalars struct {
 type gridFrequencyCurrents struct {
 	frequencyHz float64
 	currents    [3]float64
+}
+
+type externalCTReadings struct {
+	currentsA [3]float64
+	powersW   [4]float64
 }
 
 type directLoadPowers struct {
@@ -155,11 +162,27 @@ func isSupportedJKSFamilyRatedPowerRaw(raw uint32) bool {
 	}
 }
 
-func decodeUPSPower(values []uint16) (float64, error) {
-	if err := requireWordCount("UPS load power register 643", values, 1); err != nil {
-		return 0, err
+func decodeUPSPowers(loadWords, highWords []uint16) ([4]float64, error) {
+	if err := requireWordCount("UPS power/voltage registers 640-646", loadWords, 7); err != nil {
+		return [4]float64{}, err
 	}
-	return float64(values[0]), nil
+	if err := requireWordCount("UPS power high-word registers 696-699", highWords, 4); err != nil {
+		return [4]float64{}, err
+	}
+	result := [4]float64{}
+	for index, high := range highWords {
+		// Both maps describe unsigned low-word-first U32 watts. Only the
+		// observed zero-high subset is promoted: preserve the entire U16 low
+		// domain, including 0x8000/0xFFFF, and fail closed on any nonzero high.
+		// This is a support boundary, not a rating or atomic coherence claim.
+		if high != 0 {
+			return [4]float64{}, fmt.Errorf("UPS power high word register %d is 0x%04X; only the verified zero-high-word unsigned domain is accepted", 696+index, high)
+		}
+		result[index] = float64(uint32(loadWords[index]) | uint32(high)<<16)
+	}
+	// The dedicated UPS total is not a sum gate or an alias of direct-load
+	// power. Return the register pair unchanged even when the phase sum differs.
+	return result, nil
 }
 
 func decodeLoadVoltages(values []uint16) ([3]float64, error) {
@@ -169,7 +192,8 @@ func decodeLoadVoltages(values []uint16) ([3]float64, error) {
 
 	result := [3]float64{}
 	for index := range result {
-		// Registers 640-643 are intentionally ignored incomplete power words.
+		// Registers 640-643 are consumed separately by decodeUPSPowers together
+		// with high words 696-699; they do not affect this voltage decoder.
 		result[index] = float64(values[index+4]) / 10
 		if result[index] > maximumLoadPhaseVoltageV {
 			return [3]float64{}, fmt.Errorf("load voltage L%d %.1fV exceeds %.1fV validation maximum", index+1, result[index], maximumLoadPhaseVoltageV)
@@ -532,9 +556,66 @@ func decodeGridFrequencyCurrents(values []uint16) (gridFrequencyCurrents, error)
 		}
 	}
 
-	// Registers 613-619 are intentionally ignored. They contain external-CT
-	// currents and incomplete low-word-only power values, so they cannot affect
-	// either this decoder or the emitted canonical metrics.
+	// The independent external-CT decoder consumes registers 613-619 together
+	// with power high words 705-708. They must not alias internal currents here.
+	return result, nil
+}
+
+func decodeExternalCT(gridWords, highWords []uint16) (externalCTReadings, error) {
+	if err := requireWordCount("grid/external-CT registers 609-619", gridWords, 11); err != nil {
+		return externalCTReadings{}, err
+	}
+	if err := requireWordCount("external-CT power high-word registers 705-708", highWords, 4); err != nil {
+		return externalCTReadings{}, err
+	}
+
+	result := externalCTReadings{}
+	for index := range result.currentsA {
+		// CT current is a separate documented S16, 0.01 A field. It does not
+		// inherit the internal-current decoder's model-specific envelope.
+		result.currentsA[index] = float64(int16(gridWords[index+4])) / 100
+	}
+	for index, high := range highWords {
+		if high != 0x0000 && high != 0xFFFF {
+			return externalCTReadings{}, fmt.Errorf("external-CT power high word register %d is 0x%04X; expected signed extension 0x0000 or 0xFFFF", 705+index, high)
+		}
+		// The maps specify signed low-word-first 32-bit power. These two
+		// blocks are read separately, so a symmetric 0x7FFF coherence guard
+		// rejects a torn sign transition; it is not an inverter/CT rating.
+		raw := int32(uint32(gridWords[index+7]) | uint32(high)<<16)
+		if int64(raw) < -maximumExternalCTPowerCoherenceW || int64(raw) > maximumExternalCTPowerCoherenceW {
+			return externalCTReadings{}, fmt.Errorf("external-CT power registers %d/%d decode to %dW; safe signed coherence range is -%d..%dW", 616+index, 705+index, raw, maximumExternalCTPowerCoherenceW, maximumExternalCTPowerCoherenceW)
+		}
+		result.powersW[index] = float64(raw)
+	}
+	// The total is its own register pair; never require it to equal a sum of
+	// independently sampled phase values or replace it with a derived sum.
+	return result, nil
+}
+
+func decodeInternalGridPowers(lowWords, highWords []uint16) ([4]float64, error) {
+	if err := requireWordCount("internal-grid power low-word registers 604-607", lowWords, 4); err != nil {
+		return [4]float64{}, err
+	}
+	if err := requireWordCount("internal-grid power high-word registers 700-703", highWords, 4); err != nil {
+		return [4]float64{}, err
+	}
+	result := [4]float64{}
+	for index, high := range highWords {
+		if high != 0x0000 && high != 0xFFFF {
+			return [4]float64{}, fmt.Errorf("internal-grid power high word register %d is 0x%04X; expected signed extension 0x0000 or 0xFFFF", 700+index, high)
+		}
+		// Maps pair 604-607 with 700-703 as signed low-word-first watts.
+		// The symmetric 0x7FFF bound rejects a torn sign transition between
+		// the separate reads; it is a coherence guard, not an equipment rating.
+		raw := int32(uint32(lowWords[index]) | uint32(high)<<16)
+		if int64(raw) < -maximumInternalGridPowerCoherenceW || int64(raw) > maximumInternalGridPowerCoherenceW {
+			return [4]float64{}, fmt.Errorf("internal-grid power registers %d/%d decode to %dW; safe signed coherence range is -%d..%dW", 604+index, 700+index, raw, maximumInternalGridPowerCoherenceW, maximumInternalGridPowerCoherenceW)
+		}
+		result[index] = float64(raw)
+	}
+	// Dedicated internal-grid total is independent: neither require phase-sum
+	// equality nor replace it with selected-grid or external-CT power.
 	return result, nil
 }
 

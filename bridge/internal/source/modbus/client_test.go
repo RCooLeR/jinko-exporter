@@ -24,8 +24,8 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{192}),
 		makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, directLoadPowerLowRead, []uint16{80, 80, 83, 251}),
 		makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 		makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -38,16 +38,20 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, firstEnergy),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
 		makeReadResponse(t, runStateRead, []uint16{2, 0x0001, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF}),
 		makeReadResponse(t, gridFrequencyCurrentRead, liveGridFrequencyCurrentWords()),
+		makeReadResponse(t, externalCTPowerHighRead, []uint16{0, 0, 0, 0}),
+		makeReadResponse(t, internalGridPowerLowRead, []uint16{98, 86, 148, 332}),
+		makeReadResponse(t, internalGridPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{193}),
 		makeReadResponse(t, loadVoltageRead, nightLoadVoltageWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, directLoadPowerLowRead, nightDirectLoadPowerLowWords()),
 		makeReadResponse(t, loadFrequencyRead, nightLoadFrequencyWords()),
 		makeReadResponse(t, gridVoltageRead, []uint16{2505, 2412, 2369}),
@@ -60,11 +64,15 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1281}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6018, 99}),
 		makeReadResponse(t, batteryFlowRead, []uint16{0xFFF7, 0xFFF0}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, secondEnergy),
 		makeReadResponse(t, relayStatusRead, []uint16{0xFFF0, 0xFFFF}),
 		makeReadResponse(t, warningFaultRead, []uint16{1, 2, 3, 4, 0x8000, 0xFFFF}),
 		makeReadResponse(t, runStateRead, []uint16{5, 5, 4, 3, 2, 1}),
-		makeReadResponse(t, gridFrequencyCurrentRead, mutatedIgnoredGridFrequencyCurrentWords()),
+		makeReadResponse(t, gridFrequencyCurrentRead, syntheticSignedExternalCTWords()),
+		makeReadResponse(t, externalCTPowerHighRead, []uint16{0xFFFF, 0, 0xFFFF, 0xFFFF}),
+		makeReadResponse(t, internalGridPowerLowRead, []uint16{0xFFF6, 20, 0xFFE2, 0xFFEB}),
+		makeReadResponse(t, internalGridPowerHighRead, []uint16{0xFFFF, 0, 0xFFFF, 0xFFFF}),
 	}}
 	client, err := newClient(testModbusConfig(), dialer.DialContext)
 	if err != nil {
@@ -76,7 +84,7 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		t.Fatalf("first Fetch() error = %v", err)
 	}
 	assertSnapshot(t, first, expectedSnapshotMetrics(
-		192,
+		401, [3]float64{34, 72, 295},
 		[3]float64{238.9, 240.9, 236.2}, 49.95,
 		[3]float64{80, 80, 83}, 251,
 		[3]float64{250.4, 241.1, 236.8},
@@ -98,6 +106,8 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		1, 7,
 		[6]uint16{},
 		2,
+		externalCTReadings{currentsA: [3]float64{0.53, 0.63, 1.57}, powersW: [4]float64{100, 102, 120, 322}},
+		[4]float64{98, 86, 148, 332},
 	))
 	if got := dialer.connectionCount(); got != 1 {
 		t.Fatalf("first Fetch connections = %d, want 1", got)
@@ -106,11 +116,11 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 	if firstDeadline.IsZero() {
 		t.Fatal("first Fetch connection deadline is zero")
 	}
-	if got := len(dialer.connection(0).writes); got != 24 {
-		t.Fatalf("first Fetch writes = %d, want 24", got)
+	if got := len(dialer.connection(0).writes); got != 28 {
+		t.Fatalf("first Fetch writes = %d, want 28", got)
 	}
-	if got := dialer.responseCount(); got != 24 {
-		t.Fatalf("first Fetch responses consumed = %d, want 24", got)
+	if got := dialer.responseCount(); got != 28 {
+		t.Fatalf("first Fetch responses consumed = %d, want 28", got)
 	}
 
 	second, err := client.Fetch(context.Background())
@@ -118,7 +128,7 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		t.Fatalf("second Fetch() error = %v", err)
 	}
 	assertSnapshot(t, second, expectedSnapshotMetrics(
-		193,
+		193, [3]float64{0, 65535, 32768},
 		[3]float64{235.4, 240.1, 235.8}, 50,
 		[3]float64{-10, 20, 30}, 45,
 		[3]float64{250.5, 241.2, 236.9},
@@ -135,6 +145,8 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 		0, 0xFFFF,
 		[6]uint16{1, 2, 3, 4, 0x8000, 0xFFFF},
 		5,
+		externalCTReadings{currentsA: [3]float64{-0.01, -327.68, 327.67}, powersW: [4]float64{-10, 20, -30, -21}},
+		[4]float64{-10, 20, -30, -21},
 	))
 	if got := dialer.connectionCount(); got != 2 {
 		t.Fatalf("total connections = %d, want 2 (one per Fetch)", got)
@@ -146,28 +158,32 @@ func TestClientFetchUsesOnlyLiveVerifiedReads(t *testing.T) {
 	if secondDeadline.IsZero() || secondDeadline.Before(firstDeadline) {
 		t.Fatalf("second Fetch deadline = %s, want a non-regressing deadline relative to %s", secondDeadline, firstDeadline)
 	}
-	if got := len(dialer.connection(1).writes); got != 22 {
-		t.Fatalf("second Fetch writes = %d, want 22 (profile gates cached; generator mode uncached)", got)
+	if got := len(dialer.connection(1).writes); got != 26 {
+		t.Fatalf("second Fetch writes = %d, want 26 (profile gates cached; generator mode uncached)", got)
 	}
-	if got := dialer.responseCount(); got != 46 {
-		t.Fatalf("total responses consumed = %d, want 46", got)
+	if got := dialer.responseCount(); got != 54 {
+		t.Fatalf("total responses consumed = %d, want 54", got)
 	}
 
 	expectedReads := []readID{
 		deviceTypeRead, capabilityRead,
 		generatorPortModeRead, generatorEnergyRead, generatorElectricalRead,
-		upsPowerRead, loadVoltageRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
-		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
+		loadVoltageRead, upsPowerHighRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
+		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, bmsMirrorsRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
+		externalCTPowerHighRead,
+		internalGridPowerLowRead, internalGridPowerHighRead,
 		generatorPortModeRead, generatorEnergyRead, generatorElectricalRead,
-		upsPowerRead, loadVoltageRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
-		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
+		loadVoltageRead, upsPowerHighRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
+		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, bmsMirrorsRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
+		externalCTPowerHighRead,
+		internalGridPowerLowRead, internalGridPowerHighRead,
 	}
 	for index, id := range expectedReads {
 		connIndex := 0
 		writeIndex := index
-		if index >= 24 {
+		if index >= 28 {
 			connIndex = 1
-			writeIndex = index - 24
+			writeIndex = index - 28
 		}
 		conn := dialer.connection(connIndex)
 		want, err := buildReadRequest(testLoggerSerial, modbusUnitID, id)
@@ -190,8 +206,8 @@ func TestClientFetchAcceptsTwentyKilowattJKSFamilyMemberEndToEnd(t *testing.T) {
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{0xFFFF}),
-		makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+		makeReadResponse(t, loadVoltageRead, boundaryUPSLoadWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, directLoadPowerLowRead, []uint16{20000, 20000, 25535, 65535}),
 		makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 		makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -204,11 +220,15 @@ func TestClientFetchAcceptsTwentyKilowattJKSFamilyMemberEndToEnd(t *testing.T) {
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
 		makeReadResponse(t, runStateRead, []uint16{2, 0, 0, 0, 0, 0}),
 		makeReadResponse(t, gridFrequencyCurrentRead, liveGridFrequencyCurrentWords()),
+		makeReadResponse(t, externalCTPowerHighRead, []uint16{0, 0, 0, 0}),
+		makeReadResponse(t, internalGridPowerLowRead, []uint16{98, 86, 148, 332}),
+		makeReadResponse(t, internalGridPowerHighRead, []uint16{0, 0, 0, 0}),
 	}}
 	client, err := newClient(testModbusConfig(), dialer.DialContext)
 	if err != nil {
@@ -247,8 +267,10 @@ func TestClientFetchAcceptsTwentyKilowattJKSFamilyMemberEndToEnd(t *testing.T) {
 	expectedReads := []readID{
 		deviceTypeRead, capabilityRead,
 		generatorPortModeRead, generatorEnergyRead, generatorElectricalRead,
-		upsPowerRead, loadVoltageRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
-		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
+		loadVoltageRead, upsPowerHighRead, directLoadPowerLowRead, loadFrequencyRead, gridVoltageRead, gridPowerLowRead, gridPowerHighRead, outputScalarRead, outputPowerHighRead, pvInputRead, inverterTemperatureRead,
+		batteryTemperatureRead, batteryVoltageSOCRead, batteryFlowRead, bmsMirrorsRead, energyRead, relayStatusRead, warningFaultRead, runStateRead, gridFrequencyCurrentRead,
+		externalCTPowerHighRead,
+		internalGridPowerLowRead, internalGridPowerHighRead,
 	}
 	if dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 		t.Fatalf("connections/attempts = %d/%d, want 1/1", dialer.connectionCount(), dialer.attemptCount())
@@ -277,8 +299,8 @@ func TestClientFetchCapabilityMismatchStopsAndDoesNotCacheDeviceCanary(t *testin
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{192}),
 		makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 		makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 		makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -291,11 +313,15 @@ func TestClientFetchCapabilityMismatchStopsAndDoesNotCacheDeviceCanary(t *testin
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
 		makeReadResponse(t, runStateRead, []uint16{2, 0, 0, 0, 0, 0}),
 		makeReadResponse(t, gridFrequencyCurrentRead, liveGridFrequencyCurrentWords()),
+		makeReadResponse(t, externalCTPowerHighRead, []uint16{0, 0, 0, 0}),
+		makeReadResponse(t, internalGridPowerLowRead, []uint16{98, 86, 148, 332}),
+		makeReadResponse(t, internalGridPowerHighRead, []uint16{0, 0, 0, 0}),
 	}}
 	client, err := newClient(testModbusConfig(), dialer.DialContext)
 	if err != nil {
@@ -319,8 +345,8 @@ func TestClientFetchCapabilityMismatchStopsAndDoesNotCacheDeviceCanary(t *testin
 	if got := dialer.connectionCount(); got != 2 {
 		t.Fatalf("total connections = %d, want 2 (both gates rerun on the second session)", got)
 	}
-	if got := len(dialer.connection(1).writes); got != 24 {
-		t.Fatalf("second Fetch writes = %d, want 24", got)
+	if got := len(dialer.connection(1).writes); got != 28 {
+		t.Fatalf("second Fetch writes = %d, want 28", got)
 	}
 }
 
@@ -490,8 +516,8 @@ func TestClientFetchReturnsNoPartialSnapshotAndDoesNotRetry(t *testing.T) {
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{192}),
 		makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 		makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 		{}, // Grid response closes immediately.
@@ -522,8 +548,8 @@ func TestClientFetchDirectLoadPowerLowFailureReturnsNoPartialSnapshotAndDoesNotR
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{192}),
 		makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeExceptionResponse(t, directLoadPowerLowRead, 0x02),
 	}}
 	client, err := newClient(testModbusConfig(), dialer.DialContext)
@@ -550,8 +576,8 @@ func TestClientFetchWarningFaultFailureReturnsNoPartialSnapshotAndDoesNotRetry(t
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{192}),
 		makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 		makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 		makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -564,6 +590,7 @@ func TestClientFetchWarningFaultFailureReturnsNoPartialSnapshotAndDoesNotRetry(t
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		{}, // The warning/fault response closes immediately.
@@ -580,8 +607,8 @@ func TestClientFetchWarningFaultFailureReturnsNoPartialSnapshotAndDoesNotRetry(t
 	if snapshot != nil || dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 		t.Fatalf("snapshot/connections/attempts = %#v/%d/%d, want nil/1/1", snapshot, dialer.connectionCount(), dialer.attemptCount())
 	}
-	if writes := len(dialer.connection(0).writes); writes != 22 {
-		t.Fatalf("writes = %d, want exactly 22", writes)
+	if writes := len(dialer.connection(0).writes); writes != 23 {
+		t.Fatalf("writes = %d, want exactly 23", writes)
 	}
 }
 
@@ -623,8 +650,8 @@ func TestClientFetchRelayStatusFailureReturnsNoPartialSnapshotAndDoesNotRetry(t 
 			if snapshot != nil || dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 				t.Fatalf("snapshot/connections/attempts = %#v/%d/%d, want nil/1/1", snapshot, dialer.connectionCount(), dialer.attemptCount())
 			}
-			if writes := len(dialer.connection(0).writes); writes != 21 {
-				t.Fatalf("writes = %d, want exactly 21 through the relay-status read", writes)
+			if writes := len(dialer.connection(0).writes); writes != 22 {
+				t.Fatalf("writes = %d, want exactly 22 through the relay-status read", writes)
 			}
 			if closes := dialer.connection(0).closeCount; closes != 1 {
 				t.Fatalf("connection closes = %d, want 1", closes)
@@ -640,8 +667,8 @@ func TestClientFetchRunStateFailureReturnsNoPartialSnapshotAndDoesNotRetry(t *te
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{192}),
 		makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 		makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 		makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -654,6 +681,7 @@ func TestClientFetchRunStateFailureReturnsNoPartialSnapshotAndDoesNotRetry(t *te
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
@@ -671,8 +699,8 @@ func TestClientFetchRunStateFailureReturnsNoPartialSnapshotAndDoesNotRetry(t *te
 	if snapshot != nil || dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 		t.Fatalf("snapshot/connections/attempts = %#v/%d/%d, want nil/1/1", snapshot, dialer.connectionCount(), dialer.attemptCount())
 	}
-	if writes := len(dialer.connection(0).writes); writes != 23 {
-		t.Fatalf("writes = %d, want exactly 23", writes)
+	if writes := len(dialer.connection(0).writes); writes != 24 {
+		t.Fatalf("writes = %d, want exactly 24", writes)
 	}
 }
 
@@ -683,8 +711,8 @@ func TestClientFetchGridFrequencyCurrentFailureReturnsNoPartialSnapshotAndDoesNo
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{192}),
 		makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 		makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 		makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -697,6 +725,7 @@ func TestClientFetchGridFrequencyCurrentFailureReturnsNoPartialSnapshotAndDoesNo
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 		makeReadResponse(t, relayStatusRead, []uint16{1, 7}),
 		makeReadResponse(t, warningFaultRead, make([]uint16, 6)),
@@ -715,8 +744,8 @@ func TestClientFetchGridFrequencyCurrentFailureReturnsNoPartialSnapshotAndDoesNo
 	if snapshot != nil || dialer.connectionCount() != 1 || dialer.attemptCount() != 1 {
 		t.Fatalf("snapshot/connections/attempts = %#v/%d/%d, want nil/1/1", snapshot, dialer.connectionCount(), dialer.attemptCount())
 	}
-	if writes := len(dialer.connection(0).writes); writes != 24 {
-		t.Fatalf("writes = %d, want exactly 24", writes)
+	if writes := len(dialer.connection(0).writes); writes != 25 {
+		t.Fatalf("writes = %d, want exactly 25", writes)
 	}
 }
 
@@ -738,12 +767,12 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, invalid),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 				}
 			},
 			wantError:  "load voltage",
-			wantWrites: 7,
+			wantWrites: 6,
 		},
 		{
 			name: "load frequency",
@@ -756,8 +785,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 					makeReadResponse(t, loadFrequencyRead, invalid),
 				}
@@ -776,8 +805,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 					makeReadResponse(t, loadFrequencyRead, invalid),
 				}
@@ -798,8 +827,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, lows),
 					makeReadResponse(t, loadFrequencyRead, highs),
 				}
@@ -816,8 +845,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 					makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 					makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -837,8 +866,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 					makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 					makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -860,8 +889,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 					makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 					makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -885,8 +914,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 					makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 					makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -909,8 +938,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 					makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 					makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -934,8 +963,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 					makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 					makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -960,8 +989,8 @@ func TestClientFetchRangeFailureStopsWithoutPartialOrExtraDial(t *testing.T) {
 					makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 					makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 					makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-					makeReadResponse(t, upsPowerRead, []uint16{192}),
 					makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+					makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 					makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 					makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 					makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -1110,8 +1139,8 @@ func assertSnapshot(t *testing.T, snapshot *model.Snapshot, want map[string]floa
 	if len(snapshot.Metrics) != len(want) {
 		t.Fatalf("metrics = %d, want %d", len(snapshot.Metrics), len(want))
 	}
-	if len(snapshot.Metrics) != 80 {
-		t.Fatalf("metrics = %d, want exact 80-key Modbus surface", len(snapshot.Metrics))
+	if len(snapshot.Metrics) != 97 {
+		t.Fatalf("metrics = %d, want exact 97-key Modbus surface", len(snapshot.Metrics))
 	}
 	wantAlertNames := map[string]string{
 		"DEYE_MODBUS_R553_WARNING_WORD_1_RAW": "Deye Inverter Warning Word 1 (Raw U16)",
@@ -1175,16 +1204,11 @@ func assertSnapshot(t *testing.T, snapshot *model.Snapshot, want map[string]floa
 			t.Fatalf("duplicate metric key %q", metric.Key)
 		}
 		seen[metric.Key] = struct{}{}
-		if metric.Key == "C_P_L1" || metric.Key == "C_P_L2" || metric.Key == "C_P_L3" || metric.Key == "O_P" {
+		if metric.Key == "O_P" {
 			t.Fatalf("output/direct-load decoding emitted an excluded alias: %#v", metric)
 		}
 		if metric.Key == "DP3" || metric.Key == "DP4" || metric.Key == "DV3" || metric.Key == "DV4" || metric.Key == "DC3" || metric.Key == "DC4" {
 			t.Fatalf("two-MPPT profile emitted a forbidden PV3/PV4 alias: %#v", metric)
-		}
-		if metric.Key == "CT1_P_E" || metric.Key == "CT2_P_E" || metric.Key == "CT3_P_E" || metric.Key == "CT_T_E" ||
-			strings.Contains(metric.Key, "R613") || strings.Contains(metric.Key, "R614") || strings.Contains(metric.Key, "R615") ||
-			strings.Contains(metric.Key, "R616") || strings.Contains(metric.Key, "R617") || strings.Contains(metric.Key, "R618") || strings.Contains(metric.Key, "R619") {
-			t.Fatalf("grid frequency/current block emitted an ignored external-CT register metric: %#v", metric)
 		}
 		value, ok := want[metric.Key]
 		if !ok {
@@ -1283,6 +1307,7 @@ func assertSnapshot(t *testing.T, snapshot *model.Snapshot, want map[string]floa
 
 func expectedSnapshotMetrics(
 	ups float64,
+	upsPhases [3]float64,
 	loadVoltages [3]float64,
 	loadFrequency float64,
 	directLoadPhasePowers [3]float64,
@@ -1303,10 +1328,15 @@ func expectedSnapshotMetrics(
 	acRelayStatus uint16,
 	warningFaultWords [6]uint16,
 	runState uint16,
+	externalCT externalCTReadings,
+	internalGridPowers [4]float64,
 ) map[string]float64 {
 	result := map[string]float64{
 		"Pr1":                                 12000,
 		"UPS_P":                               ups,
+		"C_P_L1":                              upsPhases[0],
+		"C_P_L2":                              upsPhases[1],
+		"C_P_L3":                              upsPhases[2],
 		"C_V_L1":                              loadVoltages[0],
 		"C_V_L2":                              loadVoltages[1],
 		"C_V_L3":                              loadVoltages[2],
@@ -1326,6 +1356,14 @@ func expectedSnapshotMetrics(
 		"G_P_L2":                              gridPowers[1],
 		"G_P_L3":                              gridPowers[2],
 		"PG_Pt1":                              gridPowers[3],
+		"CT1_P_E":                             externalCT.powersW[0],
+		"CT2_P_E":                             externalCT.powersW[1],
+		"CT3_P_E":                             externalCT.powersW[2],
+		"CT_T_E":                              externalCT.powersW[3],
+		"GS_A":                                internalGridPowers[0],
+		"GS_B":                                internalGridPowers[1],
+		"GS_C":                                internalGridPowers[2],
+		"GS_T":                                internalGridPowers[3],
 		"AV1":                                 outputVoltages[0],
 		"AV2":                                 outputVoltages[1],
 		"AV3":                                 outputVoltages[2],
@@ -1347,10 +1385,13 @@ func expectedSnapshotMetrics(
 		"T_DC":                                inverterTemperatures[0],
 		"AC_T":                                inverterTemperatures[1],
 		"B_T1":                                temperature,
-		"BMST":                                temperature,
+		"BMST":                                22,
 		"B_V1":                                voltage,
 		"B_left_cap1":                         soc,
-		"BMS_SOC":                             soc,
+		"BMS_SOC":                             100,
+		"BMS_C_V":                             648,
+		"BMS_D_C_L":                           22,
+		"BMS_B_V1":                            615.2,
 		"B_P1":                                batteryPower,
 		"B_C1":                                batteryCurrent,
 		"AC":                                  float64(acRelayStatus),
@@ -1367,6 +1408,9 @@ func expectedSnapshotMetrics(
 		"GEN_P_D":                             0,
 		"GEN_P_TO":                            0,
 	}
+	result["JINKO_MODBUS_R613_EXTERNAL_CT_L1_CURRENT"] = externalCT.currentsA[0]
+	result["JINKO_MODBUS_R614_EXTERNAL_CT_L2_CURRENT"] = externalCT.currentsA[1]
+	result["JINKO_MODBUS_R615_EXTERNAL_CT_L3_CURRENT"] = externalCT.currentsA[2]
 	decoded, err := decodeEnergyMetrics(energy)
 	if err != nil {
 		panic(err)
@@ -1390,11 +1434,18 @@ func exportGridPowerLowWords() []uint16 {
 }
 
 func liveLoadVoltageWords() []uint16 {
-	return []uint16{0xFFFF, 0x8000, 0x7FFF, 0x1234, 2389, 2409, 2362}
+	// Synthetic combined frame: the 2026-10-07 UPS capture supplies only
+	// 640-643; these three voltages come from an earlier independent capture.
+	return []uint16{34, 72, 295, 401, 2389, 2409, 2362}
 }
 
 func nightLoadVoltageWords() []uint16 {
-	return []uint16{0x0000, 0xFFFF, 0x8000, 0x7FFF, 2354, 2401, 2358}
+	// Synthetic UPS U16 boundaries deliberately do not sum to their total.
+	return []uint16{0x0000, 0xFFFF, 0x8000, 193, 2354, 2401, 2358}
+}
+
+func boundaryUPSLoadWords() []uint16 {
+	return []uint16{0xFFFF, 0x8000, 0x7FFF, 0xFFFF, 2389, 2409, 2362}
 }
 
 func liveLoadFrequencyWords() []uint16 {
@@ -1419,8 +1470,8 @@ func liveGridFrequencyCurrentWords() []uint16 {
 	return []uint16{4995, 53, 66, 155, 53, 63, 157, 100, 102, 120, 322}
 }
 
-func mutatedIgnoredGridFrequencyCurrentWords() []uint16 {
-	return []uint16{4995, 53, 66, 155, 0xFFFF, 0x8000, 0x7FFF, 0x1234, 0xABCD, 0x0001, 0xFFFE}
+func syntheticSignedExternalCTWords() []uint16 {
+	return []uint16{4995, 53, 66, 155, 0xFFFF, 0x8000, 0x7FFF, 0xFFF6, 20, 0xFFE2, 0xFFEB}
 }
 
 func livePVInputWords() []uint16 {
@@ -1456,8 +1507,8 @@ func responsesThroughOutputScalar(t *testing.T, outputWords []uint16) [][]byte {
 		makeReadResponse(t, generatorPortModeRead, []uint16{0}),
 		makeReadResponse(t, generatorEnergyRead, make([]uint16, 4)),
 		makeReadResponse(t, generatorElectricalRead, make([]uint16, 11)),
-		makeReadResponse(t, upsPowerRead, []uint16{192}),
 		makeReadResponse(t, loadVoltageRead, liveLoadVoltageWords()),
+		makeReadResponse(t, upsPowerHighRead, []uint16{0, 0, 0, 0}),
 		makeReadResponse(t, directLoadPowerLowRead, liveDirectLoadPowerLowWords()),
 		makeReadResponse(t, loadFrequencyRead, liveLoadFrequencyWords()),
 		makeReadResponse(t, gridVoltageRead, []uint16{2504, 2411, 2368}),
@@ -1477,6 +1528,7 @@ func responsesThroughEnergy(t *testing.T) [][]byte {
 		makeReadResponse(t, batteryTemperatureRead, []uint16{1280}),
 		makeReadResponse(t, batteryVoltageSOCRead, []uint16{6017, 100}),
 		makeReadResponse(t, batteryFlowRead, []uint16{9, 16}),
+		makeReadResponse(t, bmsMirrorsRead, capturedBMSMirrorWords()),
 		makeReadResponse(t, energyRead, liveEnergyWords()),
 	)
 }
