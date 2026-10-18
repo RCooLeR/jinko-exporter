@@ -9,6 +9,8 @@ class JksDetailedCard extends EnergyArtCard {
     type: `custom:${CARD_TAG}`,
     title: "",
     static: false,
+    stabilizers: false,
+    stabilizers_test_mirror_grid: false,
     show_entity_map: false,
     battery_capacity_kwh: 21.31,
     battery_negative_is_charging: true,

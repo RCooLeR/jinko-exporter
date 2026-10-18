@@ -135,6 +135,8 @@ func runServe(parent context.Context, cfg config.Config) error {
 
 	var gridLoadSource source.Source
 	var gridLoadState *poller.State
+	var gridInputSource source.Source
+	var gridInputState *poller.State
 	initialSource := src.Name()
 	if cfg.ShellyGridLoad.Enabled {
 		gridLoadSource, err = shelly.NewGridLoadClient(cfg.ShellyGridLoad)
@@ -142,6 +144,14 @@ func runServe(parent context.Context, cfg config.Config) error {
 			return err
 		}
 		gridLoadState = poller.NewState(gridLoadSource.Name())
+		initialSource = cfg.SourcePriority[0]
+	}
+	if cfg.ShellyGridInput.Enabled {
+		gridInputSource, err = shelly.NewGridInputClient(cfg.ShellyGridInput)
+		if err != nil {
+			return err
+		}
+		gridInputState = poller.NewState(gridInputSource.Name())
 		initialSource = cfg.SourcePriority[0]
 	}
 	state := poller.NewState(initialSource)
@@ -179,6 +189,14 @@ func runServe(parent context.Context, cfg config.Config) error {
 		// failed cloud freshness checks must never hold up its polling loop.
 		runners = append(runners, poller.NewRunner(gridLoadSource, cfg.PollInterval, gridLoadState, nil, config.AlertConfig{}, gridObservers...))
 		collectorOptions = append(collectorOptions, prom.WithGridLoad(gridLoadState, configuredInverterSerial(cfg)))
+	}
+	if gridInputState != nil {
+		var inputObservers []poller.Observer
+		if mqttPublisher != nil {
+			inputObservers = append(inputObservers, mqttPublisher.GridInputObserver())
+		}
+		runners = append(runners, poller.NewRunner(gridInputSource, cfg.PollInterval, gridInputState, nil, config.AlertConfig{}, inputObservers...))
+		collectorOptions = append(collectorOptions, prom.WithGridInput(gridInputState, configuredInverterSerial(cfg)))
 	}
 
 	registry := prometheus.NewRegistry()
@@ -431,14 +449,25 @@ func buildSingleSource(sourceName string, cfg config.Config, alerts *alert.Manag
 }
 
 func enrichSource(src source.Source, cfg config.Config) (source.Source, error) {
-	if !cfg.ShellyGridLoad.Enabled {
+	var enrichments []source.Source
+	if cfg.ShellyGridLoad.Enabled {
+		gridLoad, err := shelly.NewGridLoadClient(cfg.ShellyGridLoad)
+		if err != nil {
+			return nil, err
+		}
+		enrichments = append(enrichments, gridLoad)
+	}
+	if cfg.ShellyGridInput.Enabled {
+		gridInput, err := shelly.NewGridInputClient(cfg.ShellyGridInput)
+		if err != nil {
+			return nil, err
+		}
+		enrichments = append(enrichments, gridInput)
+	}
+	if len(enrichments) == 0 {
 		return src, nil
 	}
-	gridLoad, err := shelly.NewGridLoadClient(cfg.ShellyGridLoad)
-	if err != nil {
-		return nil, err
-	}
-	return source.NewEnriched(src, gridLoad), nil
+	return source.NewEnriched(src, enrichments...), nil
 }
 
 func buildAlerts(cfg config.Config) (*alert.Manager, error) {

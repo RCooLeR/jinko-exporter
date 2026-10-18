@@ -1,7 +1,7 @@
 package hamqtt
 
 import (
-	"errors"
+	"fmt"
 	"maps"
 	"strings"
 	"time"
@@ -18,14 +18,59 @@ func (p *Publisher) GridLoadObserver() poller.Observer {
 	p.mu.Lock()
 	p.independentGridLoad = true
 	p.mu.Unlock()
-	return gridLoadObserver{publisher: p}
+	return gridMeterObserver{publisher: p, group: "grid_load"}
 }
 
-type gridLoadObserver struct {
+// GridInputObserver owns the optional upstream-of-stabilizers meter. Its
+// availability and timestamps are independent of both other poll runners.
+func (p *Publisher) GridInputObserver() poller.Observer {
+	p.mu.Lock()
+	p.independentGridInput = true
+	p.mu.Unlock()
+	return gridMeterObserver{publisher: p, group: "grid_input"}
+}
+
+type gridMeterObserver struct {
 	publisher *Publisher
+	group     string
 }
 
-func (observer gridLoadObserver) OnPollSuccess(snapshot *model.Snapshot, _ time.Duration) (resultErr error) {
+type gridMeterStream struct {
+	group       string
+	enabled     bool
+	snapshot    **model.Snapshot
+	up          *bool
+	publishedAt *string
+}
+
+// Call only while holding the publisher lock, or during construction.
+func (p *Publisher) gridMeterStreams() []gridMeterStream {
+	return []gridMeterStream{
+		{"grid_load", p.independentGridLoad, &p.gridLoadSnapshot, &p.gridLoadUp, &p.gridLoadPublishedAt},
+		{"grid_input", p.independentGridInput, &p.gridInputSnapshot, &p.gridInputUp, &p.gridInputPublishedAt},
+	}
+}
+
+func (p *Publisher) independentMeters() bool { return p.independentGridLoad || p.independentGridInput }
+
+func (p *Publisher) ownsIndependentMetric(metric model.Metric) bool {
+	return p.independentGridLoad && isGridLoadMetric(metric) || p.independentGridInput && isGridInputMetric(metric)
+}
+
+func (p *Publisher) ownsIndependentMeta(key string) bool {
+	return p.independentGridLoad && isGridLoadMetaKey(key) || p.independentGridInput && isGridInputMetaKey(key)
+}
+
+func (observer gridMeterObserver) stream() gridMeterStream {
+	for _, stream := range observer.publisher.gridMeterStreams() {
+		if stream.group == observer.group {
+			return stream
+		}
+	}
+	panic("unknown independent meter observer")
+}
+
+func (observer gridMeterObserver) OnPollSuccess(snapshot *model.Snapshot, _ time.Duration) (resultErr error) {
 	if snapshot == nil {
 		return nil
 	}
@@ -35,36 +80,37 @@ func (observer gridLoadObserver) OnPollSuccess(snapshot *model.Snapshot, _ time.
 	if p.closing || p.closed {
 		return nil
 	}
+	stream := observer.stream()
 	for _, metric := range snapshot.Metrics {
-		if !isGridLoadMetric(metric) {
-			p.gridLoadUp = false
+		if !strings.EqualFold(strings.TrimSpace(metric.Group), stream.group) {
+			*stream.up = false
 			if err := p.publishIndependentLocked(); err != nil {
 				p.markPublicationFailureLocked()
 			}
-			return errors.New("grid-load MQTT observer received a non-grid-load metric")
+			return fmt.Errorf("%s MQTT observer received a metric from another stream", stream.group)
 		}
 	}
-	previous, previousPublishedAt := p.gridLoadSnapshot, p.gridLoadPublishedAt
-	p.gridLoadSnapshot = cloneStreamSnapshot(snapshot)
-	p.gridLoadUp = true
-	p.gridLoadPublishedAt = time.Now().UTC().Format(time.RFC3339)
+	previous, previousPublishedAt := *stream.snapshot, *stream.publishedAt
+	*stream.snapshot = cloneStreamSnapshot(snapshot)
+	*stream.up = true
+	*stream.publishedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := p.publishIndependentLocked(); err != nil {
-		p.gridLoadSnapshot, p.gridLoadPublishedAt = previous, previousPublishedAt
-		p.gridLoadUp = false
+		*stream.snapshot, *stream.publishedAt = previous, previousPublishedAt
+		*stream.up = false
 		p.markPublicationFailureLocked()
 		return err
 	}
 	return nil
 }
 
-func (observer gridLoadObserver) OnPollFailure(_ string, _ error, _ time.Duration, _ uint64) error {
+func (observer gridMeterObserver) OnPollFailure(_ string, _ error, _ time.Duration, _ uint64) error {
 	p := observer.publisher
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closing || p.closed {
 		return nil
 	}
-	p.gridLoadUp = false
+	*observer.stream().up = false
 	if err := p.publishIndependentLocked(); err != nil {
 		p.markPublicationFailureLocked()
 		return err
@@ -80,24 +126,28 @@ func (p *Publisher) publishIndependentLocked() error {
 		// Legacy enriched snapshots may have included Shelly metadata. The
 		// independent stream now owns those keys, including their availability.
 		for key := range combined.Meta {
-			if isGridLoadMetaKey(key) {
+			if p.ownsIndependentMeta(key) {
 				delete(combined.Meta, key)
 			}
 		}
 		if p.inverterUp {
 			for _, metric := range p.inverterSnapshot.Metrics {
-				if !isGridLoadMetric(metric) {
+				if !p.ownsIndependentMetric(metric) {
 					combined.Metrics = append(combined.Metrics, metric)
 				}
 			}
 		}
 	}
-	if p.gridLoadUp && p.gridLoadSnapshot != nil {
-		combined.Metrics = append(combined.Metrics, p.gridLoadSnapshot.Metrics...)
+	for _, stream := range p.gridMeterStreams() {
+		if !stream.enabled || !*stream.up || *stream.snapshot == nil {
+			continue
+		}
+		snapshot := *stream.snapshot
+		combined.Metrics = append(combined.Metrics, snapshot.Metrics...)
 		if combined.Meta == nil {
 			combined.Meta = make(map[string]string)
 		}
-		maps.Copy(combined.Meta, gridLoadMetadata(p.gridLoadSnapshot.Meta))
+		maps.Copy(combined.Meta, gridMeterMetadata(snapshot.Meta, stream.group))
 	}
 	return p.publishSnapshotLocked(combined, p.inverterDuration)
 }
@@ -127,10 +177,18 @@ func isGridLoadMetaKey(key string) bool {
 	return strings.HasPrefix(sanitizeID(key), "shelly_grid_load_")
 }
 
-func gridLoadMetadata(meta map[string]string) map[string]string {
+func isGridInputMetric(metric model.Metric) bool {
+	return strings.EqualFold(strings.TrimSpace(metric.Group), "grid_input")
+}
+
+func isGridInputMetaKey(key string) bool {
+	return strings.HasPrefix(sanitizeID(key), "shelly_grid_input_")
+}
+
+func gridMeterMetadata(meta map[string]string, group string) map[string]string {
 	owned := make(map[string]string)
 	for key, value := range meta {
-		if isGridLoadMetaKey(key) {
+		if strings.HasPrefix(sanitizeID(key), "shelly_"+group+"_") {
 			owned[key] = value
 		}
 	}

@@ -35,12 +35,19 @@ export const formatVoltage = (value: number | null | undefined): string =>
 export const formatCurrent = (value: number | null | undefined): string => {
   if (!isFiniteNumber(value)) return "--";
   const abs = Math.abs(value);
-  if (abs < 1) return `${formatNumber(abs * 1000, abs < 0.1 ? 0 : 1)} mA`;
-  return `${formatNumber(abs, abs >= 10 ? 1 : 2)} A`;
+  if (abs < 1) return `${formatNumber(value * 1000, abs < 0.1 ? 0 : 1)} mA`;
+  return `${formatNumber(value, abs >= 10 ? 1 : 2)} A`;
 };
 
 export const formatEnergy = (value: number | null | undefined): string =>
   isFiniteNumber(value) ? `${formatNumber(value, value >= 10 ? 1 : 2)} kWh` : "--";
+
+export const formatSignedEnergy = (value: number | null | undefined): string => {
+  if (!isFiniteNumber(value)) return "--";
+  const magnitude = formatNumber(Math.abs(value), 2);
+  if (Number(magnitude) === 0) return "0 kWh";
+  return `${value > 0 ? "+" : "-"}${magnitude} kWh`;
+};
 
 export const formatPercent = (value: number | null | undefined): string =>
   isFiniteNumber(value) ? `${formatNumber(value, value >= 10 ? 0 : 1)}%` : "--";

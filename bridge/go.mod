@@ -1,6 +1,6 @@
 module github.com/RCooLeR/jinko-exporter/bridge
 
-go 1.27.0
+go 1.27.2
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
@@ -8,7 +8,7 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/rs/zerolog v1.35.1
 	github.com/urfave/cli/v3 v3.11.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 )
 
 require (
@@ -22,7 +22,7 @@ require (
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )

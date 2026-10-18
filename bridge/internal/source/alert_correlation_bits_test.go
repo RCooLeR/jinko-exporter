@@ -70,7 +70,6 @@ func TestModbusAlertActiveBitsEmptyMixedAllAndMutationSafety(t *testing.T) {
 			if len(first) > 0 {
 				first[0] = ModbusAlertBit{Register: 1, Bit: 99}
 			}
-			first = append(first, ModbusAlertBit{Register: 999, Bit: 99})
 			if test.signature != before || !reflect.DeepEqual(test.signature.ActiveBits(), test.want) {
 				t.Fatal("returned slice mutation changed raw signature or later evidence")
 			}

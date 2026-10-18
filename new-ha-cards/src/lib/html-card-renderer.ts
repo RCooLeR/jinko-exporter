@@ -5,6 +5,8 @@ export type EnergyCardVariant = "detailed" | "summary";
 
 export interface HtmlRenderState {
   title: string;
+  stabilizers?: boolean;
+  stabilizersTestMirrorGrid?: boolean;
   values: Record<string, string>;
   flags: Record<string, boolean>;
   warning?: string;
@@ -14,6 +16,8 @@ export interface HtmlRenderState {
 export class HtmlCardRenderer {
   private readonly root: ShadowRoot;
   private renderedVariant?: EnergyCardVariant;
+  private renderedStabilizers = false;
+  private renderedTestMirrorGrid = false;
   private styleEl?: HTMLStyleElement;
   private titleEl?: HTMLDivElement;
   private dashboardEl?: HTMLDivElement;
@@ -40,7 +44,7 @@ export class HtmlCardRenderer {
   }
 
   render(variant: EnergyCardVariant, state: HtmlRenderState): void {
-    this.ensureStructure(variant);
+    this.ensureStructure(variant, state.stabilizers === true, state.stabilizers === true && state.stabilizersTestMirrorGrid === true);
     this.syncTitle(state.title);
     this.syncFields(state.values);
     this.syncFlags(state.flags);
@@ -49,15 +53,15 @@ export class HtmlCardRenderer {
     requestAnimationFrame(() => this.positionFlowLines());
   }
 
-  private ensureStructure(variant: EnergyCardVariant): void {
-    if (this.renderedVariant === variant && this.styleEl && this.dashboardEl && this.titleEl && this.warningEl && this.entityMapEl) {
+  private ensureStructure(variant: EnergyCardVariant, stabilizers: boolean, testMirrorGrid: boolean): void {
+    if (this.renderedVariant === variant && this.renderedStabilizers === stabilizers && this.renderedTestMirrorGrid === testMirrorGrid && this.styleEl && this.dashboardEl && this.titleEl && this.warningEl && this.entityMapEl) {
       return;
     }
 
     this.cleanupLayoutObservers();
     this.root.replaceChildren();
     this.styleEl = document.createElement("style");
-    this.styleEl.textContent = styles();
+    this.styleEl.textContent = energyCardStyles();
 
     const card = document.createElement("ha-card");
     const shell = document.createElement("div");
@@ -67,8 +71,8 @@ export class HtmlCardRenderer {
     this.titleEl.className = "card-title";
 
     this.dashboardEl = document.createElement("div");
-    this.dashboardEl.className = `energy-dashboard energy-dashboard--${variant}`;
-    this.dashboardEl.innerHTML = variant === "summary" ? summaryMarkup() : detailedMarkup();
+    this.dashboardEl.className = `energy-dashboard energy-dashboard--${variant}${stabilizers ? " energy-dashboard--stabilizers" : ""}`;
+    this.dashboardEl.innerHTML = energyCardMarkup(variant, stabilizers, testMirrorGrid);
 
     this.warningEl = document.createElement("div");
     this.warningEl.className = "helper helper--warn";
@@ -82,6 +86,8 @@ export class HtmlCardRenderer {
     card.append(shell);
     this.root.append(this.styleEl, card);
     this.renderedVariant = variant;
+    this.renderedStabilizers = stabilizers;
+    this.renderedTestMirrorGrid = testMirrorGrid;
     this.setupLayoutObservers();
   }
 
@@ -405,7 +411,7 @@ const nodeTitle = (iconName: IconName, title: string, subtitle = ""): string => 
 const flowLine = (id: string, from: string, to: string): string =>
   `<span class="flow-line line-${id}" data-flow-line="${id}" data-flow-from="${from}" data-flow-to="${to}" aria-hidden="true"></span>`;
 
-const detailedFlowLines = (): string => `
+const detailedFlowLines = (stabilizers = false): string => `
   <div class="detail-flow-lines" aria-hidden="true">
     ${flowLine("pv1-inverter", "pv1", "inverter")}
     ${flowLine("pv2-inverter", "pv2", "inverter")}
@@ -414,16 +420,18 @@ const detailedFlowLines = (): string => `
     ${flowLine("generator-inverter", "generator", "inverter")}
     ${flowLine("inverter-ups", "inverter", "ups")}
     ${flowLine("grid-load", "grid", "grid-load")}
+    ${stabilizers ? flowLine("grid-input-stabilized", "grid-input", "grid") : ""}
   </div>
 `;
 
-const summaryFlowLines = (): string => `
+const summaryFlowLines = (stabilizers = false): string => `
   <div class="summary-flow-lines" aria-hidden="true">
     ${flowLine("pv-inverter", "pv-total", "inverter")}
     ${flowLine("inverter-grid", "inverter", "grid")}
     ${flowLine("inverter-ups", "inverter", "ups")}
     ${flowLine("battery-inverter", "battery", "inverter")}
     ${flowLine("grid-load", "grid", "grid-load")}
+    ${stabilizers ? flowLine("grid-input-stabilized", "grid-input", "grid") : ""}
   </div>
 `;
 
@@ -444,25 +452,46 @@ const topStrip = (): string => `
   </section>
 `;
 
-const summaryChips = (): string => `
+const summaryChips = (stabilizers = false): string => `
   <section class="summary-chips" aria-label="Daily summary">
     ${chip("green", "sun", L.productionDay, "daily.production.value", "daily.production.unit")}
-    ${chip("amber", "cart", L.importDay, "daily.import.value", "daily.import.unit")}
-    ${chip("green", "arrowUpRight", L.exportDay, "daily.export.value", "daily.export.unit")}
+    ${chip("amber", "cart", downstreamLabel(L.importDay, stabilizers), "daily.import.value", "daily.import.unit")}
+    ${chip("green", "arrowUpRight", downstreamLabel(L.exportDay, stabilizers), "daily.export.value", "daily.export.unit")}
     ${chip("amber", "generator", L.generatorDay, "daily.generator.value", "daily.generator.unit")}
     ${chip("blue", "home", L.selfConsumption, "system.self_consumption", "")}
     ${chip("purple", "wallet", L.costDay, "daily.cost.value", "daily.cost.unit", null)}
   </section>
 `;
 
-const detailedMarkup = (): string => `
+const downstreamLabel = (label: string, stabilizers: boolean): string => stabilizers ? `${label} (після стаб.)` : label;
+
+const gridInputMarkup = (variant: EnergyCardVariant, testMirrorGrid: boolean): string => `
+  <article class="node node--grid-input${variant === "summary" ? " summary-node" : ""}" data-flow-node="grid-input">
+    ${nodeTitle("grid", testMirrorGrid ? "Grid · TEST / MIRROR" : "Grid", testMirrorGrid ? "Копія Stabilized Grid · не вимірювання Shelly" : "До стабілізаторів · Shelly")}
+    ${line(L.phases, "grid_input.phases")}
+    ${variant === "detailed" ? `${line(L.current, "grid_input.current")}${line(L.frequency, "grid_input.frequency")}${line(L.phasePower, "grid_input.phase_power")}` : ""}
+    ${valueUnit(L.power, "grid_input.power.value", "grid_input.power.unit", "blue")}
+    ${line("Today", "grid_input.energy_today")}
+  </article>
+`;
+
+// Pure markup builder also keeps both layout variants independently testable.
+export const energyCardMarkup = (variant: EnergyCardVariant, stabilizers = false, mirrorGrid = false): string => {
+  const testMirrorGrid = stabilizers && mirrorGrid;
+  const banner = testMirrorGrid
+    ? `<div class="test-mirror-banner" role="note"><strong>TEST / MIRROR</strong><span>Grid і Today дублюють дані після стабілізаторів. Це не вимірювання до стабілізаторів.</span></div>`
+    : "";
+  return banner + (variant === "summary" ? summaryMarkup(stabilizers, testMirrorGrid) : detailedMarkup(stabilizers, testMirrorGrid));
+};
+
+const detailedMarkup = (stabilizers = false, testMirrorGrid = false): string => `
   <section class="detailed-shell">
     <aside class="side-rail">
       <div class="sidebar-chips">
         ${chip("green", "shield", L.system, "system.online", "")}
         ${chip("green", "sun", L.productionDay, "daily.production.value", "daily.production.unit")}
-        ${chip("green", "arrowUpRight", L.exportDay, "daily.export.value", "daily.export.unit")}
-        ${chip("amber", "cart", L.importDay, "daily.import.value", "daily.import.unit")}
+        ${chip("green", "arrowUpRight", downstreamLabel(L.exportDay, stabilizers), "daily.export.value", "daily.export.unit")}
+        ${chip("amber", "cart", downstreamLabel(L.importDay, stabilizers), "daily.import.value", "daily.import.unit")}
         ${chip("amber", "generator", L.generatorDay, "daily.generator.value", "daily.generator.unit")}
         ${chip("purple", "wallet", L.costDay, "daily.cost.value", "daily.cost.unit", null)}
         ${chip("blue", "home", L.selfConsumption, "system.self_consumption", "")}
@@ -471,7 +500,8 @@ const detailedMarkup = (): string => `
     </aside>
     <div class="flow-scale-frame">
       <section class="flow-board flow-board--detailed" aria-label="Energy flow">
-        ${detailedFlowLines()}
+        ${detailedFlowLines(stabilizers)}
+        ${stabilizers ? gridInputMarkup("detailed", testMirrorGrid) : ""}
         <div class="flow-row flow-row--pv">
           <article class="node node--pv node--pv1" data-flow-node="pv1">
             ${nodeTitle("solarPanel", L.pvField1)}
@@ -489,7 +519,7 @@ const detailedMarkup = (): string => `
         <div class="flow-row flow-row--middle">
           <div class="node-slot node-slot--grid">
             <article class="node node--grid" data-flow-node="grid">
-              ${nodeTitle("grid", L.grid)}
+              ${nodeTitle("grid", stabilizers ? "Stabilized Grid" : L.grid, stabilizers ? "Після стабілізаторів · Jinko CT" : "")}
               ${line(L.phases, "grid.phases")}
               ${line(L.current, "grid.current")}
               ${line(L.frequency, "system.frequency")}
@@ -540,7 +570,7 @@ const detailedMarkup = (): string => `
         </div>
         <div class="flow-row flow-row--bottom">
           <article class="node node--grid-load" data-flow-node="grid-load">
-            ${nodeTitle("home", L.gridLoad, L.gridLoadSub)}
+            ${nodeTitle("home", stabilizers ? "Parallel Grid Load" : L.gridLoad, stabilizers ? "Після стабілізаторів · Shelly" : L.gridLoadSub)}
             ${line(L.phases, "grid_load.phases")}
             ${line(L.current, "grid_load.current")}
             <div class="phase-row"><span>${L.phasePower}</span><strong data-field="grid_load.phase_power"></strong></div>
@@ -573,23 +603,25 @@ const detailedMarkup = (): string => `
   </section>
 `;
 
-const summaryMarkup = (): string => `
+const summaryMarkup = (stabilizers = false, testMirrorGrid = false): string => `
   <div class="summary-scale-frame">
     <section class="summary-shell">
-      ${summaryChips()}
+      ${summaryChips(stabilizers)}
       <section class="flow-board flow-board--summary" aria-label="Energy summary flow">
-        ${summaryFlowLines()}
+        ${summaryFlowLines(stabilizers)}
+        ${stabilizers ? gridInputMarkup("summary", testMirrorGrid) : ""}
         <article class="node node--pv-total summary-node" data-flow-node="pv-total">
           ${nodeTitle("solarPanel", L.pvGeneration)}
           ${valueUnit("DC", "pv.total.power.value", "pv.total.power.unit", "green")}
         </article>
         <article class="node node--grid summary-node" data-flow-node="grid">
-          ${nodeTitle("grid", L.grid)}
+          ${nodeTitle("grid", stabilizers ? "Stabilized Grid" : L.grid)}
+          ${stabilizers ? line(L.phases, "grid.phases") : ""}
           ${valueUnit(L.power, "grid.power.value", "grid.power.unit", "blue")}
           <div class="node-status node-status--blue">${icon("arrowDown")}<span data-field="grid.status"></span></div>
         </article>
         <article class="node node--grid-load summary-node" data-flow-node="grid-load">
-          ${nodeTitle("home", L.gridLoad)}
+          ${nodeTitle("home", stabilizers ? "Parallel Grid Load" : L.gridLoad)}
           ${valueUnit(L.power, "grid_load.power.value", "grid_load.power.unit", "blue")}
         </article>
         <article class="node node--inverter summary-inverter" data-flow-node="inverter">
@@ -671,7 +703,7 @@ const flowSvg = (variant: EnergyCardVariant): string => `
   </svg>
 `;
 
-const styles = (): string => `
+export const energyCardStyles = (): string => `
   :host {
     display: block;
     width: 100%;
@@ -3131,6 +3163,139 @@ const styles = (): string => `
 
     .flow-board--summary .battery-mode {
       padding-right: 0;
+    }
+  }
+
+  /* Optional topology only: the original two-meter layout stays untouched. */
+  .energy-dashboard--stabilizers .test-mirror-banner {
+    display: grid;
+    gap: 4px;
+    padding: 12px 16px;
+    border: 2px solid #ffbf2f;
+    border-radius: 8px;
+    background: #33250a;
+    color: #fff0bc;
+    font-size: 14px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .energy-dashboard--stabilizers .test-mirror-banner strong {
+    color: #ffcf63;
+    letter-spacing: .08em;
+  }
+
+  .energy-dashboard--stabilizers .flow-board--detailed {
+    grid-template-columns: minmax(150px, 0.85fr) repeat(2, minmax(0, 1fr)) minmax(260px, 1.25fr);
+    grid-template-areas:
+      "ups pv1 pv2 grid-input"
+      "battery inverter inverter grid"
+      "battery generator generator grid-load";
+    align-items: center;
+    gap: 28px;
+  }
+
+  .energy-dashboard--stabilizers .flow-row { display: contents; }
+  .energy-dashboard--stabilizers .node--pv1 { grid-area: pv1; }
+  .energy-dashboard--stabilizers .node--pv2 { grid-area: pv2; }
+  .energy-dashboard--stabilizers .node--inverter { grid-area: inverter; }
+  .energy-dashboard--stabilizers .node-slot--ups { grid-area: ups; }
+  .energy-dashboard--stabilizers .node-slot--grid { grid-area: grid; }
+  .energy-dashboard--stabilizers .node--grid-input { grid-area: grid-input; }
+  .energy-dashboard--stabilizers .node--generator { grid-area: generator; }
+  .energy-dashboard--stabilizers .node--battery { grid-area: battery; }
+  .energy-dashboard--stabilizers .node--grid-load { grid-area: grid-load; }
+
+  /* Side panels cannot share one line between a label and three phase values.
+     Give both their full width and let complete readings wrap, never truncate. */
+  .energy-dashboard--stabilizers .flow-board--detailed :is(.node--ups, .node--grid-input, .node--grid, .node--grid-load) :is(.metric-line, .phase-row) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    padding-block: 6px;
+  }
+
+  .energy-dashboard--stabilizers .flow-board--detailed :is(.node--ups, .node--grid-input, .node--grid, .node--grid-load) :is(.metric-line, .phase-row) strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .energy-dashboard--stabilizers .flow-board--detailed .inverter-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .energy-dashboard--stabilizers .flow-board--detailed .inverter-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .energy-dashboard--stabilizers .flow-board--detailed .battery-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    grid-template-areas: "battery-soc" "battery-data" "battery-temp";
+    gap: 16px;
+  }
+
+  .energy-dashboard--stabilizers .flow-board--detailed .soc-ring {
+    width: min(150px, 100%);
+    margin: 0 auto;
+  }
+
+  .energy-dashboard--stabilizers .flow-board--summary {
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) minmax(240px, 1fr);
+    grid-template-rows: auto auto auto;
+    grid-template-areas:
+      "pv inverter grid-input"
+      "battery inverter grid"
+      "battery load grid-load";
+  }
+
+  .energy-dashboard--stabilizers .summary-shell {
+    height: auto;
+    min-height: 480px;
+  }
+
+  .energy-dashboard--stabilizers .chip__label { white-space: normal; }
+  .energy-dashboard--stabilizers .node h3 { overflow-wrap: anywhere; }
+  .node--grid-input {
+    --node-glow: rgba(74, 163, 255, 0.16);
+    border-color: rgba(74, 163, 255, 0.58);
+  }
+  .node--grid-input .node-title { color: var(--blue); }
+  .line-grid-input-stabilized { --flow-rgb: 74, 163, 255; }
+  .energy-dashboard.is-grid-input-offline .node--grid-input {
+    --node-glow: transparent;
+    border-color: rgba(170, 185, 196, 0.26);
+    background: linear-gradient(140deg, rgba(31, 42, 50, 0.72), rgba(5, 13, 18, 0.94));
+  }
+  .energy-dashboard.is-grid-input-offline .node--grid-input .node-title,
+  .energy-dashboard.is-grid-input-offline .node--grid-input .power-readout strong {
+    color: rgba(178, 191, 202, 0.72);
+  }
+
+  @media (max-width: 1024px) {
+    .energy-dashboard--stabilizers .summary-shell { min-height: 0; }
+    .energy-dashboard--stabilizers .flow-board--summary {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-areas:
+        "pv grid-input"
+        "inverter grid"
+        "load grid-load"
+        "battery battery";
+    }
+  }
+
+  @media (max-width: 767px) {
+    .energy-dashboard--stabilizers .flow-board--summary,
+    .energy-dashboard--detailed.energy-dashboard--stabilizers .flow-board--detailed {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 12px;
+    }
+    .energy-dashboard--stabilizers .flow-board--summary {
+      grid-template-areas: "grid-input" "grid" "grid-load" "pv" "inverter" "load" "battery";
+    }
+    .energy-dashboard--detailed.energy-dashboard--stabilizers .flow-board--detailed {
+      grid-template-areas: "grid-input" "grid" "grid-load" "pv1" "pv2" "inverter" "ups" "battery" "generator";
     }
   }
 `;

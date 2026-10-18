@@ -18,11 +18,10 @@ export const measuredGridLoadFor = (value: (key: EntityKey) => Reading): Measure
   const currentPhases = [1, 2, 3].map((phase) => value(`grid_load_l${phase}_current` as EntityKey));
   const powerPhases = [1, 2, 3].map((phase) => value(`grid_load_l${phase}_power` as EntityKey));
   const voltages = voltagePhases.filter(isReading);
-  const currents = currentPhases.filter(isReading).map(Math.abs);
-  const powers = powerPhases.filter(isReading);
   const voltage = voltages.length ? total(voltages) / voltages.length : null;
-  const current = value("grid_load_total_current") ?? (currents.length ? total(currents) : null);
-  const power = value("grid_load_total_power") ?? (powers.length ? total(powers) : null);
+  // Dedicated totals must never silently become sums of partially available phases.
+  const current = value("grid_load_total_current") ?? (currentPhases.every(isReading) ? total(currentPhases.map(Math.abs)) : null);
+  const power = value("grid_load_total_power") ?? (powerPhases.every(isReading) ? total(powerPhases) : null);
 
   return {
     voltage,
@@ -31,7 +30,7 @@ export const measuredGridLoadFor = (value: (key: EntityKey) => Reading): Measure
     voltagePhases,
     currentPhases,
     powerPhases,
-    available: [voltage, current, power].some(isReading)
+    available: [voltage, current, power, ...currentPhases, ...powerPhases].some(isReading)
   };
 };
 

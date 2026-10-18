@@ -52,6 +52,7 @@ type Config struct {
 	Solarman               SolarmanConfig
 	Modbus                 ModbusConfig
 	ShellyGridLoad         ShellyGridLoadConfig
+	ShellyGridInput        ShellyGridInputConfig
 }
 
 func (cfg Config) Redacted() Config {
@@ -198,6 +199,10 @@ type ShellyGridLoadConfig struct {
 	Timeout time.Duration
 }
 
+// The upstream and parallel-load meters have independent settings and source
+// identities, but share the same validated Shelly RPC configuration shape.
+type ShellyGridInputConfig = ShellyGridLoadConfig
+
 func Flags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "source", Value: "jinko", Usage: "Data source: jinko, solarman, modbus", Sources: cli.EnvVars("EXPORTER_SOURCE")},
@@ -314,6 +319,10 @@ func Flags() []cli.Flag {
 		&cli.StringFlag{Name: "shelly-grid-load-url", Usage: "Shelly Pro 3EM base URL, for example http://192.0.2.50", Sources: cli.EnvVars("SHELLY_GRID_LOAD_URL")},
 		&cli.IntFlag{Name: "shelly-grid-load-em-id", Value: 0, Usage: "Shelly EM component id used for grid-load measurements", Sources: cli.EnvVars("SHELLY_GRID_LOAD_EM_ID")},
 		&cli.DurationFlag{Name: "shelly-grid-load-timeout", Value: 5 * time.Second, Usage: "Shelly HTTP timeout", Sources: cli.EnvVars("SHELLY_GRID_LOAD_TIMEOUT")},
+		&cli.BoolFlag{Name: "shelly-grid-input-enabled", Value: false, Usage: "Collect independent upstream grid measurements before the stabilizers from a second Shelly Pro 3EM", Sources: cli.EnvVars("SHELLY_GRID_INPUT_ENABLED")},
+		&cli.StringFlag{Name: "shelly-grid-input-url", Usage: "Upstream Shelly Pro 3EM base URL, for example http://192.0.2.60", Sources: cli.EnvVars("SHELLY_GRID_INPUT_URL")},
+		&cli.IntFlag{Name: "shelly-grid-input-em-id", Value: 0, Usage: "Shelly EM component id used for upstream grid-input measurements", Sources: cli.EnvVars("SHELLY_GRID_INPUT_EM_ID")},
+		&cli.DurationFlag{Name: "shelly-grid-input-timeout", Value: 5 * time.Second, Usage: "Upstream Shelly HTTP timeout", Sources: cli.EnvVars("SHELLY_GRID_INPUT_TIMEOUT")},
 	}
 }
 
@@ -479,6 +488,12 @@ func FromCLI(c *cli.Command) (Config, error) {
 			BaseURL: c.String("shelly-grid-load-url"),
 			EMID:    c.Int("shelly-grid-load-em-id"),
 			Timeout: c.Duration("shelly-grid-load-timeout"),
+		},
+		ShellyGridInput: ShellyGridInputConfig{
+			Enabled: c.Bool("shelly-grid-input-enabled"),
+			BaseURL: c.String("shelly-grid-input-url"),
+			EMID:    c.Int("shelly-grid-input-em-id"),
+			Timeout: c.Duration("shelly-grid-input-timeout"),
 		},
 	}
 
@@ -671,6 +686,24 @@ func validate(cfg Config) error {
 		}
 	}
 
+	if cfg.ShellyGridInput.Enabled {
+		if cfg.MQTT.Enabled && strings.TrimSpace(cfg.MQTT.DeviceID) == "" {
+			return fmt.Errorf("mqtt-device-id is required with Shelly grid-input collection so Home Assistant identity stays stable when the inverter is unavailable")
+		}
+		if strings.TrimSpace(cfg.ShellyGridInput.BaseURL) == "" {
+			return fmt.Errorf("shelly-grid-input-url is required when shelly-grid-input-enabled is set")
+		}
+		if err := ValidateShellyGridInputURL(cfg.ShellyGridInput.BaseURL); err != nil {
+			return err
+		}
+		if cfg.ShellyGridInput.EMID < 0 {
+			return fmt.Errorf("shelly-grid-input-em-id must be >= 0")
+		}
+		if cfg.ShellyGridInput.Timeout <= 0 {
+			return fmt.Errorf("shelly-grid-input-timeout must be > 0 when Shelly grid-input collection is enabled")
+		}
+	}
+
 	seenSources := make(map[string]struct{}, len(cfg.SourcePriority))
 	for _, sourceName := range cfg.SourcePriority {
 		if _, ok := seenSources[sourceName]; ok {
@@ -834,32 +867,42 @@ func validateMQTTBrokerURL(rawURL string) error {
 // parsing and at direct client construction. Errors intentionally never echo
 // the configured value because a rejected URL may contain credentials.
 func ValidateShellyGridLoadURL(rawURL string) error {
+	return validateShellyURL(rawURL, "shelly-grid-load-url")
+}
+
+// ValidateShellyGridInputURL applies the same secret-safe URL boundary to the
+// independently configured upstream meter, without falling back to grid load.
+func ValidateShellyGridInputURL(rawURL string) error {
+	return validateShellyURL(rawURL, "shelly-grid-input-url")
+}
+
+func validateShellyURL(rawURL, option string) error {
 	rawURL = strings.TrimSpace(rawURL)
 	endpoint, err := url.Parse(rawURL)
 	if err != nil || !endpoint.IsAbs() || endpoint.Opaque != "" || endpoint.Hostname() == "" {
-		return fmt.Errorf("shelly-grid-load-url must be a valid absolute HTTP or HTTPS URL")
+		return fmt.Errorf("%s must be a valid absolute HTTP or HTTPS URL", option)
 	}
 	switch strings.ToLower(endpoint.Scheme) {
 	case "http", "https":
 	default:
-		return fmt.Errorf("shelly-grid-load-url scheme must be http or https")
+		return fmt.Errorf("%s scheme must be http or https", option)
 	}
 	if endpoint.User != nil {
-		return fmt.Errorf("shelly-grid-load-url must not contain user information")
+		return fmt.Errorf("%s must not contain user information", option)
 	}
 	if endpoint.RawQuery != "" || endpoint.ForceQuery || strings.Contains(rawURL, "?") {
-		return fmt.Errorf("shelly-grid-load-url must not contain a query")
+		return fmt.Errorf("%s must not contain a query", option)
 	}
 	if endpoint.Fragment != "" || endpoint.RawFragment != "" || strings.Contains(rawURL, "#") {
-		return fmt.Errorf("shelly-grid-load-url must not contain a fragment")
+		return fmt.Errorf("%s must not contain a fragment", option)
 	}
 	if strings.HasSuffix(endpoint.Host, ":") {
-		return fmt.Errorf("shelly-grid-load-url contains an invalid port")
+		return fmt.Errorf("%s contains an invalid port", option)
 	}
 	if portText := endpoint.Port(); portText != "" {
 		port, err := strconv.Atoi(portText)
 		if err != nil || port < 1 || port > 65535 {
-			return fmt.Errorf("shelly-grid-load-url port must be between 1 and 65535")
+			return fmt.Errorf("%s port must be between 1 and 65535", option)
 		}
 	}
 	return nil

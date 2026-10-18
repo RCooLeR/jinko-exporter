@@ -74,7 +74,7 @@ test("missing meter readings stay unknown rather than becoming zero", () => {
   assert.equal(formatMeasuredPhases("current", load.currentPhases, load.current), "--");
 });
 
-test("phase fallback preserves zero without inventing missing measurements", () => {
+test("partial phases preserve zero without inventing a complete total", () => {
   const readings: Partial<Record<EntityKey, number>> = {
     grid_load_l1_power: 0,
     grid_load_l2_power: 100,
@@ -84,11 +84,21 @@ test("phase fallback preserves zero without inventing missing measurements", () 
     grid_load_l2_voltage: 230
   };
   const load = measuredGridLoadFor((key) => readings[key] ?? null);
-  assert.equal(load.power, 100);
-  assert.equal(load.current, 0.5);
+  assert.equal(load.power, null);
+  assert.equal(load.current, null);
   assert.equal(load.voltage, 115);
   assert.equal(formatMeasuredPhases("power", load.powerPhases, load.power), "0 / 100 / -- W");
   assert.equal(formatMeasuredPhases("voltage", load.voltagePhases, load.voltage), "0 / 230 / -- V");
+});
+
+test("complete Shelly phases can supply a missing total without losing sign", () => {
+  const readings: Partial<Record<EntityKey, number>> = {
+    grid_load_l1_power: -100, grid_load_l2_power: 0, grid_load_l3_power: 30,
+    grid_load_l1_current: 1, grid_load_l2_current: 0, grid_load_l3_current: 0.2
+  };
+  const load = measuredGridLoadFor((key) => readings[key] ?? null);
+  assert.equal(load.power, -70);
+  assert.equal(load.current, 1.2);
 });
 
 const inverterOfflineWithShelly = (readings: Partial<Record<EntityKey, string>>): HomeAssistant => ({

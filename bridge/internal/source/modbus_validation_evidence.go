@@ -46,14 +46,14 @@ type modbusValidationRecord struct {
 // before Fetch starts. It never starts a background task or enables polling.
 func (p *Priority) EnableModbusValidationEvidence() error {
 	if p == nil || len(p.sources) == 0 || isNilInterface(p.sources[0]) || p.sources[0].Name() != "modbus" {
-		return errors.New("Modbus validation evidence requires modbus as the first source")
+		return errors.New("modbus validation evidence requires modbus as the first source")
 	}
 	if p.validationEvidence != nil {
-		return errors.New("Modbus validation evidence is already enabled")
+		return errors.New("modbus validation evidence is already enabled")
 	}
 	for _, src := range p.sources[1:] {
 		if !isNilInterface(src) && src.Name() == "modbus" {
-			return errors.New("Modbus validation evidence requires exactly one Modbus source")
+			return errors.New("modbus validation evidence requires exactly one Modbus source")
 		}
 	}
 	p.validationEvidence = &modbusValidationObserver{now: time.Now, emit: logModbusValidationEvidence}

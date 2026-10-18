@@ -2,9 +2,12 @@ import desktopLayout from "../../assets/main/desktop_layout_spec.json";
 import mobileLayout from "../../assets/main/mobile_layout_spec.json";
 import { setClassNameIfChanged, setHiddenIfChanged, setStyleIfChanged, setTextContentIfChanged } from "../lib/dom";
 import { calculateDailyGridBalanceUAH } from "../lib/energy-tariff";
-import { average, clamp, first, formatCurrent, formatEnergy, formatMeasuredPhases, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber, sum } from "../lib/format";
+import { average, clamp, first, formatCurrent, formatEnergy, formatMeasuredPhases, formatSignedEnergy, formatNumber, formatPercent, formatPower, formatTemperature, isFiniteNumber } from "../lib/format";
+import { completeSum, estimatedCurrent } from "../lib/measurement-fallbacks";
+import { entityInventorySignature } from "../lib/entity-inventory";
 import { ENTITY_KEYS, resolveEntities, valueFor, type EntityKey, type EntityOverrides, type ResolvedEntityMap } from "../lib/entity-model";
 import { measuredGridLoadFor } from "../lib/grid-load";
+import { stabilizerArtwork, withStabilizers, type LayoutElement, type LayoutSpec } from "../lib/stabilizer-layout";
 import { DETAILED_CARD_POSITIONS, type CardElementPositionModel, type PositionBoxModel, type PositionMode } from "../lib/position-models";
 import type { HomeAssistant, LovelaceCardConfig } from "../types/home-assistant";
 
@@ -14,6 +17,8 @@ const DEFAULT_CONFIG = {
   battery_capacity_kwh: 21.31,
   battery_negative_is_charging: true,
   show_entity_map: false,
+  stabilizers: false,
+  stabilizers_test_mirror_grid: false,
   entities: {} as EntityOverrides
 };
 
@@ -23,35 +28,9 @@ interface DetailedCardConfig extends LovelaceCardConfig {
   battery_negative_is_charging?: boolean;
   show_entity_map?: boolean;
   static?: boolean;
+  stabilizers?: boolean;
+  stabilizers_test_mirror_grid?: boolean;
   entities?: EntityOverrides;
-}
-
-interface LayoutRow {
-  id: string;
-  row_box: [number, number, number, number];
-  value_box: [number, number, number, number];
-}
-
-interface LayoutElement {
-  id: string;
-  type: string;
-  bbox: [number, number, number, number];
-  label?: string;
-  value_box?: [number, number, number, number] | null;
-  rows?: LayoutRow[];
-  soc_value_box?: [number, number, number, number];
-  energy_today_value_box?: [number, number, number, number];
-  temp_value_box?: [number, number, number, number];
-  status_value_box?: [number, number, number, number];
-}
-
-interface LayoutSpec {
-  canvas: {
-    width: number;
-    height: number;
-    background_image: string;
-  };
-  elements: LayoutElement[];
 }
 
 interface MetricGroup {
@@ -59,8 +38,10 @@ interface MetricGroup {
   current: number | null;
   power: number | null;
   energyToday: number | null;
+  signedEnergyToday?: boolean;
   hideEnergyToday?: boolean;
   measured?: boolean;
+  estimated?: Partial<Record<"voltage" | "current" | "power", boolean>>;
   voltagePhases?: Array<number | null>;
   currentPhases?: Array<number | null>;
   powerPhases?: Array<number | null>;
@@ -95,6 +76,8 @@ interface DetailedLayerDefinition {
 
 const DESKTOP_LAYOUT = desktopLayout as LayoutSpec;
 const MOBILE_LAYOUT = mobileLayout as LayoutSpec;
+const STABILIZER_DESKTOP_LAYOUT = withStabilizers(DESKTOP_LAYOUT, false);
+const STABILIZER_MOBILE_LAYOUT = withStabilizers(MOBILE_LAYOUT, true);
 const MOBILE_BREAKPOINT = 960;
 const DETAILED_CARD_MOBILE_REFERENCE_WIDTH = 420;
 const DETAILED_CARD_DESKTOP_REFERENCE_WIDTH = 1200;
@@ -104,7 +87,7 @@ const VOLTAGE_EPSILON = 1;
 const CURRENT_EPSILON = 0.01;
 const POWER_EPSILON = 1;
 const ENERGY_EPSILON = 0.01;
-const MISSING_MAIN_KEYS: EntityKey[] = ["pv1_power", "pv2_power", "grid_total_power", "home_total_power", "ups_total_power", "battery_power", "battery_soc"];
+const MISSING_MAIN_KEYS: EntityKey[] = ["pv1_power", "pv2_power", "grid_total_power", "grid_load_total_power", "ups_total_power", "battery_voltage", "battery_soc"];
 const moduleBaseUrl = new URL(/* @vite-ignore */ ".", import.meta.url).toString();
 const assetUrl = (file: string): string =>
   import.meta.env.DEV ? `/assets/main/${file}` : `${moduleBaseUrl}assets/main/${file}`;
@@ -124,11 +107,15 @@ class JksDetailedCard extends HTMLElement {
   private _config: DetailedCardConfig = { type: `custom:${CARD_TAG}`, ...DEFAULT_CONFIG };
   private _resolved: ResolvedEntityMap = {};
   private _attemptedEntityKeys = new Set<EntityKey>();
+  private _entityInventory = "";
   private _root: ShadowRoot;
   private _resizeObserver?: ResizeObserver;
   private _isMobile = false;
   private _hasRendered = false;
   private _renderedMode?: PositionMode;
+  private _renderedStabilizers?: boolean;
+  private _renderedTestMirror?: boolean;
+  private _stabilizerArtworkEl?: HTMLDivElement;
   private _styleEl?: HTMLStyleElement;
   private _titleEl?: HTMLDivElement;
   private _sceneEl?: HTMLDivElement;
@@ -147,6 +134,12 @@ class JksDetailedCard extends HTMLElement {
   setConfig(config: DetailedCardConfig): void {
     if (!config || typeof config !== "object") {
       throw new Error("Card configuration is required");
+    }
+    if (config.stabilizers !== undefined && typeof config.stabilizers !== "boolean") {
+      throw new Error("stabilizers must be a boolean");
+    }
+    if (config.stabilizers_test_mirror_grid !== undefined && typeof config.stabilizers_test_mirror_grid !== "boolean") {
+      throw new Error("stabilizers_test_mirror_grid must be a boolean");
     }
 
     this._config = {
@@ -210,6 +203,7 @@ class JksDetailedCard extends HTMLElement {
   }
 
   private _layout(): LayoutSpec {
+    if (this._config.stabilizers) return this._isMobile ? STABILIZER_MOBILE_LAYOUT : STABILIZER_DESKTOP_LAYOUT;
     return this._isMobile ? MOBILE_LAYOUT : DESKTOP_LAYOUT;
   }
 
@@ -223,6 +217,11 @@ class JksDetailedCard extends HTMLElement {
 
   private _resolveEntities(force = false): void {
     if (!this._hass) return;
+    const inventory = entityInventorySignature(this._hass);
+    if (inventory !== this._entityInventory) {
+      this._entityInventory = inventory;
+      force = true;
+    }
     if (force) {
       this._attemptedEntityKeys.clear();
     }
@@ -248,7 +247,7 @@ class JksDetailedCard extends HTMLElement {
 
   private _buildData(): DetailedCardData {
     if (this._config.static) {
-      return this._buildStaticData();
+      return this._applyTestGridMirror(this._buildStaticData());
     }
 
     const gridPhases = [1, 2, 3].map((phase) => ({
@@ -260,7 +259,8 @@ class JksDetailedCard extends HTMLElement {
     const homePhases = [1, 2, 3].map((phase) => {
       const voltage = this._value(`home_l${phase}_voltage` as EntityKey);
       const power = this._value(`home_l${phase}_power` as EntityKey);
-      const current = isFiniteNumber(power) && isFiniteNumber(voltage) && voltage !== 0 ? Math.abs(power) / voltage : null;
+      // Active power / voltage is not a measured AC current (power factor is unknown).
+      const current = estimatedCurrent(power, voltage);
       return { voltage, current, power };
     });
     const measuredGridLoad = measuredGridLoadFor((key) => this._value(key));
@@ -271,10 +271,16 @@ class JksDetailedCard extends HTMLElement {
       power: this._value(`inverter_l${phase}_power` as EntityKey)
     }));
 
+    const gridInputPhases = [1, 2, 3].map((phase) => ({
+      voltage: this._value(`grid_input_l${phase}_voltage` as EntityKey),
+      current: this._value(`grid_input_l${phase}_current` as EntityKey),
+      power: this._value(`grid_input_l${phase}_power` as EntityKey)
+    }));
+
     const generatorPhases = [1, 2, 3].map((phase) => {
       const voltage = this._value(`generator_l${phase}_voltage` as EntityKey);
       const power = this._value(`generator_l${phase}_power` as EntityKey);
-      const current = isFiniteNumber(power) && isFiniteNumber(voltage) && voltage !== 0 ? Math.abs(power) / voltage : null;
+      const current = estimatedCurrent(power, voltage);
       return { voltage, current, power };
     });
 
@@ -284,53 +290,37 @@ class JksDetailedCard extends HTMLElement {
     const pv1Current = this._value("pv1_current");
     const pv2Voltage = this._value("pv2_voltage");
     const pv2Current = this._value("pv2_current");
-    const pvTotalPower = first(this._value("pv_total_power"), sum([pv1Power, pv2Power]));
+    const pvTotalPower = first(this._value("pv_total_power"), completeSum([pv1Power, pv2Power]));
     const pvDailyEnergy = this._value("pv_daily_energy");
     const gridBuyToday = this._value("grid_buy_today");
+    const gridInputBuyToday = this._value("grid_input_buy_today");
+    const gridInputSellToday = this._value("grid_input_sell_today");
     const gridSellToday = this._value("grid_sell_today");
-    const gridTotalPower = first(this._value("grid_total_power"), sum(gridPhases.map((phase) => phase.power)));
+    const gridTotalPower = this._value("grid_total_power");
     const gridAverageVoltage = average(gridPhases.map((phase) => phase.voltage));
-    const gridTotalCurrent = sum(gridPhases.map((phase) => Math.abs(phase.current ?? 0)));
-    const homeTotalPower = first(this._value("home_total_power"), sum(homePhases.map((phase) => phase.power)));
-    const homeBackupPhasePower = sum(homePhases.map((phase) => phase.power));
-    const calculatedGridLoadPower =
-      isFiniteNumber(homeTotalPower) && isFiniteNumber(homeBackupPhasePower) ? homeTotalPower - homeBackupPhasePower : null;
+    const gridTotalCurrent = null; // CT currents are independent phase measurements.
     const measuredGridLoadPhasePower = measuredGridLoad.powerPhases;
     const measuredGridLoadPhaseCurrent = measuredGridLoad.currentPhases;
-    const measuredGridLoadPhaseVoltage = measuredGridLoad.available ? measuredGridLoad.voltagePhases : gridPhases.map((phase) => phase.voltage);
-    const parallelGridLoadVoltage = measuredGridLoad.available ? measuredGridLoad.voltage : gridAverageVoltage;
-    const parallelGridLoadPower = measuredGridLoad.available ? measuredGridLoad.power : calculatedGridLoadPower;
-    const parallelGridLoadCurrent = measuredGridLoad.available
-      ? measuredGridLoad.current
-      : isFiniteNumber(parallelGridLoadPower) && isFiniteNumber(parallelGridLoadVoltage) && parallelGridLoadVoltage !== 0
-        ? Math.abs(parallelGridLoadPower) / parallelGridLoadVoltage
-        : null;
+    const measuredGridLoadPhaseVoltage = measuredGridLoad.voltagePhases.map((reading, index) => first(reading, gridPhases[index]?.voltage));
+    const parallelGridLoadVoltage = first(measuredGridLoad.voltage, gridAverageVoltage);
+    const upsTotalPower = first(this._value("ups_total_power"), completeSum(homePhases.map((phase) => phase.power)));
+    const homeTotalPower = this._value("home_total_power");
+    const calculatedGridLoadPower = isFiniteNumber(homeTotalPower) && isFiniteNumber(upsTotalPower) ? homeTotalPower - upsTotalPower : null;
+    const parallelGridLoadPower = first(measuredGridLoad.power, calculatedGridLoadPower);
+    const parallelGridLoadCurrent = first(measuredGridLoad.current, estimatedCurrent(parallelGridLoadPower, parallelGridLoadVoltage));
     const parallelGridLoadPowerPhases = measuredGridLoadPhasePower.some((value) => isFiniteNumber(value))
       ? measuredGridLoadPhasePower
       : null;
-    const gridNetEnergyToday =
-      isFiniteNumber(gridBuyToday) || isFiniteNumber(gridSellToday) ? (gridBuyToday ?? 0) - (gridSellToday ?? 0) : null;
 
-    const upsTotalPower = this._value("ups_total_power");
     const inverterAverageVoltage = average(inverterPhases.map((phase) => phase.voltage));
-    const upsEstimatedCurrent =
-      isFiniteNumber(upsTotalPower) && isFiniteNumber(inverterAverageVoltage) && inverterAverageVoltage !== 0
-        ? Math.abs(upsTotalPower) / inverterAverageVoltage
-        : null;
+    const upsCurrent = estimatedCurrent(upsTotalPower, average(homePhases.map((phase) => phase.voltage)));
 
-    const generatorTotalPower = first(this._value("generator_total_power"), sum(generatorPhases.map((phase) => phase.power)));
+    const generatorTotalPower = first(this._value("generator_total_power"), completeSum(generatorPhases.map((phase) => phase.power)));
     const generatorAverageVoltage = average(generatorPhases.map((phase) => phase.voltage));
-    const generatorTotalCurrent = sum(generatorPhases.map((phase) => Math.abs(phase.current ?? 0)));
+    const generatorTotalCurrent = completeSum(generatorPhases.map((phase) => phase.current));
 
     const batteryPower = this._value("battery_power");
-    const batteryChargeIsNegative = this._config.battery_negative_is_charging !== false;
-    let batteryStatus = "Idle";
-    if (isFiniteNumber(batteryPower) && Math.abs(batteryPower) >= 20) {
-      const charging = batteryChargeIsNegative ? batteryPower < 0 : batteryPower > 0;
-      batteryStatus = charging ? "Charging" : "Discharging";
-    }
-
-    const inverterTotalPower = first(this._value("inverter_total_power"), sum(inverterPhases.map((phase) => phase.power)));
+    const inverterTotalPower = first(this._value("inverter_total_power"), completeSum(inverterPhases.map((phase) => phase.power)));
     const inverterStatus =
       isFiniteNumber(inverterTotalPower) && Math.abs(inverterTotalPower) >= 20
         ? "Online"
@@ -345,45 +335,27 @@ class JksDetailedCard extends HTMLElement {
     const batteryCurrent = this._value("battery_current");
     const batterySoc = this._value("battery_soc");
     const generatorDailyEnergy = this._value("generator_daily_energy");
-    const inverterFrequency = this._value("inverter_frequency");
-    const gridFrequency = this._value("grid_frequency");
 
     const pv1Online = this._isMeaningfulValue(pv1Power, POWER_EPSILON) || this._isMeaningfulValue(pv1Voltage, VOLTAGE_EPSILON) || this._isMeaningfulValue(pv1Current, CURRENT_EPSILON);
     const pv2Online = this._isMeaningfulValue(pv2Power, POWER_EPSILON) || this._isMeaningfulValue(pv2Voltage, VOLTAGE_EPSILON) || this._isMeaningfulValue(pv2Current, CURRENT_EPSILON);
     const pvOnline = this._isMeaningfulValue(pvTotalPower, POWER_EPSILON) || pv1Online || pv2Online;
-    const gridOnline =
-      this._isMeaningfulValue(gridAverageVoltage, VOLTAGE_EPSILON) ||
-      this._isMeaningfulValue(gridFrequency, CURRENT_EPSILON) ||
-      this._isMeaningfulValue(gridTotalPower, POWER_EPSILON) ||
-      this._isMeaningfulValue(gridBuyToday, ENERGY_EPSILON) ||
-      this._isMeaningfulValue(gridSellToday, ENERGY_EPSILON);
-    const batteryOnline =
-      this._isMeaningfulValue(batteryVoltage, VOLTAGE_EPSILON) ||
-      this._isMeaningfulValue(batteryCurrent, CURRENT_EPSILON) ||
-      this._isMeaningfulValue(batteryPower, POWER_EPSILON) ||
-      this._isMeaningfulValue(batterySoc, CURRENT_EPSILON);
+    const gridOnline = isFiniteNumber(gridTotalPower) || gridPhases.some((phase) => [phase.voltage, phase.current, phase.power].some(isFiniteNumber));
+    const batteryOnline = [batteryVoltage, batteryCurrent, batteryPower, batterySoc].some(isFiniteNumber);
     const generatorOnline =
       this._isMeaningfulValue(generatorAverageVoltage, VOLTAGE_EPSILON) ||
       this._isMeaningfulValue(generatorTotalPower, POWER_EPSILON) ||
       this._isMeaningfulValue(generatorDailyEnergy, ENERGY_EPSILON);
-    const upsOnline =
-      inverterStatus !== "Offline" ||
-      this._isMeaningfulValue(inverterAverageVoltage, VOLTAGE_EPSILON) ||
-      this._isMeaningfulValue(inverterFrequency, CURRENT_EPSILON) ||
-      this._isMeaningfulValue(upsTotalPower, POWER_EPSILON);
-    const parallelOnline = measuredGridLoad.available || this._isMeaningfulValue(parallelGridLoadPower, POWER_EPSILON);
+    const upsOnline = isFiniteNumber(upsTotalPower) || homePhases.some((phase) => [phase.voltage, phase.power].some(isFiniteNumber));
+    const parallelOnline = measuredGridLoad.available || isFiniteNumber(parallelGridLoadPower);
 
     const missingCritical = MISSING_MAIN_KEYS.filter((key) => {
       if (key === "grid_total_power") {
         return !this._resolved[key] && !this._isMeaningfulValue(gridTotalPower, POWER_EPSILON);
       }
-      if (key === "home_total_power") {
-        return !this._resolved[key] && !this._isMeaningfulValue(homeTotalPower, POWER_EPSILON);
-      }
       return !this._resolved[key];
     });
 
-    return {
+    return this._applyTestGridMirror({
       summary: {
         daily_production: this._formatEnergyDisplay(pvDailyEnergy),
         daily_generator: this._formatEnergyDisplay(generatorDailyEnergy),
@@ -393,9 +365,22 @@ class JksDetailedCard extends HTMLElement {
         daily_costs: this._formatCosts(gridBuyToday, gridSellToday)
       },
       groups: {
+        grid_input: {
+          measured: true,
+          voltage: average(gridInputPhases.map((phase) => phase.voltage)),
+          current: this._value("grid_input_total_current"),
+          power: first(this._value("grid_input_total_power"), completeSum(gridInputPhases.map((phase) => phase.power))),
+          energyToday: isFiniteNumber(gridInputBuyToday) && isFiniteNumber(gridInputSellToday) ? gridInputBuyToday - gridInputSellToday : null,
+          signedEnergyToday: true,
+          voltagePhases: gridInputPhases.map((phase) => phase.voltage),
+          currentPhases: gridInputPhases.map((phase) => phase.current),
+          powerPhases: gridInputPhases.map((phase) => phase.power)
+        },
         ups_load: {
-          voltage: inverterAverageVoltage,
-          current: upsEstimatedCurrent,
+          measured: true,
+          estimated: { current: true },
+          voltage: average(homePhases.map((phase) => phase.voltage)),
+          current: upsCurrent,
           power: upsTotalPower,
           energyToday: null,
           hideEnergyToday: true,
@@ -404,6 +389,7 @@ class JksDetailedCard extends HTMLElement {
           powerPhases: homePhases.map((phase) => phase.power)
         },
         pv1: {
+          measured: true,
           voltage: pv1Voltage,
           current: pv1Current,
           power: pv1Power,
@@ -411,6 +397,7 @@ class JksDetailedCard extends HTMLElement {
           hideEnergyToday: true
         },
         pv2: {
+          measured: true,
           voltage: pv2Voltage,
           current: pv2Current,
           power: pv2Power,
@@ -418,30 +405,36 @@ class JksDetailedCard extends HTMLElement {
           hideEnergyToday: true
         },
         grid: {
+          measured: true,
           voltage: gridAverageVoltage,
           current: gridTotalCurrent,
           power: gridTotalPower,
-          energyToday: gridNetEnergyToday,
+          energyToday: isFiniteNumber(gridBuyToday) && isFiniteNumber(gridSellToday) ? gridBuyToday - gridSellToday : null,
+          signedEnergyToday: true,
           voltagePhases: gridPhases.map((phase) => phase.voltage),
           currentPhases: gridPhases.map((phase) => phase.current),
           powerPhases: gridPhases.map((phase) => phase.power)
         },
         battery: {
+          measured: true,
           voltage: batteryVoltage,
           current: batteryCurrent,
           power: batteryPower,
           energyToday: batteryDischargeToday ?? batteryChargeToday
         },
         inverter: {
+          measured: true,
           voltage: inverterAverageVoltage,
-          current: sum(inverterPhases.map((phase) => Math.abs(phase.current ?? 0))),
+          current: null,
           power: inverterTotalPower,
-          energyToday: pvDailyEnergy,
+          energyToday: this._value("inverter_daily_energy"),
           voltagePhases: inverterPhases.map((phase) => phase.voltage),
           currentPhases: inverterPhases.map((phase) => phase.current),
           powerPhases: undefined
         },
         generator: {
+          measured: true,
+          estimated: { current: true },
           voltage: generatorAverageVoltage,
           current: generatorTotalCurrent,
           power: generatorTotalPower,
@@ -451,11 +444,15 @@ class JksDetailedCard extends HTMLElement {
           powerPhases: generatorPhases.map((phase) => phase.power)
         },
         parallel_grid_load: {
-          measured: measuredGridLoad.available,
+          measured: true,
+          estimated: {
+            power: !isFiniteNumber(measuredGridLoad.power) && !measuredGridLoad.powerPhases.some(isFiniteNumber),
+            current: !isFiniteNumber(measuredGridLoad.current) && !measuredGridLoad.currentPhases.some(isFiniteNumber)
+          },
           voltage: parallelGridLoadVoltage,
           current: parallelGridLoadCurrent,
           power: parallelGridLoadPower,
-          energyToday: this._value("home_daily_energy"),
+          energyToday: null,
           hideEnergyToday: true,
           voltagePhases: measuredGridLoadPhaseVoltage,
           currentPhases: measuredGridLoadPhaseCurrent,
@@ -465,7 +462,7 @@ class JksDetailedCard extends HTMLElement {
       batterySoc: formatPercent(batterySoc),
       batteryEnergyToday,
       inverterTemp: formatTemperature(this._value("dc_temperature")),
-      inverterStatus: `${inverterStatus}${batteryStatus === "Idle" ? "" : ` | ${batteryStatus}`}`,
+      inverterStatus,
       layers: {
         pv1_offline: !pv1Online,
         pv2_offline: !pv2Online,
@@ -477,7 +474,19 @@ class JksDetailedCard extends HTMLElement {
         parallel_offline: !parallelOnline
       },
       missing: missingCritical
-    };
+    });
+  }
+
+  private _testMirrorEnabled(): boolean {
+    return this._config.stabilizers === true && this._config.stabilizers_test_mirror_grid === true;
+  }
+
+  private _applyTestGridMirror(data: DetailedCardData): DetailedCardData {
+    if (!this._testMirrorEnabled()) return data;
+    // Display-only opt-in. No entity map/state mutations, publications or polling.
+    return { ...data, groups: { ...data.groups, grid_input: {
+      ...data.groups.grid!
+    } } };
   }
 
   private _buildStaticData(): DetailedCardData {
@@ -491,6 +500,17 @@ class JksDetailedCard extends HTMLElement {
         daily_costs: this._formatCosts(8.1, 3.4)
       },
       groups: {
+        grid_input: {
+          measured: true,
+          voltage: 240,
+          current: 6.16,
+          power: 1430,
+          energyToday: 5.1,
+          signedEnergyToday: true,
+          voltagePhases: [246, 233, 241],
+          currentPhases: [2.05, 2.02, 2.09],
+          powerPhases: [483, 462, 485]
+        },
         ups_load: {
           voltage: 230.8,
           current: 3.42,
@@ -520,6 +540,7 @@ class JksDetailedCard extends HTMLElement {
           current: 5.84,
           power: 1320,
           energyToday: 4.7,
+          signedEnergyToday: true,
           voltagePhases: [231, 232, 232],
           currentPhases: [1.95, 1.88, 2.01],
           powerPhases: [440, 421, 459]
@@ -604,7 +625,9 @@ class JksDetailedCard extends HTMLElement {
   }
 
   private _ensureStructure(layout: LayoutSpec, background: string, mode: PositionMode): void {
-    if (this._renderedMode === mode && this._styleEl && this._titleEl && this._sceneEl && this._warningEl && this._entityMapEl) {
+    const stabilizers = this._config.stabilizers === true;
+    const testMirror = this._testMirrorEnabled();
+    if (this._renderedMode === mode && this._renderedStabilizers === stabilizers && this._renderedTestMirror === testMirror && this._styleEl && this._titleEl && this._sceneEl && this._warningEl && this._entityMapEl) {
       return;
     }
 
@@ -623,9 +646,21 @@ class JksDetailedCard extends HTMLElement {
     this._titleEl = document.createElement("div");
     this._titleEl.className = "card-title";
 
+    const testBanner = document.createElement("div");
+    testBanner.className = "helper helper--warn test-mirror-banner";
+    testBanner.hidden = !testMirror;
+    testBanner.textContent = "TEST / MIRROR: Grid duplicates Stabilized Grid. This is not a measurement before the stabilizers.";
+
     this._sceneEl = document.createElement("div");
     this._sceneEl.className = "scene";
     this._createLayerNodes(mode);
+    this._stabilizerArtworkEl = undefined;
+    if (stabilizers) {
+      this._stabilizerArtworkEl = document.createElement("div");
+      this._stabilizerArtworkEl.className = "stabilizer-artwork";
+      this._stabilizerArtworkEl.innerHTML = stabilizerArtwork(layout, this._isMobile, testMirror);
+      this._sceneEl.append(this._stabilizerArtworkEl);
+    }
 
     this._warningEl = document.createElement("div");
     this._warningEl.className = "helper helper--warn";
@@ -635,10 +670,12 @@ class JksDetailedCard extends HTMLElement {
     this._entityMapEl.className = "entity-map";
     this._entityMapEl.hidden = true;
 
-    shell.append(this._titleEl, this._sceneEl, this._warningEl, this._entityMapEl);
+    shell.append(this._titleEl, testBanner, this._sceneEl, this._warningEl, this._entityMapEl);
     card.append(shell);
     this._root.append(this._styleEl, card);
     this._renderedMode = mode;
+    this._renderedStabilizers = stabilizers;
+    this._renderedTestMirror = testMirror;
   }
 
   private _syncTitle(): void {
@@ -703,6 +740,7 @@ class JksDetailedCard extends HTMLElement {
     }
 
     for (const layer of DESKTOP_LAYERS) {
+      if (this._config.stabilizers && (layer.id === "grid_offline" || layer.id === "parallel_offline")) continue;
       const node = document.createElement("div");
       node.className = "scene-layer";
       node.hidden = true;
@@ -714,6 +752,14 @@ class JksDetailedCard extends HTMLElement {
   }
 
   private _syncLayers(data: DetailedCardData): void {
+    for (const id of ["grid_input", "grid", "parallel_grid_load"]) {
+      const node = this._stabilizerArtworkEl?.querySelector<SVGElement>(`[data-stabilizer-node="${id}"]`);
+      if (!node) continue;
+      const group = data.groups[id];
+      const online = group && [group.voltage, group.current, group.power,
+        ...(group.voltagePhases ?? []), ...(group.currentPhases ?? []), ...(group.powerPhases ?? [])].some(isFiniteNumber);
+      node.style.opacity = online ? "1" : "0.45";
+    }
     for (const layer of DESKTOP_LAYERS) {
       const node = this._layerNodes.get(layer.id);
       if (!node) {
@@ -918,7 +964,8 @@ class JksDetailedCard extends HTMLElement {
 
   private _formatMetricRowValue(rowId: string, group: MetricGroup): string {
     if (group.measured && (rowId === "voltage" || rowId === "current" || rowId === "power")) {
-      return formatMeasuredPhases(rowId, group[`${rowId}Phases`], group[rowId], this._isMobile);
+      const formatted = formatMeasuredPhases(rowId, group[`${rowId}Phases`], group[rowId], this._isMobile);
+      return group.estimated?.[rowId] && formatted !== "--" ? `≈ ${formatted}` : formatted;
     }
     switch (rowId) {
       case "voltage":
@@ -929,6 +976,7 @@ class JksDetailedCard extends HTMLElement {
         return this._formatPhasePower(group.powerPhases, group.power);
       case "energy_today":
         if (group.hideEnergyToday) return "";
+        if (group.signedEnergyToday) return formatSignedEnergy(group.energyToday);
         return this._formatEnergyToday(group.energyToday);
       default:
         return "--";
@@ -1075,6 +1123,15 @@ class JksDetailedCard extends HTMLElement {
         background-size: cover;
         pointer-events: none;
       }
+
+      .stabilizer-artwork {
+        position: absolute;
+        inset: 0;
+        z-index: 15;
+        pointer-events: none;
+      }
+
+      .stabilizer-artwork svg { width: 100%; height: 100%; display: block; }
 
       .value--summary {
         font-weight: 600;

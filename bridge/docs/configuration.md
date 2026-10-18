@@ -111,6 +111,30 @@ The one-shot `fetch` command retains its original merged-snapshot behavior and r
 | `SHELLY_GRID_LOAD_EM_ID` | `--shelly-grid-load-em-id` | `0` | No | Shelly EM component id. |
 | `SHELLY_GRID_LOAD_TIMEOUT` | `--shelly-grid-load-timeout` | `5s` | No | Shelly HTTP timeout. |
 
+## Shelly Grid Input Options
+
+The optional second Shelly measures the grid input **before the stabilizers**. It is independent of both the Jinko CT measurements after the stabilizers and the existing `grid_load` Shelly on the parallel-load branch. Leave it disabled until that upstream meter is installed; configuring its URL alone does not enable collection.
+
+In `serve` mode, the `shelly_grid_input` source has its own polling loop at `EXPORTER_POLL_INTERVAL`. It publishes the same supported Shelly electrical and energy fields under the separate `grid_input` metric group, with Home Assistant names such as `Grid Input L1 Voltage` and `Grid Input Total Power`. It preserves signed powers, zero readings, and the meter's independently reported total; no downstream reading substitutes for a missing upstream measurement. Its optional temperature component `0` is published as `Shelly Grid Input Internal Temperature` (`grid_input_internal_temperature`), independently of the EM component id.
+
+Failure of one meter does not mark the inverter or the other meter unavailable. Fresh upstream measurements remain visible when the inverter is offline; a failed upstream poll makes only the upstream Home Assistant entities unavailable and publishes their MQTT values as `null`. Prometheus retains the last accepted measurements, so consumers must check the separate `solar_grid_input_up`, `solar_grid_input_data_age_seconds`, `solar_grid_input_last_update_timestamp_seconds`, and `solar_grid_input_last_poll_success_timestamp_seconds` health series (with the configured metric prefix in place of `solar`). Success timestamps are not advanced by failed polls. As for grid load, MQTT requires a stable `MQTT_DEVICE_ID`; configure an inverter serial for an enabled source to keep Prometheus `device_sn` stable on a cold start. The one-shot `fetch` command still requires a successful inverter fetch before merging optional meter measurements.
+
+| Environment variable | CLI flag | Default | Required when enabled | Description |
+| --- | --- | --- | --- | --- |
+| `SHELLY_GRID_INPUT_ENABLED` | `--shelly-grid-input-enabled` | `false` | No | Enable the separate upstream Shelly Pro 3EM. |
+| `SHELLY_GRID_INPUT_URL` | `--shelly-grid-input-url` | empty | Yes | Upstream Shelly base URL, for example `http://192.0.2.60` (RFC 5737 TEST-NET placeholder). |
+| `SHELLY_GRID_INPUT_EM_ID` | `--shelly-grid-input-em-id` | `0` | No | Upstream Shelly EM component id. |
+| `SHELLY_GRID_INPUT_TIMEOUT` | `--shelly-grid-input-timeout` | `5s` | No | Upstream Shelly HTTP timeout. |
+
+Both Shelly URLs must be absolute HTTP(S) URLs without embedded credentials, query strings, or fragments. An optional reverse-proxy path is accepted for requests, but published `shelly_grid_input_url`/`shelly_grid_load_url` metadata contains only the origin; EM component ids are published under the matching meter-specific metadata keys. Keep the two meters' URLs and component ids separate. This feature does not change the existing `grid_load_*` entity identities.
+
+Before enabling upstream collection, back up `MQTT_DISCOVERY_STATE_FILE` if
+configured. The new binary reads existing v1 manifests and adds an optional
+`grid_input_metrics` section once upstream entities are learned. Older binaries
+reject that unknown section: restore the matching pre-upgrade manifest when
+rolling back. While upstream collection remains disabled and no upstream schema
+has been learned, the section is omitted and the old manifest shape is retained.
+
 ## MQTT Options
 
 | Environment variable | CLI flag | Default | Required when MQTT enabled | Description |
@@ -124,7 +148,7 @@ The one-shot `fetch` command retains its original merged-snapshot behavior and r
 | `MQTT_TOPIC_PREFIX` | `--mqtt-topic-prefix` | `jinko-exporter` | Yes | Base topic for availability and state. MQTT wildcards, NUL, invalid UTF-8, and empty interior topic levels are rejected. |
 | `MQTT_DISCOVERY_PREFIX` | `--mqtt-discovery-prefix` | `homeassistant` | Yes | Home Assistant discovery prefix with the same safe topic-prefix rules. |
 | `MQTT_DEVICE_NAME` | `--mqtt-device-name` | generated | No | Home Assistant device name. |
-| `MQTT_DEVICE_ID` | `--mqtt-device-id` | generated | With mixed priority | Stable Home Assistant device identifier. It is required when MQTT is enabled with multiple priority sources so a failover cannot strand retained state on a second device topic. |
+| `MQTT_DEVICE_ID` | `--mqtt-device-id` | generated | With mixed priority or either Shelly | Stable Home Assistant device identifier. It is required when MQTT is enabled with multiple priority sources or either independent Shelly meter, so failover and meter-only cold starts reuse the same device topic. |
 | `MQTT_QOS` | `--mqtt-qos` | `0` | No | QoS `0`, `1`, or `2`. |
 | `MQTT_RETAIN` | `--mqtt-retain` | `true` | No | Retain availability and state messages. Home Assistant Discovery configs are always retained so Home Assistant can restore the entities after its own restart. |
 | `MQTT_TIMEOUT` | `--mqtt-timeout` | `10s` | No | Connect and publish timeout. |
@@ -133,7 +157,7 @@ The one-shot `fetch` command retains its original merged-snapshot behavior and r
 
 Keep MQTT credentials in `MQTT_USERNAME` and `MQTT_PASSWORD`/`MQTT_PASSWORD_FILE`. Do not embed them in `MQTT_BROKER`; credential-bearing broker URLs are rejected so secrets cannot enter broker logs.
 
-When a discovery-state file is configured, the first item in `EXPORTER_SOURCE_PRIORITY` defines the ordinary Home Assistant metric surface; in single-source mode, `EXPORTER_SOURCE` does. The surface grows monotonically when that configured primary succeeds and is persisted across restarts. A cold Jinko or Solarman fallback may still supply current state and source-local alerts, but it cannot add fallback-only ordinary entities before the primary surface is known. Source-local alert entities and optional Shelly `grid_load` enrichment are maintained as separate monotonic unions, so they remain available without changing the primary inverter schema. Every dynamic metric template uses a nested missing-safe lookup; a key absent from the current source becomes `unknown` rather than producing a Home Assistant template warning, while a real numeric zero remains zero.
+When a discovery-state file is configured, the first item in `EXPORTER_SOURCE_PRIORITY` defines the ordinary Home Assistant metric surface; in single-source mode, `EXPORTER_SOURCE` does. The surface grows monotonically when that configured primary succeeds and is persisted across restarts. A cold Jinko or Solarman fallback may still supply current state and source-local alerts, but it cannot add fallback-only ordinary entities before the primary surface is known. Source-local alert entities and optional Shelly `grid_load`/`grid_input` enrichment are maintained as separate monotonic unions, so they remain available without changing the primary inverter schema. Every dynamic metric template uses a nested missing-safe lookup; a key absent from the current source becomes `unknown` rather than producing a Home Assistant template warning, while a real numeric zero remains zero.
 
 Store the manifest in a dedicated file such as `/var/lib/jinko-bridge/mqtt-discovery-state.json`, using the same private writable state directory as the token-state file but never the same filename. Its parent directory must already exist, and exactly one bridge process may write a given manifest. An existing path must be a regular file, not a symlink, and it must not alias a configured secret or token-state file. A missing manifest is created before the MQTT connection starts. An existing manifest is opened and validated at startup but is not rewritten merely to probe writability; its directory must remain writable because a later successful poll that expands the schema commits an atomic replacement before publishing that schema. The bridge validates the manifest version, full publisher binding, primary source, normalized metadata keys, and typed metric definitions. Corrupt, oversized, ownership-mismatched, or unpersistable updated state fails closed: the bridge does not silently discard it, invent a replacement schema, or delete retained broker topics.
 
