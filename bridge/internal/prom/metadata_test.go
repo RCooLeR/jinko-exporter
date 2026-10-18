@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"reflect"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -116,12 +117,21 @@ func TestCollectorMetadataInfoLifecycleWithHealthyGridLoad(t *testing.T) {
 
 				next := &model.Snapshot{Source: "modbus", DeviceSN: "SYNTHETIC_INV_001", CollectedAt: time.Now(), Meta: metadataValues(), Metrics: []model.Metric{{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 2230}}}
 				var nextErr error
-				go poller.NewRunner(gridTestSource{fetch: func(context.Context) (*model.Snapshot, error) { return next, nextErr }}, time.Minute, inverter, nil, config.AlertConfig{}).Run(ctx)
+				// Scrapes can let the fake clock advance and trigger another poll.
+				// Guard the fixture response pair independently of synctest.Wait.
+				var nextMu sync.Mutex
+				go poller.NewRunner(gridTestSource{fetch: func(context.Context) (*model.Snapshot, error) {
+					nextMu.Lock()
+					defer nextMu.Unlock()
+					return next, nextErr
+				}}, time.Minute, inverter, nil, config.AlertConfig{}).Run(ctx)
 				synctest.Wait()
 				families = gatherCollector(t, collector)
 				assertMetadataInfo(t, metricFamily(t, families, "solar_device_metadata_info"), metadataValues(), "modbus", "SYNTHETIC_INV_001", dropSource)
 
+				nextMu.Lock()
 				nextErr = errors.New("inverter unavailable")
+				nextMu.Unlock()
 				time.Sleep(time.Minute)
 				synctest.Wait()
 				families = gatherCollector(t, collector)
@@ -131,8 +141,10 @@ func TestCollectorMetadataInfoLifecycleWithHealthyGridLoad(t *testing.T) {
 				assertGridMetric(t, families, "electric", "DP1", 2230)
 				assertGridFamilyAbsent(t, families, "solar_device_metadata_info")
 
+				nextMu.Lock()
 				nextErr = nil
 				next = &model.Snapshot{Source: "jinko", DeviceSN: "SYNTHETIC_INV_001", CollectedAt: time.Now(), Metrics: []model.Metric{{Group: "electric", Key: "DP1", Name: "DC Power PV1", Unit: "W", Value: 2240}}}
+				nextMu.Unlock()
 				time.Sleep(time.Minute)
 				synctest.Wait()
 				families = gatherCollector(t, collector)
@@ -140,7 +152,9 @@ func TestCollectorMetadataInfoLifecycleWithHealthyGridLoad(t *testing.T) {
 				assertGridMetric(t, families, "electric", "DP1", 2240)
 				assertGridFamilyAbsent(t, families, "solar_device_metadata_info")
 
+				nextMu.Lock()
 				next = &model.Snapshot{Source: "modbus", DeviceSN: "SYNTHETIC_INV_001", CollectedAt: time.Now(), Meta: map[string]string{"protocol_version_hex": "BEEF", "battery_input_code": "4"}}
+				nextMu.Unlock()
 				time.Sleep(time.Minute)
 				synctest.Wait()
 				families = gatherCollector(t, collector)
