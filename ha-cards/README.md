@@ -18,8 +18,8 @@ This stable bundle and the redesigned bundle under `new-ha-cards/` register the 
 
 ## Toolchain
 
-- Node.js `^24.12.0`; the repository pins Node.js 24.20.0 in `.node-version`.
-- npm 11.19.0 with reproducible installs from `package-lock.json`.
+- Node.js `^24.22.1`; the repository pins Node.js 24.22.1 in `.node-version`.
+- npm 12.2.1 with reproducible installs from `package-lock.json`.
 - TypeScript 7 with strict, erasable-syntax, unchecked-index, and side-effect-import checks.
 - Vite 8 producing an ES module for the Baseline Widely Available browser target.
 
