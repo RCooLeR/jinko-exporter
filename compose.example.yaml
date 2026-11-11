@@ -1,7 +1,7 @@
 services:
   jinko_bridge:
     # Override the full image reference with a released tag or digest in production.
-    image: ${JINKO_EXPORTER_IMAGE:-rcooler/jinko_exporter:1.0.3}
+    image: ${JINKO_EXPORTER_IMAGE:-rcooler/jinko_exporter:1.2.0}
     container_name: jinko_bridge
     restart: unless-stopped
     user: "65532:65532"

@@ -8,7 +8,7 @@ pass; the older `main` and feature branches are historical, not release targets.
 
 ## Toolchain
 
-- Go 1.27.3, as declared by `bridge/go.mod`.
+- Go 1.27.4, as declared by `bridge/go.mod`.
 - Node.js 24.22.1, as pinned by the repository `.node-version`; both card packages support Node.js `^24.22.1` and declare npm 12.2.1 as their package manager.
 - A Docker release with BuildKit support for cache mounts, linked copies, and file-permission flags.
 
@@ -81,7 +81,7 @@ Build from the repository root:
 docker build -f bridge/Dockerfile -t rcooler/jinko-exporter:local bridge
 ```
 
-The Docker build uses a Go 1.27.3/Alpine 3.24 builder and an Alpine 3.24.3 runtime, both pinned to multi-platform image digests. BuildKit caches Go modules and compilation artifacts between builds. The final image contains the statically linked bridge and CA certificates, runs as the fixed non-root user `65532:65532`, and includes the bridge healthcheck.
+The Docker build uses a Go 1.27.4/Alpine 3.24 builder and an Alpine 3.24.3 runtime, both pinned to multi-platform image digests. BuildKit caches Go modules and compilation artifacts between builds. The final image contains the statically linked bridge and CA certificates, runs as the fixed non-root user `65532:65532`, and includes the bridge healthcheck.
 
 ## Home Assistant Cards
 
