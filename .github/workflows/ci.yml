@@ -13,7 +13,7 @@ env:
   GOTOOLCHAIN: local
   ACTIONLINT_VERSION: v1.7.12
   STATICCHECK_VERSION: v0.8.2
-  GOVULNCHECK_VERSION: v1.9.0
+  GOVULNCHECK_VERSION: v1.10.0
 
 jobs:
   bridge:
@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: bridge/go.mod
           cache-dependency-path: bridge/go.sum
@@ -115,7 +115,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: bridge/go.mod
           cache-dependency-path: bridge/go.sum
@@ -124,7 +124,7 @@ jobs:
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: v2.19.0
+          version: v2.20.3
           args: check
 
       - name: Set up Node
@@ -162,5 +162,5 @@ jobs:
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: v2.19.0
+          version: v2.20.3
           args: release --snapshot --clean
